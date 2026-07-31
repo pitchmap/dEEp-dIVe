@@ -1,59 +1,55 @@
 /**
- * 조작 안내 + Pointer Lock + 화면 조준·발사 버튼 HUD (툴링·UI 소유).
+ * 조작 안내 + Pointer Lock + 화면 조준·어뢰 발사 버튼 HUD (툴링·UI 소유).
  *
- * 역할 경계:
- *  - 이 클래스는 입력을 "전투 의도(조준 시작/종료, 발사 요청)"로 바꿔
- *    CombatIntentSink에 전달할 뿐, 전투 판정(어뢰 잔량·재장전·명중)은
- *    구현하지 않는다 — 판정은 게임플레이 파트(TorpedoSystem 등) 소유.
- *  - 조준·발사 요청 이벤트의 계약(contracts/events.ts) 추가는 리드 승인
- *    대기 중(INTEGRATION_NOTES #004). 승인 전까지 기본 sink는 개발 모드
- *    콘솔 로그 + 계측 기록만 수행한다.
+ * 전투 입력 단일화 (INT-CORE-002 [확정] — 별도 전투 시스템 금지):
+ *  - 화면 버튼은 composition root(core/Game)에서 주입받은 **AimSystem 공용
+ *    진입점**(beginAim/endAim/fireTorpedo)을 직접 호출한다 — 마우스 경로
+ *    (게임플레이 MouseCombatInput)와 같은 인스턴스, 같은 메서드, 같은
+ *    재장전·잔량 판정이다.
+ *  - **캔버스 마우스 전투는 이 클래스가 처리하지 않는다.** 우클릭 홀드·좌클릭은
+ *    window에 부착된 MouseCombatInput(게임플레이 소유)이 추적한다. 여기서
+ *    aim을 또 호출하면 클릭 1회가 이중 발사되므로 금지.
+ *  - 대신 이 클래스는 **게이트키퍼**다: Pointer Lock 진입용 클릭·진입 직후
+ *    250ms 잔여 클릭·비잠금 상태 클릭을 stopPropagation으로 소비해
+ *    MouseCombatInput(window, 버블링 단계)까지 도달하지 못하게 막는다.
+ *    정상 전투 클릭(잠금 중·무시 구간 밖)만 통과시키고 계측만 남긴다.
+ *  - 조준 버튼 활성 표시는 로컬 상태가 아니라 `aimModeChanged` 구독으로
+ *    갱신한다 (잠망경 심도 아님 → beginAim 거부, 심도 이탈 자동 해제까지
+ *    이벤트가 진실이다).
  *
- * 입력 모델:
- *  - Pointer Lock 상태: 우클릭 홀드 = 조준, 좌클릭 = 발사 (마우스 경로)
- *  - 비잠금 상태: 캔버스 좌클릭 = Pointer Lock 진입(발사 아님),
- *    화면 버튼 = 조준 토글·발사 (버튼 경로)
- *  - Esc → 브라우저가 Pointer Lock 해제 → 일시정지 + 재진입 안내 표시
- *
- * 중복 방지:
- *  - 버튼은 pointerdown/up/click 전파를 끊어 캔버스 입력과 분리
- *  - 마우스 발사는 mousedown 단일 경로, 버튼 발사는 click 단일 경로
- *  - Pointer Lock 진입 직후 SUPPRESS_AFTER_LOCK_MS 동안 캔버스 마우스 입력 무시
- *    (재진입 클릭이 발사로 처리되는 문제 방지)
+ * 표시 규칙: params/ui.json (기본 투명도·존재감 축소 기준·표시 기본값).
+ * 계측: InputTelemetry (마우스/버튼별 사용 횟수 — 버튼 사용률 판단 근거).
  */
 
 import { CONTROL_BINDINGS, hudKeyCode } from './controlsConfig';
 import { loadUiParams, onUiParamsReloaded, type UiParams } from './uiParams';
-import { inputTelemetry, type InputSource } from '../tools/InputTelemetry';
+import { inputTelemetry } from '../tools/InputTelemetry';
+import type { AimSystem, TorpedoSystem } from '../contracts/systems';
+import type { EventBus, Unsubscribe } from '../core/EventBus';
 
-/** 전투 의도 수신처 — 게임플레이 연결 전까지는 기본(로그+계측) 구현 사용 */
-export interface CombatIntentSink {
-  requestAimStart(source: InputSource): void;
-  requestAimEnd(source: InputSource): void;
-  requestTorpedoFire(source: InputSource): void;
+/**
+ * composition root가 주입하는 전투 연결점 — 게임플레이 구현체 타입이 아니라
+ * 계약(contracts/systems.ts)의 최소 단면만 본다.
+ */
+export interface CombatControls {
+  /** 공용 조준 진입점 — 마우스(MouseCombatInput)와 반드시 같은 인스턴스 */
+  aim: Pick<AimSystem, 'aiming' | 'beginAim' | 'endAim' | 'fireTorpedo'>;
+  /** 발사 버튼 상태 표시용 읽기 전용 어뢰 상태 */
+  torpedo: Pick<TorpedoSystem, 'remaining' | 'reloadRemainingSeconds'>;
 }
 
 export interface ControlsHudOptions {
   /** 일시정지 전환 — core/Game이 GameLoop start/stop으로 연결한다 */
   setPaused(paused: boolean): void;
-  /** 게임플레이 연결점 (미지정 시 개발 로그 + 계측만) */
-  intents?: CombatIntentSink;
+  combat: CombatControls;
+  /** aimModeChanged·torpedoFired 구독용 (표시 갱신 전용 — 발행하지 않음) */
+  bus: EventBus;
 }
 
-/** Pointer Lock 진입 직후 캔버스 마우스 입력을 무시하는 구간 (ms) */
+/** Pointer Lock 진입 직후 캔버스 마우스 입력을 무시(소비)하는 구간 (ms) */
 const SUPPRESS_AFTER_LOCK_MS = 250;
-
-const devLogSink: CombatIntentSink = {
-  requestAimStart(source) {
-    if (import.meta.env.DEV) console.debug(`[ControlsHud] 조준 시작 요청 (${source}) — 게임플레이 미연결`);
-  },
-  requestAimEnd(source) {
-    if (import.meta.env.DEV) console.debug(`[ControlsHud] 조준 종료 요청 (${source}) — 게임플레이 미연결`);
-  },
-  requestTorpedoFire(source) {
-    if (import.meta.env.DEV) console.debug(`[ControlsHud] 어뢰 발사 요청 (${source}) — 게임플레이 미연결`);
-  },
-};
+/** 발사 버튼 잔량·재장전 표시 폴링 주기 (ms) — 일시정지 중에도 표시 일관성 유지 */
+const FIRE_BUTTON_POLL_MS = 200;
 
 export class ControlsHud {
   private readonly guidePanel: HTMLDivElement;
@@ -61,17 +57,17 @@ export class ControlsHud {
   private readonly aimButton: HTMLButtonElement;
   private readonly fireButton: HTMLButtonElement;
   private readonly resumeOverlay: HTMLDivElement;
-  private readonly intents: CombatIntentSink;
   private readonly toggleCode = hudKeyCode('H');
   private readonly unsubscribeParams: () => void;
+  private readonly unsubscribeAimMode: Unsubscribe;
+  private readonly unsubscribeTorpedoFired: Unsubscribe;
+  private readonly firePollTimer: ReturnType<typeof setInterval>;
 
   private params: UiParams;
   /** 표시 상태 — 초기값은 params/ui.json, 이후에는 H 토글이 지배한다 */
   private guideVisible: boolean;
   private buttonsVisible: boolean;
   private paused = false;
-  private aiming = false;
-  private aimSource: InputSource | null = null;
   private locked = false;
   private suppressCanvasMouseUntilMs = 0;
 
@@ -81,7 +77,6 @@ export class ControlsHud {
     private readonly options: ControlsHudOptions,
   ) {
     this.params = loadUiParams();
-    this.intents = options.intents ?? devLogSink;
     this.guideVisible = this.params.showControlsGuideByDefault.value;
     this.buttonsVisible = this.params.showScreenButtonsByDefault.value;
 
@@ -97,14 +92,24 @@ export class ControlsHud {
 
     this.applyParams();
     this.applyVisibility();
+    this.updateFireButtonState();
 
     // 게임 중 우클릭 컨텍스트 메뉴 방지 (조준용 우클릭과 충돌)
     this.container.addEventListener('contextmenu', this.handleContextMenu);
     this.canvas.addEventListener('mousedown', this.handleCanvasMouseDown);
-    this.canvas.addEventListener('mouseup', this.handleCanvasMouseUp);
     document.addEventListener('keydown', this.handleKeyDown);
     document.addEventListener('pointerlockchange', this.handlePointerLockChange);
     document.addEventListener('pointerlockerror', this.handlePointerLockError);
+
+    // 조준 버튼 활성 표시의 진실은 aimModeChanged (마우스·버튼·자동 해제 공통)
+    this.unsubscribeAimMode = options.bus.on('aimModeChanged', ({ aiming }) => {
+      this.aimButton.classList.toggle('hud-btn-active', aiming);
+    });
+    // 발사 직후 잔량·재장전 표시 즉시 갱신 (폴링 주기 보완)
+    this.unsubscribeTorpedoFired = options.bus.on('torpedoFired', () => {
+      this.updateFireButtonState();
+    });
+    this.firePollTimer = setInterval(() => this.updateFireButtonState(), FIRE_BUTTON_POLL_MS);
 
     this.unsubscribeParams = onUiParamsReloaded((next) => {
       this.params = next;
@@ -113,10 +118,12 @@ export class ControlsHud {
   }
 
   dispose(): void {
+    clearInterval(this.firePollTimer);
     this.unsubscribeParams();
+    this.unsubscribeAimMode();
+    this.unsubscribeTorpedoFired();
     this.container.removeEventListener('contextmenu', this.handleContextMenu);
     this.canvas.removeEventListener('mousedown', this.handleCanvasMouseDown);
-    this.canvas.removeEventListener('mouseup', this.handleCanvasMouseUp);
     document.removeEventListener('keydown', this.handleKeyDown);
     document.removeEventListener('pointerlockchange', this.handlePointerLockChange);
     document.removeEventListener('pointerlockerror', this.handlePointerLockError);
@@ -161,15 +168,19 @@ export class ControlsHud {
     button.type = 'button';
     button.className = 'hud-btn';
     button.textContent = label;
-    // 버튼 입력이 캔버스(카메라·조준·발사) 경로로 새지 않게 전파를 끊는다.
-    // 동작은 click 단일 경로 — pointerdown/up은 소비만 한다.
-    button.addEventListener('pointerdown', (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-    });
-    button.addEventListener('pointerup', (e) => {
-      e.stopPropagation();
-    });
+    // 버튼 입력이 캔버스·window(MouseCombatInput) 경로로 새지 않게 전파를 끊는다.
+    // 동작은 click 단일 경로 — pointerdown/up·mousedown/up은 소비만 한다.
+    for (const type of ['pointerdown', 'mousedown'] as const) {
+      button.addEventListener(type, (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+      });
+    }
+    for (const type of ['pointerup', 'mouseup'] as const) {
+      button.addEventListener(type, (e) => {
+        e.stopPropagation();
+      });
+    }
     button.addEventListener('click', (e) => {
       e.stopPropagation();
       onActivate();
@@ -191,6 +202,11 @@ export class ControlsHud {
     hint.textContent = 'Esc: 마우스 잠금 해제 · 일시정지';
     overlay.append(title, body, hint);
 
+    // 재개 클릭이 window의 MouseCombatInput에 발사 클릭으로 쌓이지 않게 소비
+    overlay.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+    });
     overlay.addEventListener('click', (e) => {
       e.stopPropagation();
       this.resume();
@@ -217,32 +233,39 @@ export class ControlsHud {
     // 그 결과(pointerlockchange)에서 일시정지한다. 조준 취소 전용 키 아님.
   };
 
+  /**
+   * 캔버스 mousedown 게이트키퍼.
+   * 전투로 전달하면 안 되는 클릭만 stopPropagation으로 소비한다 —
+   * window의 MouseCombatInput(게임플레이)은 버블링 단계라 여기서 끊긴다.
+   * 정상 전투 클릭은 통과시키고 계측만 남긴다 (aim 호출은 게임플레이 소관).
+   * mouseup은 절대 막지 않는다 — 우클릭 홀드 해제가 유실되면 조준이 고착된다.
+   */
   private readonly handleCanvasMouseDown = (e: MouseEvent): void => {
-    if (this.paused) return;
-
-    if (!this.locked) {
-      // 비잠금 상태의 캔버스 클릭은 Pointer Lock 진입 전용 — 발사로 처리하지 않는다
-      if (e.button === 0) {
-        e.preventDefault();
-        this.requestLock();
-      }
+    if (this.paused) {
+      e.stopPropagation();
       return;
     }
 
-    // Pointer Lock 진입 직후의 잔여 클릭 무시
-    if (performance.now() < this.suppressCanvasMouseUntilMs) return;
-
-    if (e.button === 2) {
-      this.startAim('mouse');
-    } else if (e.button === 0) {
-      this.requestFire('mouse');
+    if (!this.locked) {
+      // 비잠금 상태 캔버스 클릭은 Pointer Lock 진입 전용 — 전투 입력 아님
+      e.stopPropagation();
+      e.preventDefault();
+      if (e.button === 0) this.requestLock();
+      return;
     }
-  };
 
-  private readonly handleCanvasMouseUp = (e: MouseEvent): void => {
-    // 우클릭 홀드 조준만 mouseup으로 끝난다 — 버튼 토글 조준은 유지
-    if (this.locked && e.button === 2 && this.aiming && this.aimSource === 'mouse') {
-      this.endAim('mouse');
+    if (performance.now() < this.suppressCanvasMouseUntilMs) {
+      // 잠금 진입 직후 잔여 클릭 — 발사·조준으로 전달 금지
+      e.stopPropagation();
+      return;
+    }
+
+    // 정상 전투 입력 — MouseCombatInput → GameplaySystems → aim이 처리한다.
+    if (e.button === 2) {
+      inputTelemetry.recordAimStart('mouse');
+      this.applyButtonPresence();
+    } else if (e.button === 0) {
+      inputTelemetry.recordFireRequest('mouse');
     }
   };
 
@@ -257,8 +280,9 @@ export class ControlsHud {
       if (this.paused) this.setPaused(false);
     } else {
       inputTelemetry.recordPointerLockExit();
-      // Esc 등으로 잠금 해제 → 조준 정리 후 일시정지 + 재진입 안내
-      if (this.aiming && this.aimSource) this.endAim(this.aimSource);
+      // Esc 등으로 잠금 해제 → 조준 해제 후 일시정지 + 재진입 안내.
+      // 루프가 멈추면 게임플레이 update가 돌지 않으므로 여기서 endAim을 보장한다.
+      if (this.options.combat.aim.aiming) this.options.combat.aim.endAim();
       this.setPaused(true);
     }
   };
@@ -286,41 +310,25 @@ export class ControlsHud {
     this.options.setPaused(paused);
   }
 
+  /** 조준 버튼 — AimSystem 토글. 활성 표시는 aimModeChanged 구독이 갱신한다 */
   private toggleAimFromButton(): void {
-    // 조준 버튼은 토글 — 클릭이 발사로 이어지지 않는다
-    if (this.aiming) {
-      this.endAim(this.aimSource ?? 'screenButton');
+    if (this.paused) return;
+    const aim = this.options.combat.aim;
+    if (aim.aiming) {
+      aim.endAim();
     } else {
-      this.startAim('screenButton');
+      inputTelemetry.recordAimStart('screenButton');
+      // 잠망경 심도가 아니면 false — 버튼은 상태를 가장하지 않는다 (이벤트가 진실)
+      aim.beginAim();
     }
   }
 
+  /** 발사 버튼 — 마우스 좌클릭과 같은 fireTorpedo() 단일 경로 */
   private fireFromButton(): void {
     if (this.paused) return;
-    this.requestFire('screenButton');
-  }
-
-  private startAim(source: InputSource): void {
-    if (this.aiming) return;
-    this.aiming = true;
-    this.aimSource = source;
-    this.aimButton.classList.add('hud-btn-active');
-    inputTelemetry.recordAimStart(source);
-    this.intents.requestAimStart(source);
-    this.applyButtonPresence();
-  }
-
-  private endAim(source: InputSource): void {
-    if (!this.aiming) return;
-    this.aiming = false;
-    this.aimSource = null;
-    this.aimButton.classList.remove('hud-btn-active');
-    this.intents.requestAimEnd(source);
-  }
-
-  private requestFire(source: InputSource): void {
-    inputTelemetry.recordFireRequest(source);
-    this.intents.requestTorpedoFire(source);
+    inputTelemetry.recordFireRequest('screenButton');
+    this.options.combat.aim.fireTorpedo();
+    this.updateFireButtonState();
   }
 
   // ── 표시 상태 ──────────────────────────────────────────────
@@ -346,5 +354,20 @@ export class ControlsHud {
   private applyButtonPresence(): void {
     const dim = inputTelemetry.mouseAimCount >= this.params.mouseAimCountToDimButtons.value;
     this.buttonsWrap.classList.toggle('hud-buttons-dimmed', dim);
+  }
+
+  /** 잔량 0 또는 재장전 중이면 발사 버튼 비활성 — 라벨에 상태 병기 */
+  private updateFireButtonState(): void {
+    const torpedo = this.options.combat.torpedo;
+    const reloading = torpedo.reloadRemainingSeconds > 0;
+    const empty = torpedo.remaining <= 0;
+    this.fireButton.disabled = reloading || empty;
+    if (empty) {
+      this.fireButton.textContent = '어뢰 발사 (0발)';
+    } else if (reloading) {
+      this.fireButton.textContent = `어뢰 발사 · 재장전 ${Math.ceil(torpedo.reloadRemainingSeconds)}s`;
+    } else {
+      this.fireButton.textContent = `어뢰 발사 (${torpedo.remaining}발)`;
+    }
   }
 }
