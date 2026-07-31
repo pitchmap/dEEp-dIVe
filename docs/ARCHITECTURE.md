@@ -76,11 +76,23 @@ D+5 플레이테스트 리뷰 후속 확정 (INT-CORE-002). 이동·카메라·�
 - **이동 방향 기준은 잠수함 로컬 축** — 카메라 기준이 아니다 (§3.3 확정).
   전진 벡터 = `bowDirectionXZ(heading)` = (-sin h, -cos h).
 
-### 카메라 리센터 [확정]
+### 카메라 리센터 [확정 — INT-CORE-004 개정]
 Space 리센터 = **선미 뒤쪽 상단에서 선수 방향을 바라보는 후방 뷰.**
-요 각 기준은 `cameraRecenterYawRadians(heading)`(= heading + π)이며,
-CameraRig의 기존 후방 뷰 배치와 동일 정의다. 상단 높이·기본 피치는
-렌더 소유 시각 구도 상수.
+위치와 시선은 **서로 다른 함수**로 구분한다 — 하나의 yaw 값을 두 의미로
+재사용하지 않는다:
+
+- **위치**: 카메라 위치 = 잠수함 위치 +
+  `cameraRecenterOffsetDirectionXZ(heading)`(= 선미 방향) × 추적 거리
+  (+ 상단 높이·기본 피치 — 렌더 소유 시각 구도 상수).
+- **시선**: `cameraRecenterLookDirectionXZ(heading)`(= 선수 방향).
+  lookAt 대상을 잠수함으로 두면 자동 충족된다.
+- **검증 기준**: 리센터 직후 ① 프로펠러(선미)가 카메라에 가장 가까운 쪽에
+  보이고 ② W 전진 시 잠수함이 화면 안쪽(멀어지는 방향)으로 나아간다.
+
+이력: 구 `cameraRecenterYawRadians`(heading+π)는 '시선 요'와 '위치 오프셋
+요'로 이중 해석됐고, 구 CameraRig는 이 값을 위치 오프셋으로 써서 실제로는
+카메라가 **선수 쪽**에 배치되는 결함(W 전진 시 화면 바깥쪽 이동)이 있었다.
+해당 함수는 폐기 — 위 두 방향 벡터 함수만 사용한다.
 
 ### 어뢰 생성 [확정]
 어뢰는 **선수 방향에서 생성**된다 — 생성 방향은 `bowDirectionXZ(heading)`를
@@ -150,14 +162,26 @@ CameraRig의 기존 후방 뷰 배치와 동일 정의다. 상단 높이·기본
 UI(격침 기록), 격침 보상 어뢰 +1(§5.9). targetId는
 `CargoShipStateSource.id`와 동일 체계.
 
-### 협곡 레이아웃 — `CanyonLayout` (contracts/layout.ts)
+### 협곡 레이아웃 — `CanyonLayout` (contracts/layout.ts) [INT-CORE-004 구현]
 월드 렌더와 충돌·시작 구역 판정이 같은 배치를 복제하지 않기 위한 단일
 데이터 소스: `floorY` · `seaSurfaceY` · `submarineSpawn` ·
-`blocks[]`(중심 XZ + 크기 + Y요 회전, 블록 바닥 = floorY). **이번 단계는
-인터페이스만 확정** — 데이터 인스턴스 모듈(레이아웃 1개)은 후속 커밋에서
-만들고 composition root가 렌더(메시 생성)·게임플레이(충돌체)에 같은
-인스턴스를 주입한다. 정식 블록아웃(레벨 디자인) 수신 시 데이터 내용만
-교체된다. 레벨 시스템·로더·에디터는 만들지 않는다.
+`blocks[]`(중심 XZ + 크기 + Y요 회전, 블록 바닥 = floorY).
+
+**데이터 인스턴스: `src/world/startingCanyonLayout.ts`의
+`STARTING_CANYON_LAYOUT`** (공용 데이터 모듈 — 공통 보호에 준함, 내용
+교체는 리드 승인 경유). floorY −6 · seaSurfaceY 12 · spawn (0, 0, 0) ·
+S자 수로 벽 22개 + 엄폐 기둥 3개. composition root가 렌더(메시 생성)와
+게임플레이(충돌체)에 같은 인스턴스를 주입한다 — 렌더의
+`buildCanyonBlockout` 자체 수식과 게임플레이 `collision/startingArea.ts`
+미러 수식은 이 데이터 소비로 교체한다(복제 소멸). 정식 블록아웃(레벨
+디자인) 수신 시 데이터 내용만 교체된다. 레벨 시스템·로더·에디터는 없다.
+
+**벽 높이 확정 (리드 결정):** 좌안 `11+2·sin` / 우안 `12−2·sin` —
+그래픽 하향값 채택. 근거: 벽 상단 최대 Y=7 < 해수면 12 로 수중에서 해수면·
+화물선 실루엣이 능선에 가리지 않음(§3.1 '밝음→어둠' 문법). 충돌이 같은
+blocks를 쓰므로 구 충돌 미러(15/16±3·sin)가 만들던 '보이지 않는 약 4m
+벽'은 소멸. 벽 상단~해수면 사이 개방 수역은 회색 박스 단계 허용 —
+상층 제약이 필요하면 레벨 데이터로 해결한다.
 
 ## Game 조립 계약 (composition root 연결 지도)
 
@@ -172,7 +196,7 @@ UI(격침 기록), 격침 보상 어뢰 +1(§5.9). targetId는
 | Submarine pose → CanyonScene·Propeller | `scene.attachPoseSource(gameplay.poseSource)` — `SubmarinePoseSource` 계약. 프로펠러 속도도 이 포즈의 forwardSpeed만 사용 |
 | torpedoHit 이벤트 → 화물선 상태·렌더·오디오 | 발행은 게임플레이 판정 1곳. CargoShipSystem은 hit/sinkProgress 상태 갱신, 렌더·오디오·UI는 EventBus 구독 — 직접 참조 없음 |
 | params.movement → 프로펠러 | composition root가 `propellerIdleSpinRatio`·`maxSpeedMetersPerSecond` 값을 렌더에 주입 — 렌더 JSON에 중복 정의 금지 |
-| CanyonLayout → 렌더·충돌 | 같은 레이아웃 인스턴스를 양쪽에 주입 (후속 커밋) |
+| CanyonLayout → 렌더·충돌 | `STARTING_CANYON_LAYOUT`(src/world/startingCanyonLayout.ts) 동일 인스턴스를 양쪽에 주입 — 렌더는 blocks→메시, 게임플레이는 blocks→충돌체(AABB 근사는 소비측 규칙). 자체 수식 복제 금지 |
 
 ## 게임 상태 전환과 장면 전환의 분리
 

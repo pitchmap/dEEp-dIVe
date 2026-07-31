@@ -12,6 +12,9 @@
  *     월드 (0, 0, -1)이며, 렌더는 mesh.rotation.y = headingRadians 그대로 사용.
  *  3. 이동 방향 기준은 잠수함 로컬 축이다 — 카메라 기준이 아니다 [확정 §3.3].
  *  4. Space 카메라 리센터 = 선미 뒤쪽 상단에서 선수 방향을 바라보는 후방 뷰.
+ *     위치 오프셋 방향(cameraRecenterOffsetDirectionXZ = 선미)과 시선 방향
+ *     (cameraRecenterLookDirectionXZ = 선수)은 **서로 다른 함수**다 — 하나의
+ *     yaw 값을 두 의미로 재사용하지 않는다 (INT-CORE-004).
  *  5. 어뢰는 선수 방향(bowDirectionXZ)에서 생성된다.
  *  6. 프로펠러는 선미(LOCAL_STERN)에 배치된다.
  *  7. 프로펠러 회전은 실제 전후 속도값에만 연결한다 — A/D 선회 단독 입력은
@@ -68,12 +71,30 @@ export function meshYawRadians(headingRadians: number): number {
 }
 
 /**
- * Space 리센터 시 카메라 요 각 — 카메라가 선미 뒤쪽에 서서 선수 방향을
- * 바라보는 후방 뷰 [확정]. CameraRig의 기존 `heading + π` 배치와 동일 정의.
- * (상단 배치는 CameraRig의 기본 피치·높이 상수가 담당 — 시각 구도 상수)
+ * Space 리센터 시 카메라 **위치 오프셋** 방향 (수평 성분) [확정 — INT-CORE-004]:
+ *   카메라 위치 = 잠수함 위치 + (이 방향 × 추적 거리) + 상단 높이(피치 상수).
+ * 카메라는 선미 뒤쪽 상단에 선다 — 값은 선미 방향(sternDirectionXZ)이다.
+ *
+ * 시선 방향과 별개의 함수다. 이전의 cameraRecenterYawRadians(heading+π)는
+ * '시선 요'와 '위치 오프셋 요'로 이중 해석되어 카메라가 선수 쪽에 배치되는
+ * 결함(구 CameraRig — W 전진 시 화면 바깥쪽으로 이동)을 낳아 폐기했다.
+ * 하나의 yaw 값을 두 의미로 재사용하지 않는다.
  */
-export function cameraRecenterYawRadians(headingRadians: number): number {
-  return headingRadians + Math.PI;
+export function cameraRecenterOffsetDirectionXZ(headingRadians: number): DirectionXZ {
+  return sternDirectionXZ(headingRadians);
+}
+
+/**
+ * Space 리센터 시 카메라 **시선** 방향 (수평 성분) [확정 — INT-CORE-004]:
+ * 선수 방향(bowDirectionXZ)을 바라본다. lookAt 대상을 잠수함 위치로 두면
+ * 선미 뒤 카메라에서 자동 충족된다.
+ *
+ * 리센터 검증 기준:
+ *  ① 프로펠러(선미)가 카메라에 가장 가까운 쪽에 보인다.
+ *  ② W 전진 시 잠수함이 화면 안쪽(카메라에서 멀어지는 방향)으로 나아간다.
+ */
+export function cameraRecenterLookDirectionXZ(headingRadians: number): DirectionXZ {
+  return bowDirectionXZ(headingRadians);
 }
 
 /**
