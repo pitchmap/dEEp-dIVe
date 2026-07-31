@@ -188,6 +188,13 @@ export class ControlsHud {
     return button;
   }
 
+  /**
+   * 일시정지 오버레이 — 입력 모드 선택 지점 [회의 목표: 두 방식 중 선택 가능].
+   *  - '마우스 모드로 계속': 재개 + Pointer Lock 재진입 (우클릭 조준·좌클릭 발사)
+   *  - '화면 버튼으로 계속': 재개만 — 잠금 없이 커서를 유지한 채 화면
+   *    조준·발사 버튼으로 플레이 (게임 루프 실행, 강제 재잠금 없음)
+   * 배경 클릭은 마우스 모드 재개와 동일하게 처리한다 (기존 동작 유지).
+   */
   private buildResumeOverlay(): HTMLDivElement {
     const overlay = document.createElement('div');
     overlay.className = 'resume-overlay hud-hidden';
@@ -195,12 +202,27 @@ export class ControlsHud {
     const title = document.createElement('div');
     title.className = 'resume-overlay-title';
     title.textContent = '일시정지';
-    const body = document.createElement('div');
-    body.textContent = '클릭하면 게임으로 돌아갑니다 (마우스 잠금 재진입)';
+
+    const choices = document.createElement('div');
+    choices.className = 'resume-overlay-choices';
+    const mouseResume = this.buildResumeChoice(
+      'resume-mouse',
+      '마우스 모드로 계속',
+      '잠금 재진입 · 우클릭 조준 / 좌클릭 발사',
+      () => this.resume(),
+    );
+    const buttonResume = this.buildResumeChoice(
+      'resume-buttons',
+      '화면 버튼으로 계속',
+      '잠금 없음 · 화면 조준·발사 버튼 사용',
+      () => this.resumeWithoutLock(),
+    );
+    choices.append(mouseResume, buttonResume);
+
     const hint = document.createElement('div');
     hint.className = 'resume-overlay-hint';
-    hint.textContent = 'Esc: 마우스 잠금 해제 · 일시정지';
-    overlay.append(title, body, hint);
+    hint.textContent = 'Esc: 마우스 잠금 해제 · 일시정지 (배경 클릭 = 마우스 모드)';
+    overlay.append(title, choices, hint);
 
     // 재개 클릭이 window의 MouseCombatInput에 발사 클릭으로 쌓이지 않게 소비
     overlay.addEventListener('mousedown', (e) => {
@@ -212,6 +234,35 @@ export class ControlsHud {
       this.resume();
     });
     return overlay;
+  }
+
+  private buildResumeChoice(
+    className: string,
+    label: string,
+    description: string,
+    onActivate: () => void,
+  ): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `hud-btn resume-choice ${className}`;
+    const strong = document.createElement('div');
+    strong.textContent = label;
+    const desc = document.createElement('div');
+    desc.className = 'resume-choice-desc';
+    desc.textContent = description;
+    button.append(strong, desc);
+    // 오버레이 배경(마우스 모드 재개)·window(MouseCombatInput)로 전파 차단
+    for (const type of ['pointerdown', 'mousedown'] as const) {
+      button.addEventListener(type, (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+      });
+    }
+    button.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onActivate();
+    });
+    return button;
   }
 
   // ── 입력 처리 ──────────────────────────────────────────────
@@ -301,6 +352,15 @@ export class ControlsHud {
     this.setPaused(false);
     // 잠금 재진입 시도 — 실패해도 게임은 재개되고 화면 버튼 경로가 남는다
     this.requestLock();
+  }
+
+  /**
+   * 화면 버튼 모드로 재개 — Pointer Lock을 걸지 않는다 [회의 목표:
+   * 입력 방식 선택]. 게임 루프는 실행 상태, 커서 유지, 화면 조준·발사
+   * 버튼이 같은 AimSystem을 호출한다. 마우스 모드 복귀는 캔버스 클릭.
+   */
+  private resumeWithoutLock(): void {
+    this.setPaused(false);
   }
 
   private setPaused(paused: boolean): void {
