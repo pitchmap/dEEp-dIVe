@@ -76,7 +76,7 @@
 |---|---|---|
 | 0. 환경 구축 | D1~D2 | ✅ 저장소·골격·계측·핫리로드·배포 워크플로 완료 / ⚠ 배포 URL 미확보 (관리자 Pages 1회 설정 대기 — docs/DEPLOY.md) |
 | 1. 회색 박스 | D3~D5 | ✅ **D+5 통합 완료** — 조작·심도·카메라·협곡 블록아웃·X-ray 스파이크(성공) 통합, 전 검사 통과. 잔여: 레벨 디자인 정식 블록아웃(엄폐 3곳+) 수신 시 임시 협곡 교체, 팀 전원 조작 테스트·관성 1차 튜닝(§11 판단 기준 1차 적용)은 전사 리뷰에서 |
-| 2. 코어 전투 루프 | D6~D9 | 대기 |
+| 2. 코어 전투 루프 | D6~D9 | 🔄 선행 착수 (4차 대회의 결의) — 어뢰·화물선·조작 개편 각 브랜치 완료, **dev 통합 대기** (차단 8건: 하단 표·NEXT_SPRINT §4) |
 | 3. 은신·탐지 | D10~D12 | 대기 |
 | 4. 연출 적용 | D13~D14 | 대기 |
 | 5. 통합·게이트 준비 | D15 | 대기 |
@@ -93,3 +93,48 @@
   - X-ray: `?xray=1`로 스파이크 장착 로그·반투명 선체 내 수위 판독(스크린샷)·수위 순환 데모 작동, 기본·X-ray 장면 모두 콘솔 오류 0건
   - 계측·HMR: FPS·로딩 계측 작동(헤드리스 SW 렌더링 환경으로 FPS 절대값은 참고치), movement.json 유효 변경 → "핫리로드 적용 완료", 범위 밖 값(9.9) → "핫리로드 거부 — 기존 값 유지" 확인 후 원복
 - **미검증(환경 제약):** GitHub Pages 실제 배포 URL(관리자 Pages 설정 대기), 실기기 60fps(내장그래픽 노트북 — 게이트 리뷰 항목)
+
+---
+
+## D+5 리뷰 스프린트 — 역할별 커밋 표 (문서 정리 시점 기준)
+
+> 기준 회의: `docs/meetings/07_d5_playtest_review.md`·`08_hud_buttons_ad_propeller.md`.
+> 스프린트 계획·차단 사항 상세: `docs/NEXT_SPRINT.md`. 각 역할 구역 본문은
+> 해당 브랜치 쪽이 최신이다 — dev 병합 시 이 표와 함께 갱신할 것.
+
+### 역할별 커밋 현황
+
+| 역할 | 커밋 | 내용 | 검증 | 상태 |
+|---|---|---|---|---|
+| 개발 리드 | `b69890b` | INT-CORE-002 — `conventions.ts` 축 규약(-Z 선수/+Z 선미), `AimSystem`·`aimModeChanged`, `propellerIdleSpinRatio` | typecheck·build 통과 (커밋 기록) | ✅ 완료 / ⏳ **dev 통합 대기** |
+| 개발 리드 | `efd4712` | INT-CORE-003 — `SubmarinePoseSource`(positionY·부호 forwardSpeed)·`CargoShipStateSource`·`torpedoHit`·`contracts/layout.ts`·파라미터 단일 소스 | 게임플레이 검증 21/21 유지 (커밋 기록) | ✅ 완료 / ⏳ **dev 통합 대기** |
+| 게임플레이 | `218ad86` | 이동·충돌 개편 — S 후진(전진의 50%), Shift/Ctrl 연속 상승·하강, 수직 한계, 높이 기반 심도 3구간, 정적 충돌(`collision/`) | 결정적 검증 39/39 | ✅ 완료 / ⏳ **dev 통합 대기** |
+| 게임플레이 | `10ef604` | 어뢰 전투 — `PeriscopeAimSystem`(계약 AimSystem)·`StraightRunTorpedoSystem`·`MouseCombatInput`·`TargetRegistry` | 결정적 검증 56/56 | ✅ 완료 / ⏳ **dev 통합 대기** |
+| 게임플레이 | `b7faf44` | `CargoShipSystem`(직선 왕복·torpedoHit 1회·침몰 시간축) + 포즈 계약 적용, 수직 상한 12.5→11 | 결정적 검증 71/71 | ✅ 완료 / ⏳ **dev 통합 대기** |
+| 그래픽스 | `383f257` | 프로펠러(선미·정/역회전·8% 공회전)·해수면·화물선 임시 표적·명중 침몰 연출 | 커밋 기록 [G1] | ✅ 완료 / ⏳ **dev 통합 대기** |
+| 그래픽스 | `cbcbf65` | 게임플레이·리드 병합 + 렌더 정식 계약 소비 교체(signed speed·positionY·conventions·공회전 단일 소스), INT-RENDER-004 보고 | 커밋 기록 [G1][G4] | ✅ 완료 / ⏳ **dev 통합 대기** (⚠ `b7faf44` 미포함 기반) |
+| 빌드·툴 | `e0f7609` | 조작 HUD·Pointer Lock·화면 전투 버튼(임시 sink)·입력 계측·`params/ui.json` | 커밋 기록 | ✅ 완료 / ⏳ **dev 통합 대기** |
+| 빌드·툴 | `2f8b66f` | HUD ↔ 실제 AimSystem 연결(임시 sink 삭제·마우스/버튼 동등 경로), Game.ts 배선 선반영(INT-TOOL-004) | typecheck·build·check:size(3.7%)·헤드리스 33/33 | ✅ 완료 / ⏳ **dev 통합 대기** (Game.ts 선반영은 리드 확인 대기) |
+
+### 미완료 (구현 없음 — 다음 스프린트)
+
+격침 보상 어뢰 +1 배선(INT-GAME-007) / provisional 4종 params·레이아웃 이관(INT-GAME-004·006·007) / CanyonLayout 데이터 모듈·렌더-충돌 단일 소스화(INT-GAME-005·INT-RENDER-004) / `torpedoHit` 소비 배선(렌더 폭발·오디오·UI) / 리드샷 보조선 / 임시 탐지·구축함 AI·폭뢰·내구도·탈출(D6~D9 잔여) / WebAudioSystem 조립(D13~14)
+
+### 계약 구분 (상세: NEXT_SPRINT §5)
+
+- **정식(승인·dev 반영):** INT-CORE-001, INT-GAME-001·002, INT-RENDER-001, INT-TOOL-001
+- **정식(승인·dev 통합 대기):** INT-CORE-002 (`b69890b`), INT-CORE-003 (`efd4712`)
+- **임시(선반영·확인 대기):** INT-TOOL-002·004 (Game.ts HUD 배선), 렌더의 positionY 선택 필드 소비
+- **제안(대기):** INT-GAME-004·005·006·007, INT-RENDER-003(사실상 INT-CORE-003으로 해소 — 렌더 교체 잔여), INT-RENDER-004(보고)
+- **폐기:** INT-TOOL-003 (요청 이벤트 3종 — AimSystem 단일 진입점으로 대체)
+
+### 통합 차단 사항 (해소 전 dev 병합 금지 — 상세·해소 조건: NEXT_SPRINT §4)
+
+1. HUD → AimSystem 연결 (Game.ts 선반영의 리드 채택 — INT-TOOL-004)
+2. positionY 렌더 반영 (계약 필수 승격 — INT-GAME-004)
+3. signed speed → 프로펠러 연결 (`forwardSpeedMetersPerSecond`로 소비 교체 — 계약 `speed` 비부호 정정과 충돌 주의)
+4. 프로펠러 공회전 파라미터 중복 제거 (renderVisualParams 잔여 키 확인 — INT-CORE-003 ③)
+5. CargoShipSystem 정식 구현 연결 (렌더 `cbcbf65`가 `b7faf44` 미포함 — 계약 소스 주입 배선)
+6. 화물선 피격 이벤트 (`torpedoHit` 소비·격침 보상 경로 — INT-GAME-006·007)
+7. CanyonScene과 collision layout 정합 (벽 높이 불일치 — INT-RENDER-004·INT-GAME-005)
+8. 그래픽 브랜치 engines 기준 확인 (package.json/.nvmrc dev 기준 일치 검증 — INT-TOOL-001)
