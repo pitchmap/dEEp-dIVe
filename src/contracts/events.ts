@@ -47,6 +47,10 @@ export interface GameEvents {
   /** 탐지 게이지 값·단계 변경 시 (발행: DetectionSystem) */
   detectionChanged: { gauge: number; stage: DetectionStage };
 
+  /** 조준 뷰 진입·해제 시 (발행: AimSystem — 마우스·HUD 버튼 공용 진입점).
+   *  구독: 렌더(조준 중 카메라 고정 §3.2), UI(조준 표시) */
+  aimModeChanged: { aiming: boolean };
+
   /** 어뢰 발사 순간. 발사 지점(수평면 좌표)은 구축함의
    *  '마지막 목격 위치'로 무조건 기록된다 (§5.10 확정 규칙) */
   torpedoFired: { originX: number; originZ: number };

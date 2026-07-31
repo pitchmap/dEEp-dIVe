@@ -12,17 +12,20 @@
   - D1~D2 환경 구축 검수 — 저장소 구조, core 골격(루프·상태 머신·EventBus·SceneManager), 계약 3종(events/systems/params) 정의
   - D3 — 시스템 등록 구조 구현: `GameSystem` 수명주기(id·initialize·update·render?·dispose) + `SystemRegistry`(실행 순서 = 등록 순서, dispose 역순) + `Game.composeSystems()` 등록 지점·프레임 순서 배선 (INTEGRATION_NOTES INT-CORE-001, ARCHITECTURE.md '시스템 실행 순서' 참조)
   - **D+5 회색 박스 통합** — 툴링(`5b33dec`)·코어(`22f2d15`)·게임플레이(`f5b5c1c`)·그래픽스(`9fc32f6`) 4개 브랜치 병합, `composeSystems()`에 `gameplay` → `cameraInput` 순서 등록, `CanyonScene`을 ManagedScene으로 활성화 + `attachPoseSource` 주입, INT-GAME-001·INT-GAME-002·INT-RENDER-001·INT-TOOL-001 리드 결정 완료. 임시 이동 수치 params 이관(`provisionalMovement.ts` 삭제). typecheck·build·check:size(0.53MB/15MB)·결정적 검증 21/21·브라우저 자동화 검증 19/19 통과 (하단 'D+5 통합 검증 결과' 참조)
+  - **D+5 리뷰 후속 — 공통 규약 확정 (INT-CORE-002)**: `src/core/conventions.ts` 신규 (로컬 -Z=선수·+Z=선미·+Y=위, `bowDirectionXZ`/`sternDirectionXZ`/`meshYawRadians`/`cameraRecenterYawRadians`/`propellerSpinRatio`), `AimSystem` 계약(마우스·HUD 버튼 공용 진입점 — 별도 전투 시스템 금지) + `aimModeChanged` 이벤트, 프로펠러 공회전 비율 파라미터(`propellerIdleSpinRatio` 0.08, 0~1 검증). ARCHITECTURE.md '공통 공간·방향 규약'·'조준 입력 단일화' 章, INTERFACES.md §1·§2·§3 갱신
 - **진행 중:** 없음
-- **다음 작업:** D6 — 코어 전투 루프 착수 (화물선·임시 탐지·구축함 AI 2상태·어뢰·폭뢰), dev PR 검토
+- **다음 작업:** D6 — 코어 전투 루프 착수 (화물선·임시 탐지·구축함 AI 2상태·어뢰·폭뢰 — AimSystem 구현 포함), dev PR 검토
 - **차단 문제:** 없음
-- **변경된 계약:** `MovementParams`에 `maxSpeedMetersPerSecond`·`accelerationSeconds`(FixedNumber) 추가 — INT-GAME-001 승인, INTERFACES.md §3 갱신
+- **변경된 계약:** INT-CORE-002 — `AimSystem` 인터페이스·`aimModeChanged` 이벤트·`MovementParams.propellerIdleSpinRatio` 추가 (리드 승인, INTERFACES.md 동시 갱신). 이전: INT-GAME-001(`maxSpeedMetersPerSecond`·`accelerationSeconds`)
 - **통합 주의사항:**
   - 각 파트는 자기 소유 영역에서 `GameSystem`(`src/core/GameSystem.ts`) 구현체를 export하고, 이 문서 자기 구역에 등록 요청을 남긴다. `src/core` 배선은 feat→dev 병합 시 리드가 수행
   - 파트 간 통신은 EventBus만 — 구현체 간 직접 참조(포즈 주입 등)는 composeSystems(composition root)에서만 잇는다
   - 3D 장면(회색 박스 블록아웃)은 시스템이 아니라 `ManagedScene`으로 SceneManager에 등록
   - 상태 전환(GameStateMachine)과 장면 전환(SceneManager)은 분리 — 자동 매핑 없음
-- **마지막 업데이트:** D+5 (회색 박스 통합 커밋)
-- **담당 브랜치:** `claude/deep-dive-d5-gray-box-integration-tree5i` (D+5 통합 세션 — dev PR 대기)
+  - **축·방향은 `src/core/conventions.ts`만 참조** — 숫자·벡터 복제 금지. 프로펠러 회전은 `propellerSpinRatio`(속도만 입력) 경유, 렌더가 speed를 쓰려면 `SubmarinePoseSource` Pick에 `speed` 추가해 소비 (판정 계산 금지)
+  - 조준·발사 입력(마우스·HUD 버튼)은 반드시 동일 `AimSystem` 인스턴스를 호출 — 어댑터 주입은 composeSystems에서만, 카메라 고정·UI는 `aimModeChanged` 구독
+- **마지막 업데이트:** D+5 리뷰 후속 (공통 규약 확정 커밋)
+- **담당 브랜치:** `claude/deep-dive-core-lead-uyg77p` (리드 세션 — dev 병합분 머지 완료)
 
 ## 게임플레이
 
