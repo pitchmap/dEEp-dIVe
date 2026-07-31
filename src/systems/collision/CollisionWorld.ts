@@ -79,6 +79,14 @@ export class CollisionWorld {
     this.staticColliders.length = 0;
   }
 
+  /** 구가 정적 충돌체와 겹치는가 — 어뢰 등 발사체의 환경 명중 질의 */
+  intersectsSphere(x: number, y: number, z: number, radius: number): boolean {
+    for (const collider of this.staticColliders) {
+      if (computePush(collider, x, y, z, radius)) return true;
+    }
+    return false;
+  }
+
   /**
    * 선체(구 집합, 강체)를 정적 충돌체 밖으로 밀어내는 보정 오프셋을 구한다.
    * 겹침이 없으면 null. 보정은 선체 전체에 동일하게 적용된다 (강체 이동).

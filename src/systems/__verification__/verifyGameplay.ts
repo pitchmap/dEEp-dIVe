@@ -23,7 +23,10 @@ import { computeHullSpheres } from '../collision/submarineHull';
 import { GameplaySystems } from '../GameplaySystems';
 import { KeyboardInput, type MovementInput, type VisibilitySource } from '../KeyboardInput';
 import { LayeredDepthSystem } from '../LayeredDepthSystem';
+import { PeriscopeAimSystem } from '../PeriscopeAimSystem';
+import { StraightRunTorpedoSystem } from '../StraightRunTorpedoSystem';
 import { SubmarinePlayerController } from '../SubmarinePlayerController';
+import { TargetRegistry, type CombatTarget } from '../TargetRegistry';
 import {
   PROVISIONAL_REVERSE_MAX_RATIO,
   PROVISIONAL_VERTICAL_MAX_RATIO,
@@ -102,6 +105,37 @@ function keyEvent(type: 'keydown' | 'keyup', code: string, repeat = false): Even
   const event = new Event(type);
   Object.assign(event, { code, repeat });
   return event;
+}
+
+/** 가짜 마우스 이벤트 — button: 0=좌클릭(발사), 2=우클릭(조준) */
+function mouseEvent(type: 'mousedown' | 'mouseup', button: number): Event {
+  const event = new Event(type);
+  Object.assign(event, { button });
+  return event;
+}
+
+/** 전투 검증용 최소 조립 (빈 환경·빈 표적 — 필요한 것만 주입) */
+function makeCombatRig(
+  params: ReturnType<typeof validateGameParams>,
+): {
+  bus: EventBus;
+  input: ScriptedInput;
+  controller: SubmarinePlayerController;
+  depth: LayeredDepthSystem;
+  world: CollisionWorld;
+  targets: TargetRegistry;
+  torpedo: StraightRunTorpedoSystem;
+  aim: PeriscopeAimSystem;
+} {
+  const bus = new EventBus();
+  const input = new ScriptedInput();
+  const controller = new SubmarinePlayerController(params.movement, input);
+  const depth = new LayeredDepthSystem(bus, controller);
+  const world = new CollisionWorld();
+  const targets = new TargetRegistry();
+  const torpedo = new StraightRunTorpedoSystem(bus, params.combat, controller, world, targets);
+  const aim = new PeriscopeAimSystem(bus, depth, torpedo);
+  return { bus, input, controller, depth, world, targets, torpedo, aim };
 }
 
 class FakeVisibilitySource extends EventTarget implements VisibilitySource {
@@ -613,6 +647,285 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       systems.collision.colliders.length > 0,
       `colliders=${systems.collision.colliders.length}개 (시작 지역 임시 레이아웃)`,
     );
+    systems.detachInput();
+  }
+
+  // 18. 조준 게이트 — 잠망경 심도 전용, aimModeChanged 중복 없음, 이탈 시 자동 해제
+  {
+    const rig = makeCombatRig(params);
+    const aimEvents: boolean[] = [];
+    rig.bus.on('aimModeChanged', ({ aiming }) => aimEvents.push(aiming));
+
+    const rejected = !rig.aim.beginAim();
+    check(
+      '조준: 잠망경 심도 밖 beginAim 거부 (false, 이벤트 없음)',
+      rejected && !rig.aim.aiming && aimEvents.length === 0,
+      `layer=${rig.depth.currentLayer}`,
+    );
+
+    rig.depth.requestAscend(); // cruise → periscope
+    const began = rig.aim.beginAim();
+    const beganAgain = rig.aim.beginAim(); // 중복 호출 — 이벤트 재발행 없음
+    check(
+      '조준: 잠망경 심도 beginAim 허용 + aimModeChanged{true} 1회',
+      began && beganAgain && rig.aim.aiming && aimEvents.length === 1 && aimEvents[0] === true,
+      `events=${aimEvents.join(',')}`,
+    );
+
+    rig.aim.endAim();
+    rig.aim.endAim(); // 중복 해제 — 이벤트 재발행 없음
+    check(
+      '조준: endAim → aimModeChanged{false} 1회 (중복 없음)',
+      !rig.aim.aiming && aimEvents.length === 2 && aimEvents[1] === false,
+      `events=${aimEvents.join(',')}`,
+    );
+
+    rig.aim.beginAim();
+    rig.depth.requestDescend(); // periscope → cruise (조준 유지 조건 상실)
+    rig.aim.update(dt);
+    check(
+      '조준: 조준 중 잠망경 심도 이탈 시 자동 해제',
+      !rig.aim.aiming && aimEvents.length === 4 && aimEvents[3] === false,
+      `events=${aimEvents.join(',')}`,
+    );
+  }
+
+  // 19. 발사 — 단발·재장전·잔량·torpedoFired·선수 생성
+  {
+    const rig = makeCombatRig(params);
+    const fired: Array<{ originX: number; originZ: number }> = [];
+    rig.bus.on('torpedoFired', (payload) => fired.push(payload));
+    const capacity = params.combat.torpedoCapacity.value;
+    const reloadSeconds = params.combat.torpedoReloadSeconds.value;
+    const step = 1 / 60;
+
+    const notAimingFire = !rig.aim.fireTorpedo();
+    rig.depth.requestAscend();
+    rig.aim.beginAim();
+    const fire1 = rig.aim.fireTorpedo();
+    const fire2 = rig.aim.fireTorpedo(); // 재장전 중 — 거부
+    check(
+      '발사: 미조준 거부 + 조준 중 1회 호출 = 정확히 1발 (재장전 중 추가 거부)',
+      notAimingFire &&
+        fire1 &&
+        !fire2 &&
+        rig.torpedo.remaining === capacity - 1 &&
+        rig.torpedo.torpedoes.length === 1 &&
+        fired.length === 1,
+      `remaining=${rig.torpedo.remaining}, active=${rig.torpedo.torpedoes.length}`,
+    );
+
+    const origin = fired[0];
+    const snapshot = rig.torpedo.torpedoes[0];
+    const bowSpawnOk =
+      origin !== undefined &&
+      snapshot !== undefined &&
+      Math.abs(origin.originX) < 1e-9 &&
+      origin.originZ < -3 && // heading 0 선수 = -Z — 프로펠러(+Z 선미) 반대편
+      snapshot.y === rig.controller.positionY;
+    check(
+      '발사: 어뢰는 선수(-Z) 발사 지점에서 생성 (발사 시점 높이 유지)',
+      bowSpawnOk,
+      `origin=(${origin?.originX.toFixed(2)}, ${origin?.originZ.toFixed(2)}), y=${snapshot?.y.toFixed(2)}`,
+    );
+
+    check(
+      '발사: 재장전 시작 = combat.json torpedoReloadSeconds',
+      rig.torpedo.reloadRemainingSeconds === reloadSeconds,
+      `reload=${rig.torpedo.reloadRemainingSeconds}s`,
+    );
+
+    for (let i = 0; i < Math.round((reloadSeconds - 0.5) / step); i += 1) rig.torpedo.update(step);
+    const duringReload = !rig.aim.fireTorpedo();
+    for (let i = 0; i < Math.round(1 / step); i += 1) rig.torpedo.update(step);
+    const afterReload = rig.aim.fireTorpedo();
+    check(
+      '발사: 재장전 경과 전 거부 → 경과 후 허용',
+      duringReload && afterReload && rig.torpedo.remaining === capacity - 2,
+      `remaining=${rig.torpedo.remaining}`,
+    );
+
+    for (let i = 0; i < Math.round((reloadSeconds + 0.5) / step); i += 1) rig.torpedo.update(step);
+    const lastFire = rig.aim.fireTorpedo(); // 마지막 1발 (capacity 3 기준)
+    const emptyFire = rig.aim.fireTorpedo(); // 잔량 0 — 거부
+    check(
+      '발사: 잔량 0 = 거부, torpedoFired는 성공 횟수만큼만 발행',
+      lastFire && !emptyFire && rig.torpedo.remaining === 0 && fired.length === capacity,
+      `remaining=${rig.torpedo.remaining}, fired=${fired.length}/${capacity}`,
+    );
+  }
+
+  // 20. 어뢰 직선 주행 + 최대 사거리 초과 시 제거 (빗나간 어뢰 정리)
+  {
+    const rig = makeCombatRig(params);
+    rig.depth.requestAscend();
+    rig.aim.beginAim();
+    rig.aim.fireTorpedo();
+    const step = 1 / 60;
+    const speed = rig.torpedo.torpedoSpeedMetersPerSecond;
+
+    for (let i = 0; i < Math.round(2 / step); i += 1) rig.torpedo.update(step);
+    const midFlight = rig.torpedo.torpedoes[0];
+    const straight =
+      midFlight !== undefined && Math.abs(midFlight.x) < 1e-9 && midFlight.z < -30;
+    check('어뢰: 선수 방향 직선 비행 (heading 0 → x 고정, -Z 전진)', straight, `pos=(${midFlight?.x}, ${midFlight?.z.toFixed(1)})`);
+
+    // 사거리 90m / 속력 20m/s ≈ 4.5s — 여유를 두고 6초까지 진행
+    for (let i = 0; i < Math.round(4 / step); i += 1) rig.torpedo.update(step);
+    check(
+      '어뢰: 최대 사거리 초과 시 정상 제거 (표적 없음 = 빗나감)',
+      rig.torpedo.torpedoes.length === 0,
+      `${speed}m/s × 사거리 초과 후 active=${rig.torpedo.torpedoes.length}`,
+    );
+  }
+
+  // 21. 함선 명중 — 어뢰 1발당 통지 정확히 1회 (중복 명중 없음)
+  {
+    const rig = makeCombatRig(params);
+    let hits = 0;
+    let lastHitZ = 0;
+    const cargo: CombatTarget = {
+      id: 'cargo-test',
+      positionX: 0,
+      positionY: 13,
+      positionZ: -40,
+      velocityX: 0,
+      velocityZ: 0,
+      hitRadius: 4,
+      onTorpedoHit(_hitX, hitZ) {
+        hits += 1;
+        lastHitZ = hitZ;
+      },
+    };
+    rig.targets.register(cargo);
+
+    rig.depth.requestAscend();
+    rig.aim.beginAim();
+    rig.aim.fireTorpedo();
+    const step = 1 / 60;
+    for (let i = 0; i < Math.round(6 / step); i += 1) rig.torpedo.update(step);
+
+    check(
+      '어뢰: 함선 명중 통지 정확히 1회 + 어뢰 즉시 제거 (중복 명중 없음)',
+      hits === 1 && rig.torpedo.torpedoes.length === 0 && lastHitZ > -40 && lastHitZ < -35,
+      `hits=${hits}, hitZ=${lastHitZ.toFixed(2)}`,
+    );
+  }
+
+  // 22. 환경 명중 — 지형 충돌 시 제거 (표적 통지 없음)
+  {
+    const rig = makeCombatRig(params);
+    let hits = 0;
+    rig.targets.register({
+      id: 'far-cargo',
+      positionX: 50,
+      positionY: 13,
+      positionZ: -80,
+      velocityX: 0,
+      velocityZ: 0,
+      hitRadius: 4,
+      onTorpedoHit() {
+        hits += 1;
+      },
+    });
+    rig.depth.requestAscend(); // y = 10.25
+    rig.world.addBox(-5, 8, -30, 5, 13, -28); // 어뢰 고도를 가로막는 벽
+
+    rig.aim.beginAim();
+    rig.aim.fireTorpedo();
+    const step = 1 / 60;
+    for (let i = 0; i < Math.round(2 / step); i += 1) rig.torpedo.update(step);
+    check(
+      '어뢰: 환경(지형) 충돌 시 1회만 소멸 — 표적 통지 없음',
+      rig.torpedo.torpedoes.length === 0 && hits === 0,
+      `active=${rig.torpedo.torpedoes.length}, targetHits=${hits}`,
+    );
+  }
+
+  // 23. 입력 소스 동등성 — 마우스 경로 vs HUD(직접 호출) 경로 완전 동일
+  {
+    const runScenario = (
+      useMouse: boolean,
+    ): { aiming: boolean; remaining: number; reload: number; count: number; x: number; z: number } => {
+      const bus = new EventBus();
+      const systems = new GameplaySystems(bus, params);
+      const keySource = new EventTarget();
+      systems.attachInput(keySource);
+      systems.depth.requestAscend(); // 잠망경 심도
+
+      if (useMouse) {
+        keySource.dispatchEvent(mouseEvent('mousedown', 2)); // 우클릭 홀드 = 조준
+        systems.update(dt);
+        keySource.dispatchEvent(mouseEvent('mousedown', 0)); // 좌클릭 = 발사
+        systems.update(dt);
+      } else {
+        systems.update(dt);
+        systems.aim.beginAim(); // HUD 조준 버튼과 동일한 공용 진입점
+        systems.aim.fireTorpedo(); // HUD 발사 버튼과 동일한 fire 경로
+        systems.update(dt);
+      }
+
+      const torpedo = systems.torpedo.torpedoes[0];
+      const state = {
+        aiming: systems.aim.aiming,
+        remaining: systems.torpedo.remaining,
+        reload: systems.torpedo.reloadRemainingSeconds,
+        count: systems.torpedo.torpedoes.length,
+        x: torpedo?.x ?? Number.NaN,
+        z: torpedo?.z ?? Number.NaN,
+      };
+      systems.detachInput();
+      return state;
+    };
+
+    const viaMouse = runScenario(true);
+    const viaHud = runScenario(false);
+    const identical =
+      viaMouse.aiming === viaHud.aiming &&
+      viaMouse.remaining === viaHud.remaining &&
+      viaMouse.reload === viaHud.reload &&
+      viaMouse.count === viaHud.count &&
+      viaMouse.x === viaHud.x &&
+      viaMouse.z === viaHud.z;
+    check(
+      '동등성: 마우스(우클릭·좌클릭)와 HUD 버튼 경로의 조준·발사·재장전 상태 완전 동일',
+      identical && viaMouse.count === 1,
+      `mouse=${JSON.stringify(viaMouse)} hud=${JSON.stringify(viaHud)}`,
+    );
+  }
+
+  // 24. 마우스 안전성 — 연속 클릭 1발 제한, blur 시 조준 해제, 컨텍스트 메뉴 방지
+  {
+    const bus = new EventBus();
+    const systems = new GameplaySystems(bus, params);
+    const keySource = new EventTarget();
+    systems.attachInput(keySource);
+    systems.depth.requestAscend();
+
+    keySource.dispatchEvent(mouseEvent('mousedown', 2));
+    systems.update(dt);
+    keySource.dispatchEvent(mouseEvent('mousedown', 0));
+    keySource.dispatchEvent(mouseEvent('mousedown', 0));
+    keySource.dispatchEvent(mouseEvent('mousedown', 0)); // 같은 프레임 연타
+    systems.update(dt);
+    check(
+      '발사: 같은 프레임 연타에도 재장전 판정으로 1발만 생성',
+      systems.torpedo.torpedoes.length === 1 && systems.torpedo.remaining === 2,
+      `active=${systems.torpedo.torpedoes.length}, remaining=${systems.torpedo.remaining}`,
+    );
+
+    const aimingBeforeBlur = systems.aim.aiming;
+    keySource.dispatchEvent(new Event('blur')); // 우클릭 눌린 채 포커스 상실
+    systems.update(dt);
+    check(
+      '조준: 포커스 상실 시 우클릭 고정 없이 조준 자동 해제',
+      aimingBeforeBlur && !systems.aim.aiming,
+      'blur → endAim',
+    );
+
+    const contextMenu = new Event('contextmenu', { cancelable: true });
+    keySource.dispatchEvent(contextMenu);
+    check('입력: 우클릭 컨텍스트 메뉴 방지 (조준 홀드 보호)', contextMenu.defaultPrevented, 'preventDefault');
     systems.detachInput();
   }
 

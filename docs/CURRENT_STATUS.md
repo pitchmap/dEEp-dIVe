@@ -31,14 +31,15 @@
 
 - **완료:**
   - D3~D5 조작·심도 (D+5 통합 반영) — WASD·관성·심도·`KeyboardInput`·`GameplaySystems`(GameSystem 수명주기)
-  - **D+5 리뷰 스프린트 '이동·충돌' (통합 순서 [2])** — ① W 전진 / **S 후진**(상한 = 전진의 50%, `speed`는 부호 있는 전후 속도 — 프로펠러 S7 소비용) ② **Shift/Ctrl 연속 상승·하강**(수직 최고 속력 = 전진의 50%, 키 해제 시 관성 감속) ③ 수면 상한(+12.5)·해저 하한(-5) 이탈 방지 ④ 높이 기반 **심도 3구간 판정**(`LayeredDepthSystem` — 잠망경 ≥8 / 순항 ≥-2 / 심해, `depthChanged` 유지, `requestAscend/Descend` 계약은 프로그래매틱 층 이동으로 존치) ⑤ **정적 충돌**(`src/systems/collision/` — 구·AABB 조합, 선체 = 구 3개 캡슐 근사, 통과 방지·밀어내기만, 피해 없음, 반복 해석으로 끼임·떨림 방지) + 시작 지역 임시 레이아웃(CanyonScene 미러) ⑥ 결정적 검증 39항목(39/39 통과)
+  - **D+5 리뷰 스프린트 '이동·충돌' (통합 순서 [2])** — ① W 전진 / **S 후진**(상한 = 전진의 50%, `speed`는 부호 있는 전후 속도 — 프로펠러 S7 소비용) ② **Shift/Ctrl 연속 상승·하강**(수직 최고 속력 = 전진의 50%, 키 해제 시 관성 감속) ③ 수면 상한(+12.5)·해저 하한(-5) 이탈 방지 ④ 높이 기반 **심도 3구간 판정**(`LayeredDepthSystem` — 잠망경 ≥8 / 순항 ≥-2 / 심해, `depthChanged` 유지, `requestAscend/Descend` 계약은 프로그래매틱 층 이동으로 존치) ⑤ **정적 충돌**(`src/systems/collision/` — 구·AABB 조합, 선체 = 구 3개 캡슐 근사, 통과 방지·밀어내기만, 피해 없음, 반복 해석으로 끼임·떨림 방지) + 시작 지역 임시 레이아웃(CanyonScene 미러)
+  - **어뢰 전투 (통합 순서 [5], INT-CORE-002 계약 소비)** — ① `PeriscopeAimSystem`(계약 `AimSystem` 구현): beginAim(잠망경 심도 전용)/endAim/fireTorpedo **공용 진입점**, `aimModeChanged` 발행(중복 없음), 심도 이탈 시 자동 해제, 자동 락온 없음 ② `StraightRunTorpedoSystem`(계약 `TorpedoSystem` 구현): 선수(-Z, conventions.bowDirectionXZ) 발사 지점 생성, 수평 직선 주행, 최대 사거리 초과 제거, 함선(XZ)·환경(3D, collision 공유 집합) 명중 시 1회만 처리, `torpedoFired` 발행, 재장전·보유량 = combat.json ③ `MouseCombatInput`: 우클릭 홀드 조준·좌클릭 발사(에지 1회=1발), blur·탭 전환 시 해제, 컨텍스트 메뉴 방지 ④ `TargetRegistry`: 표적 위치·속도·hitRadius + `onTorpedoHit`(1회 보장) — 리드샷 보조선 데이터 연결점 ⑤ 결정적 검증 56항목(56/56 통과 — 마우스 vs HUD 경로 동등성 포함)
 - **진행 중:** 없음
-- **다음 작업:** INT-GAME-004·005 리드 결정 후 provisional 2종 이관·레이아웃 단일 소스화, 어뢰 `AimSystem`(INT-GAME-003 계약 확정 선행 — 통합 순서 [5])
-- **차단 문제:** 없음. 단 ① 렌더가 `positionY`를 아직 소비하지 않아 상승·하강이 화면에 안 보임(INT-GAME-005) ② 후진·수직 비율과 수직 한계·구간 경계는 params 부재로 R7 선진행(`provisionalMovement.ts`·`provisionalWorld.ts` — INT-GAME-004)
-- **변경된 계약:** 없음 (직접 변경 없음 — INT-GAME-004·INT-GAME-005 제안 등록, `positionY`·`verticalSpeed`·`collision`은 구현체 확장 상태로 선진행)
-- **통합 주의사항:** 좌표 규약 — **잠수함 로컬 -Z가 선수, +Z가 선미** (리드 확정). heading은 Y축 요(yaw), heading 0 선수 = 월드 -Z, 선수 벡터 = (-sin h, 0, -cos h), 렌더는 `mesh.rotation.y = headingRadians` 그대로. A=heading 증가(좌)/D=감소(우), (-π, π] 정규화. **`player.speed`는 부호 있는 값**(음수 = 후진) — 소음 산출 등은 \|speed\| 사용할 것. `player.positionY`(수직)·`verticalSpeed` 추가. 심도 초기 구간은 y=0 → `cruise`(초기 이벤트 없음). **충돌체 집합은 `gameplay.collision.colliders`(읽기 전용) 공유** — 은신 시야 차폐(D10~12)는 이 집합을 재사용할 것(별도 집합 금지). 레벨 교체 시 `collision.clear()` 후 재등록. 렌더 협곡 배치를 바꾸면 `collision/startingArea.ts` 미러도 함께 갱신 필요(단일 소스화 전까지)
-- **마지막 업데이트:** D+5 리뷰 스프린트 (이동·충돌 커밋)
-- **담당 브랜치:** `claude/submarine-controls-depth-3wi424` (원격 세션 지정 브랜치 — `feat/gameplay` 역할, origin/dev 병합 기반)
+- **다음 작업:** INT-GAME-004·005·006 리드 결정 후 provisional 3종 이관·레이아웃 단일 소스화·명중 이벤트 배선, 화물선 시스템(경로 항행 표적 — TargetRegistry 등록)·임시 탐지(D6~D9 잔여)
+- **차단 문제:** 없음. 단 ① 렌더가 `positionY`를 아직 소비하지 않아 상승·하강이 화면에 안 보임(INT-GAME-005) ② 이동·어뢰 신규 수치는 params 부재로 R7 선진행(`provisionalMovement.ts`·`provisionalWorld.ts`·`provisionalCombat.ts` — INT-GAME-004·006) ③ 함선 명중의 렌더·오디오 통지는 이벤트 미정(INT-GAME-006 — 현재 표적 콜백만)
+- **변경된 계약:** 없음 (직접 변경 없음 — 리드 반영분 INT-CORE-002의 `AimSystem`·`aimModeChanged`를 구현·소비. INT-GAME-004·005·006 제안 등록)
+- **통합 주의사항:** 좌표 규약 — **잠수함 로컬 -Z가 선수, +Z가 선미** (`src/core/conventions.ts`만 참조). heading은 Y축 요(yaw), heading 0 선수 = 월드 -Z, 렌더는 `mesh.rotation.y = headingRadians` 그대로. **`player.speed`는 부호 있는 값**(음수 = 후진) — 소음 산출 등은 \|speed\| 사용할 것. `player.positionY`(수직)·`verticalSpeed` 추가. 심도 초기 구간은 y=0 → `cruise`(초기 이벤트 없음). **충돌체 집합은 `gameplay.collision.colliders`(읽기 전용) 공유** — 은신 시야 차폐(D10~12)는 이 집합을 재사용할 것(별도 집합 금지). 레벨 교체 시 `collision.clear()` 후 재등록, 렌더 협곡 배치 변경 시 `collision/startingArea.ts` 미러 동시 갱신(단일 소스화 전까지). **전투 입력은 반드시 `gameplay.aim`(계약 AimSystem) 하나로** — HUD 조준·발사 버튼은 composition root에서 `aim.beginAim()/endAim()/fireTorpedo()`를 호출(별도 전투 시스템 금지), UI는 `torpedo.remaining`·`torpedo.reloadRemainingSeconds`·`aim.aiming` 폴링 + `aimModeChanged` 구독. 리드샷 보조선 = `targets.list`(위치·속도) + `torpedo.torpedoSpeedMetersPerSecond` + `player` 포즈로 계산. 렌더 어뢰 항적은 `torpedo.torpedoes`(읽기 전용) 폴링. 화물선 시스템은 `targets.register()`로 표적 등록(콜백 `onTorpedoHit`는 어뢰 1발당 1회 보장)
+- **마지막 업데이트:** 어뢰 전투 커밋 (통합 순서 [5])
+- **담당 브랜치:** `claude/submarine-controls-depth-3wi424` (원격 세션 지정 브랜치 — `feat/gameplay` 역할, origin/dev + 리드 계약 브랜치 병합 기반)
 
 ## 그래픽스
 
