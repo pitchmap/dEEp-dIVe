@@ -176,10 +176,26 @@
 | 개발 리드 | `claude/deep-dive-core-lead-uyg77p` | `c4841cf` | INT-CORE-002(축 규약 `conventions.ts`·AimSystem·aimModeChanged·공회전 파라미터) / INT-CORE-003(SubmarinePoseSource·CargoShipStateSource·torpedoHit·layout 계약·파라미터 단일 소스) / INT-CORE-004(`src/world/STARTING_CANYON_LAYOUT`·벽 높이 확정·리센터 규약 위치/시선 분리) | typecheck·build·check:size, 게임플레이 검증 21/21 유지 | — (계약·데이터 변경) | dev 병합 실행 + Game.ts 배선 채택(INT-TOOL-002·004, INT-RENDER-005) + INT-GAME-004·006·007 결정 |
 | 게임플레이 | `claude/submarine-controls-depth-3wi424` | `c46c937` | W/S 전진·후진, Shift/Ctrl 연속 상승·하강, 3단계 심도 구간 판정, 정적 충돌·밀어내기, AimSystem 구현(잠망경 전용 조준·좌클릭 발사), 직선 어뢰, CargoShipSystem(직선 왕복·torpedoHit 1회·sinkProgress·removed), 공유 CanyonLayout 전환(미러 삭제) | 결정적 검증 **75/75** (블록↔충돌체 1:1 정합·수직 상한 파생·흘수선 포함) | — (헤드리스 로직 검증 위주) | provisional 잔존분 이관 결정(심도 구간 경계·어뢰·화물선 수치 — INT-GAME-004·006·007), 격침 보상 +1 배선 |
 | 그래픽스 | `feat/render` | `c091f30` | 프로펠러 signed speed 연동(정/역회전·8% 공회전·A/D 무영향), 해수면, 화물선 계약 소비(`applyState` 매핑만)·torpedoHit 폭발(멱등)·sinkProgress 침몰·removed 제거, 공유 STARTING_CANYON_LAYOUT 렌더, positionY 반영, 리센터 신규약 적용 | typecheck·build·check:size(3.7%), 게임플레이 검증 71/71 | **Playwright 실입력 실측** — 리센터·전/후진·A 단독 공회전·Shift/Ctrl 수직·화물선 왕복·폭발·침몰·제거·벽 충돌 정지 (스크린샷 확보) | composition root 배선 2줄(INT-RENDER-005 — cargoShip 상태·EventBus 주입) |
-| 빌드·툴 | `claude/deep-dive-tooling-phase-0-cj6c49` | `1381c08` (⚠ 화면 버튼 **최종 검증 커밋 후속 전달 예정** — 도착 시 본 행 갱신) | 조작 안내 패널·H 토글, Pointer Lock(Esc 일시정지·250ms 가드), PC 화면 조준·발사 버튼 ↔ 실제 AimSystem(마우스와 동일 인스턴스·동등 판정), 입력 계측(게이트 JSON 합류), `params/ui.json`, 리드 `c4841cf`·게임플레이 `b7faf44` 병합 재검증 | typecheck·build·check:size(3.7%), HUD 헤드리스 **33/33**, 게임플레이 검증 71/71 | 헤드리스 실발사·재장전·잔탄 동등·중복 발사 없음 확인 | Game.ts 선반영의 리드 채택(INT-TOOL-002·004), ui.json 기획 통보, 화물선 Scene 배선은 렌더 병합 후(1줄 예시 기록) |
+| 빌드·툴 | `claude/deep-dive-tooling-phase-0-cj6c49` | `a7c3cdf` (입력 모드 2원화 — 최종 검증 커밋) | 조작 안내 패널·H 토글, Pointer Lock(Esc 일시정지·250ms 가드), PC 화면 조준·발사 버튼 ↔ 실제 AimSystem(마우스와 동일 인스턴스·동등 판정), 입력 계측(게이트 JSON 합류), `params/ui.json`, 리드 `c4841cf`·게임플레이 `b7faf44` 병합 재검증 | typecheck·build·check:size(3.7%), HUD 헤드리스 **33/33**, 게임플레이 검증 75/75, **실제 Chromium 입력 모드 테스트 20/20** | 실발사·재장전·잔탄 동등·중복 발사 없음, 입력 모드 2원화(마우스/화면 버튼) 확인 | ✅ D+10 통합에서 채택 완료 (INT-TOOL-002·004) — ui.json 기획 통보만 잔여 |
 
 ### 구분: 완료 / 통합 대기 / 백로그
 
 - **완료 (브랜치 구현·검증 통과):** 확정 상태 전체 — 로컬 -Z 선수/+Z 선미, W/S 전진·후진, Shift/Ctrl 연속 상승·하강, 3단계 심도 구간, 공유 `STARTING_CANYON_LAYOUT`(렌더·충돌 동일 데이터), Space 선미 후방 상단 리센터, 환경 충돌·밀어내기, 프로펠러 signed speed·8% 공회전·A/D 무영향, 해수면, 직선 왕복 화물선, AimSystem(우클릭 조준·좌클릭 발사·PC 화면 버튼), 직선 어뢰, torpedoHit, sinkProgress 침몰, removed 렌더 제거, 조작 안내·H 토글, Pointer Lock, 입력 계측
 - **통합 대기 (구현 없음 — dev 병합·배선 작업만):** 4개 브랜치 dev 병합(NEXT_SPRINT §2 순서), composition root 배선(HUD aim·torpedo / cargoShip 상태·EventBus), INT-GAME-004·006·007 리드 결정, DECISIONS·각주 반영, D10 체크리스트 실행
 - **백로그 (차기 스프린트):** aimModeChanged 조준 카메라 고정 / 리드샷 보조선 실제 렌더 / 어뢰 항적·기포 / 방향타·수평타 애니메이션 / 프로펠러 기포 / 어뢰 격침 보상 +1 / 임시 화물선·전투 수치 params 이관 / WebAudioSystem 조립 / 탐지·발사 지점 노출 / 구축함·폭뢰 (상세·담당: NEXT_SPRINT §3)
+
+---
+
+## D+10 통합 검증 결과 (통합 담당 기록)
+
+- **통합 브랜치:** `claude/deep-dive-bootstrap-6wrpuw` (통합 세션 전용 — dev PR 대기)
+- **병합:** 리드 `c4841cf` → 게임플레이 `c46c937` → 그래픽 `c091f30` → 툴링 `a7c3cdf` → 문서 `7186135` (원격 tip merge, cherry-pick 없음)
+- **충돌:** `docs/INTEGRATION_NOTES.md` 3회(항목 ID 기준 전 항목 보존·중복 제거), `docs/NEXT_SPRINT.md`·`docs/meetings/07`·`meetings/README` (문서 브랜치 결산본 채택, 회의록 08은 원문 유지·재구성 중복본 제거). **코드 파일 충돌 0건**
+- **Game.ts 최종 조립:** GameplaySystems(레이아웃 명시 주입)·CameraInputAdapter·ControlsHud(aim·torpedo·bus)·CanyonScene(동일 레이아웃)·attachPoseSource·attachCargoShipSource·attachEventBus — 시스템별 단일 인스턴스
+- **정적 검사:** `npm ci`·typecheck·build·`check:size`(0.55MB/15MB, 3.7%) 전부 통과
+- **게임플레이 결정적 검증:** 75/75 통과
+- **HUD 자동 검증:** 툴링 `a7c3cdf` 기록 33/33 (러너는 툴링 세션 산출물 — 저장소 미포함. 본 통합에서는 아래 Chromium 실입력 27~44번 항목으로 동등 검증)
+- **실제 Chromium 실입력 플레이테스트:** 지시서 50항목 전 항목 PASS (실키·실클릭 — H 토글/이동·선회·수직/A/D 프로펠러 무영향/Space 리센터·선미 카메라/충돌·관통 없음·능선 위 통과/해수면·화물선 왕복/Pointer Lock 마우스 모드 조준·발사/화면 버튼 모드·재장전 비활성·잔탄 공유/모드 전환·잔탄 유지/명중·torpedoHit·sinkProgress 침몰·removed 제거/콘솔 오류 0건). 보조 검사: `?xray=1` 콘솔 0건, 일시정지 시 조준 자동 해제, 우클릭 컨텍스트 메뉴 억제, 입력 계측 카운터 작동
+- **수동 확인 필요 (자동화 환경 한계):** ① 실물 키보드 Esc의 Pointer Lock 해제 (자동화는 `exitPointerLock()` 동일 경로로 검증 — 브라우저 예약 동작이라 실기기에서 사실상 보장) ② 실기기 60fps(G1 — 헤드리스 SW 렌더 FPS는 참고치) ③ GitHub Pages 배포 URL(관리자 설정 대기)
+- **남은 버그:** 발견 0건 (콘솔 오류 0)
+- **백로그:** NEXT_SPRINT §3 유지 + INT-GAME-004·006·007 수치 이관(R7 임시값 표기), 격침 보상 +1 배선, ui.json 기획 통보

@@ -35,9 +35,9 @@
 | INT-GAME-002 | gameplay 조립 연결 | ✅ 반영 완료 | dev `6f83268` |
 | INT-RENDER-001 | CanyonScene 조립·별칭 정리 | ✅ 반영 완료 | dev `6f83268` |
 | INT-TOOL-001 | Node 고정·params HMR (engines `>=22 <23`) | ✅ 반영 완료 | dev `7e9e363` — 그래픽 브랜치 일치 검증 완료(`c091f30` vs dev diff 0건) |
-| INT-CORE-002 | 축 규약(conventions)·AimSystem·aimModeChanged·propellerIdleSpinRatio | ✅ 승인 — dev 통합 대기 | 리드 `b69890b` |
-| INT-CORE-003 | SubmarinePoseSource·CargoShipStateSource·torpedoHit·layout.ts·파라미터 단일 소스 | ✅ 승인 — dev 통합 대기 | 리드 `efd4712` |
-| INT-CORE-004 | STARTING_CANYON_LAYOUT(`src/world/`)·벽 높이 확정(렌더 하향값)·리센터 규약 이의 해소(Offset/Look 분리) | ✅ 승인 — dev 통합 대기 | 리드 `c4841cf` |
+| INT-CORE-002 | 축 규약(conventions)·AimSystem·aimModeChanged·propellerIdleSpinRatio | ✅ 승인·**D+10 통합 완료** | 리드 `b69890b` |
+| INT-CORE-003 | SubmarinePoseSource·CargoShipStateSource·torpedoHit·layout.ts·파라미터 단일 소스 | ✅ 승인·**D+10 통합 완료** | 리드 `efd4712` |
+| INT-CORE-004 | STARTING_CANYON_LAYOUT(`src/world/`)·벽 높이 확정(렌더 하향값)·리센터 규약 이의 해소(Offset/Look 분리) | ✅ 승인·**D+10 통합 완료** (Game.ts 명시 주입 — 렌더·충돌 단일 인스턴스) | 리드 `c4841cf` |
 | INT-GAME-004 | positionY·부호 속도 계약 승격 + 후진·수직 비율·심도 구간 경계 이관 | ⏳ 미결 — 계약 실체는 INT-CORE-003으로 확정, **심도 구간 경계 임시값(provisionalWorld) 이관 잔여** | 게임플레이 `218ad86`~`c46c937` |
 | INT-GAME-005 | 협곡 레이아웃 단일 소스화 + positionY 렌더 소비 | 🔀 **INT-CORE-004로 해소** — 미러 삭제(`c46c937`)·렌더 소비(`c091f30`) 완료. 형식 종결만 잔여 | `c4841cf`·`c46c937`·`c091f30` |
 | INT-GAME-006 | 어뢰 수치(속력 20·사거리 90) params 이관 + 명중 이벤트 | ⏳ 미결 — 이벤트는 INT-CORE-003 `torpedoHit`로 해소, **수치 이관(provisionalCombat) 잔여** | 게임플레이 `10ef604` |
@@ -45,17 +45,30 @@
 | INT-RENDER-002 | 프로펠러용 전후 부호 속도 (소회의 관리 창 제안) | 🔀 INT-GAME-004 합류 → **INT-CORE-003 `forwardSpeedMetersPerSecond`로 해소** | 회의록 08 |
 | INT-RENDER-003 | 화물선 상태 계약 | 🔀 **INT-CORE-003으로 해소** — 렌더 계약 소비 전환 완료(`c091f30`) | `c091f30` |
 | INT-RENDER-004 | [보고] 렌더-충돌 벽 높이 불일치 | 🔀 **INT-CORE-004로 해소** — 공유 레이아웃로 '보이지 않는 벽' 소멸 | `c4841cf`·`c46c937` |
-| INT-RENDER-005 | Game 조립 배선 요청: cargoShip 상태·EventBus 주입 (2줄, 코드 예시 포함) | ⏳ 미결 — D6/D+10 dev 통합 시 리드 배선 | 그래픽 `c091f30` |
-| INT-TOOL-002 | HUD 조립 보호 파일 최소 변경 (Game.ts +9줄·params/ui.json) | 🔍 선반영 — 리드 채택 대기 | 툴링 `e0f7609` |
+| INT-RENDER-005 | Game 조립 배선 요청: cargoShip 상태·EventBus 주입 (2줄, 코드 예시 포함) | ✅ **적용 (D+10 통합)** — composeSystems에 attachCargoShipSource·attachEventBus 배선 | 그래픽 `c091f30` |
+| INT-TOOL-002 | HUD 조립 보호 파일 최소 변경 (Game.ts +9줄·params/ui.json) | ✅ **채택 (D+10 통합)** | 툴링 `e0f7609` |
 | INT-TOOL-003 | 조준·발사 요청 이벤트 3종 | ⛔ 폐기 — INT-CORE-002 AimSystem 단일 진입점으로 대체 | 툴링 기록 |
-| INT-TOOL-004 | HUD 전투 버튼 ↔ AimSystem 배선 (Game.ts 선반영, 배선 코드 예시 포함) | 🔍 선반영 — 리드 채택 대기 | 툴링 `2f8b66f`·`1381c08` |
+| INT-TOOL-004 | HUD 전투 버튼 ↔ AimSystem 배선 (Game.ts 선반영, 배선 코드 예시 포함) | ✅ **채택 (D+10 통합)** — combat {aim·torpedo}·bus 주입 | 툴링 `2f8b66f`·`a7c3cdf` |
 
-**미결 요약 (dev 통합 전 리드 결정 필요):** INT-TOOL-002·004 채택(HUD 배선),
-INT-RENDER-005 배선(화물선·EventBus), INT-GAME-004·006·007 수치 이관·격침
-보상 결정 (이관은 백로그로 이월 가능 — R7 임시값 상태 유지 시 D+10 게이트
-데이터에 표기).
+**미결 요약 (D+10 통합 후):** INT-GAME-004·006·007 수치 이관·격침 보상
+결정만 잔여 — 백로그 이월 (R7 임시값 상태 유지, D+10 게이트 데이터에
+'임시 초기 테스트값' 표기). HUD·화물선·EventBus 배선은 D+10 통합에서 채택·적용 완료.
 
 ## 제안 목록
+
+### INT-CORE-005 — D+10 통합 배선·검증 핸들 (통합 담당 기록)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | D+10 통합 담당 (통합 지시서) |
+| 대상 시스템 | `src/core/Game.ts` (공통 보호 — 통합 배선) |
+| 필요한 변경 | ① `CanyonScene`·`GameplaySystems`에 `STARTING_CANYON_LAYOUT` **명시 주입** (기본 인자 의존 제거 — 렌더·충돌 단일 인스턴스 감사 가능화) ② `scene.attachCargoShipSource(gameplay.cargoShipState)`·`scene.attachEventBus(bus)` (INT-RENDER-005 이행) ③ 개발 모드 한정 `__deepDiveDebug` 읽기 전용 검증 핸들 (pose·cargo·aim·torpedo·layout·camera — 실제 인스턴스 노출, 더미 없음, 프로덕션 번들 제외, `__deepDiveInput` 관례 준수) |
+| 변경 이유 | D+10 통합 지시서 §5 최종 조립 + 실제 Chromium 플레이테스트(§7)의 상태 관측 요구 |
+| 관련 게이트 | G1·G3·G5·G6·G7 (통합 검증 전반) |
+| 영향을 받는 파일 | `src/core/Game.ts` |
+| 하위 호환 여부 | 깨짐 없음 (주입 명시화·배선 추가·dev 전용 핸들) |
+| 개발 리드 결정 | 통합 담당 기록 — dev PR 리뷰에서 리드 최종 확인 |
+| 적용 커밋 | (D+10 통합 커밋) |
 
 ### INT-TOOL-005 — 입력 모드 2원화 확정: '조준 버튼 = Pointer Lock 진입 겸용' 해석 폐기
 
@@ -142,8 +155,8 @@ scene.attachCargoShipSource(gameplay.cargoShipState); // CargoShipStateSource �
 | 관련 게이트 | G3 (명중 피드백), G6·G7 |
 | 영향을 받는 파일 | `src/core/Game.ts` 2줄 추가 (렌더 측 변경 불요 — 포트 준비 완료) |
 | 하위 호환 여부 | 깨짐 없음 — 미배선 상태에서도 빌드·기본 장면 정상(화물선 미표시, 폭발은 상태 hit 보조 경로) |
-| 개발 리드 결정 | (대기 — D6 통합 시) |
-| 적용 커밋 | — |
+| 개발 리드 결정 | 승인 — D+10 통합에서 배선 (attachCargoShipSource는 공식 공개 프로퍼티 `gameplay.cargoShipState` 사용, 캐스팅 없음) |
+| 적용 커밋 | (D+10 통합 커밋 — feat(integration) assemble D+10) |
 
 ### INT-RENDER-004 — [보고] 렌더 협곡 벽 높이와 충돌 미러 불일치 (INT-GAME-005 후속) — ✅ INT-CORE-004로 해소
 

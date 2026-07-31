@@ -36,12 +36,12 @@
 
 | # | 작업 | 근거 | 상태 |
 |---|---|---|---|
-| 1 | 4개 브랜치 dev 병합 (`c4841cf` → `c46c937` → `c091f30` → 툴링 최신) — docs 충돌은 전 항목 보존 원칙 | D10 체크리스트 §1 | ⏳ |
-| 2 | composition root 배선 채택: HUD `{aim·torpedo}`·bus 주입 (INT-TOOL-002·004 선반영 채택·재작성) | INT-TOOL-004 코드 예시 | ⏳ |
-| 3 | composition root 배선 추가: `scene.attachCargoShipSource(gameplay.cargoShipState)`·`scene.attachEventBus(bus)` (INT-RENDER-005 — 2줄) | INT-RENDER-005 코드 예시 | ⏳ |
+| 1 | 4개 브랜치 병합 (`c4841cf` → `c46c937` → `c091f30` → 툴링 `a7c3cdf` → 문서 `7186135`) — docs 충돌 전 항목 보존 | D10 체크리스트 §1 | ✅ D+10 통합 브랜치에서 완료 (dev PR 대기) |
+| 2 | composition root 배선 채택: HUD `{aim·torpedo}`·bus 주입 (INT-TOOL-002·004) | INT-TOOL-004 코드 예시 | ✅ 완료 |
+| 3 | composition root 배선 추가: `scene.attachCargoShipSource(gameplay.cargoShipState)`·`scene.attachEventBus(bus)` (INT-RENDER-005) + STARTING_CANYON_LAYOUT 명시 주입 | INT-RENDER-005 코드 예시 | ✅ 완료 |
 | 4 | INT-GAME-004(심도 구간 경계)·006(어뢰)·007(화물선) 수치 이관 결정 — 이관 자체는 백로그 이월 가능, 격침 보상 배선 방식 결정 | INTEGRATION_NOTES 총괄표 | ⏳ |
 | 5 | DECISIONS.md·마스터 플랜 각주의 리드 반영 (§5) | 리드만 수정 가능 | ⏳ |
-| 6 | 통합 후 D10 체크리스트 전 항목 실행·기록 | `docs/D10_INTEGRATION_CHECKLIST.md` | ⏳ |
+| 6 | 통합 후 D10 체크리스트 전 항목 실행·기록 | `docs/D10_INTEGRATION_CHECKLIST.md` | ✅ 완료 — 실 Chromium 50항목 + 정적·결정적 검사 (체크리스트 결과 주석 참조) |
 
 이미 해소되어 **재작업 불필요**: positionY 렌더 반영(`c091f30`), signed
 speed 프로펠러(`c091f30`), 공회전 파라미터 중복 제거(`c091f30` —
@@ -70,7 +70,7 @@ renderVisualParams는 순수 연출값만), 렌더-충돌 레이아웃 정합
 
 | # | 차단 사항 (D+7 기록) | 결과 |
 |---|---|---|
-| 1 | HUD → AimSystem 연결 | 🔍 구현 완료(`2f8b66f`·`1381c08`) — Game.ts 선반영의 **리드 채택만 잔여** (§2-2) |
+| 1 | HUD → AimSystem 연결 | 🔍 구현 완료(`2f8b66f`·`a7c3cdf`) — Game.ts 선반영의 **리드 채택만 잔여** (§2-2) |
 | 2 | positionY 렌더 반영 | ✅ 해소 — 계약 필수 필드 소비 (`c091f30`) |
 | 3 | signed speed → 프로펠러 연결 | ✅ 해소 — `forwardSpeedMetersPerSecond` 소비 (`c091f30`), 계약 `speed` 비부호 정정과 충돌 없음 |
 | 4 | 프로펠러 공회전 파라미터 중복 제거 | ✅ 해소 — renderVisualParams에서 idleSpinRatio·fullSpinAtSpeedMps 제거 (`c091f30`) |
