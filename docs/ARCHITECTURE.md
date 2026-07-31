@@ -21,9 +21,10 @@
 (계약·core 제외).
 
 ### 시스템 계약 (`src/contracts/systems.ts`)
-9개 인터페이스: PlayerController / DepthSystem / DetectionSystem /
-TorpedoSystem / DepthChargeSystem / DestroyerAI / HullSystem / AudioSystem /
-UISystem. **구현체는 아직 없다** — D3 이후 각 파트 소유 영역에서 구현한다.
+10개 인터페이스: PlayerController / DepthSystem / DetectionSystem /
+AimSystem / TorpedoSystem / DepthChargeSystem / DestroyerAI / HullSystem /
+AudioSystem / UISystem. 구현은 각 파트 소유 영역에서 한다 — D+5 기준
+PlayerController·DepthSystem 구현 완료, 나머지는 D6 이후.
 목록·소유자·입출력은 `docs/INTERFACES.md` 표 참조.
 
 ### 시스템 수명주기·등록 (`src/core/GameSystem.ts`, `SystemRegistry.ts`)
@@ -60,6 +61,57 @@ render:  sceneManager.render()  [3D 장면] → registry.render()  [UI 계층]
 `src/core`는 공통 보호 파일이므로 등록 배선 추가는 feat→dev 병합 시
 리드가 수행한다. 각 파트는 자기 소유 영역에서 `GameSystem` 구현체를
 export하고, CURRENT_STATUS의 자기 구역에 "등록 요청" 형태로 알리면 된다.
+
+## 공통 공간·방향 규약 (`src/core/conventions.ts`)
+
+D+5 플레이테스트 리뷰 후속 확정 (INT-CORE-002). 이동·카메라·프로펠러·UI·
+어뢰는 축 방향을 추측하지 않고 이 파일의 상수·함수를 참조한다.
+
+### 축·선수·선미 [확정]
+- **잠수함 로컬 -Z = 선수(bow), 로컬 +Z = 선미(stern), 월드 +Y = 위.**
+  코드 기준: `LOCAL_BOW` / `LOCAL_STERN` / `WORLD_UP`.
+- `headingRadians`는 Y축(위) 기준 요(yaw). heading 0의 선수 방향은 월드
+  (0, 0, -1). 렌더는 `meshYawRadians(heading)`(= heading 그대로)를
+  `mesh.rotation.y`에 대입 — 모델은 로컬 -Z가 선수가 되도록 제작·임포트한다.
+- **이동 방향 기준은 잠수함 로컬 축** — 카메라 기준이 아니다 (§3.3 확정).
+  전진 벡터 = `bowDirectionXZ(heading)` = (-sin h, -cos h).
+
+### 카메라 리센터 [확정]
+Space 리센터 = **선미 뒤쪽 상단에서 선수 방향을 바라보는 후방 뷰.**
+요 각 기준은 `cameraRecenterYawRadians(heading)`(= heading + π)이며,
+CameraRig의 기존 후방 뷰 배치와 동일 정의다. 상단 높이·기본 피치는
+렌더 소유 시각 구도 상수.
+
+### 어뢰 생성 [확정]
+어뢰는 **선수 방향에서 생성**된다 — 생성 방향은 `bowDirectionXZ(heading)`를
+사용한다 (D6 TorpedoSystem 구현 시 적용). 선수 오프셋 거리는 구현 상수.
+
+### 프로펠러 [확정]
+- 배치: **선미**(`LOCAL_STERN`).
+- 회전은 **실제 전후 속도값에만 연결**한다 — A/D 선회 단독 입력은 회전에
+  영향을 주지 않는다. 회전 비율 계산은 `propellerSpinRatio(speed, maxSpeed,
+  idleRatio)` 하나만 사용한다 (속도 외 입력을 받지 않는 시그니처로 강제).
+- 정지 상태 공회전: 최대 회전의 8%가 기본값이며
+  `params/movement.json propellerIdleSpinRatio`(FixedNumber, 0~1 검증)로
+  외부 조정한다. 최대 회전 각속도(rad/s) 자체는 렌더 소유 연출 상수.
+- 속도 소스: 렌더는 포즈 소스(`PlayerController.speed`)를 소비만 한다 —
+  현재 `SubmarinePoseSource`(CanyonScene)는 position·heading만 포함하므로
+  프로펠러 구현 시 `speed`를 Pick 목록에 추가해 소비한다 (판정 계산 금지).
+
+## 조준 입력 단일화 (AimSystem)
+
+마우스(우클릭)와 PC 화면 HUD 조준·발사 버튼은 **별도 전투 경로 없이 동일한
+`AimSystem`**(contracts/systems.ts)을 호출한다 [D+5 리뷰 후속 소회의 확정]:
+
+- 공용 진입점: `beginAim()`(잠망경 심도 아니면 false) / `endAim()` /
+  `fireTorpedo()`(TorpedoSystem 위임). 읽기 상태 `aiming`.
+- 입력 어댑터(마우스=게임플레이 입력, HUD 버튼=UI)는 composition root
+  (`Game.composeSystems`)에서 같은 AimSystem 인스턴스를 주입받는다 —
+  서로를 import하지 않는다.
+- 조준 뷰 카메라 고정(§3.2)·UI 표시는 `aimModeChanged` 이벤트 구독으로
+  처리한다 (렌더·UI가 게임플레이를 직접 참조하지 않음).
+- 구현은 게임플레이 소유, D6 이후. 계약만 선확정해 마우스·HUD가 서로 다른
+  방향으로 구현되는 것을 막는다.
 
 ## 게임 상태 전환과 장면 전환의 분리
 

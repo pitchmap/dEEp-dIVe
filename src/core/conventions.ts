@@ -1,0 +1,98 @@
+/**
+ * 공통 공간·방향 규약 — core 소유 (D+5 플레이테스트 리뷰 후속 확정).
+ *
+ * 목적: 이동·카메라·프로펠러·UI·어뢰가 축 방향을 각자 추측하지 않도록
+ * 단일 기준을 코드로 제공한다. 아래 규약은 기존 D+5 통합 구현
+ * (SubmarinePlayerController·CanyonScene·CameraRig)과 정합하며,
+ * 새 코드는 이 파일의 상수·함수를 참조한다 — 숫자를 복제하지 않는다.
+ *
+ * 확정 규약:
+ *  1. 잠수함 로컬 -Z = 선수(bow), 로컬 +Z = 선미(stern). 월드 +Y = 위.
+ *  2. headingRadians는 Y축(위) 기준 요(yaw) 각. heading 0의 선수 방향은
+ *     월드 (0, 0, -1)이며, 렌더는 mesh.rotation.y = headingRadians 그대로 사용.
+ *  3. 이동 방향 기준은 잠수함 로컬 축이다 — 카메라 기준이 아니다 [확정 §3.3].
+ *  4. Space 카메라 리센터 = 선미 뒤쪽 상단에서 선수 방향을 바라보는 후방 뷰.
+ *  5. 어뢰는 선수 방향(bowDirectionXZ)에서 생성된다.
+ *  6. 프로펠러는 선미(LOCAL_STERN)에 배치된다.
+ *  7. 프로펠러 회전은 실제 전후 속도값에만 연결한다 — A/D 선회 단독 입력은
+ *     회전에 영향을 주지 않는다 (propellerSpinRatio가 속도만 입력받는 이유).
+ *  8. 정지 상태 공회전 비율은 params/movement.json propellerIdleSpinRatio
+ *     (기본 0.08)로 외부 조정한다 — 코드 하드코딩 금지.
+ *
+ * 이 파일은 프레임워크 중립이다 — Three.js를 import하지 않는다.
+ * 렌더 측은 반환값으로 THREE.Vector3를 구성해 쓴다.
+ */
+
+/** 수평면(XZ) 단위 방향 */
+export interface DirectionXZ {
+  readonly x: number;
+  readonly z: number;
+}
+
+/** 3D 방향 (잠수함 로컬 또는 월드) */
+export interface Direction3 {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
+/** 잠수함 로컬 선수 방향 — 로컬 -Z [확정] */
+export const LOCAL_BOW: Direction3 = Object.freeze({ x: 0, y: 0, z: -1 });
+
+/** 잠수함 로컬 선미 방향 — 로컬 +Z [확정]. 프로펠러 배치 기준 */
+export const LOCAL_STERN: Direction3 = Object.freeze({ x: 0, y: 0, z: 1 });
+
+/** 월드 상단 방향 — +Y. heading(요)의 회전축 */
+export const WORLD_UP: Direction3 = Object.freeze({ x: 0, y: 1, z: 0 });
+
+/**
+ * 선수(전진) 방향의 월드 XZ 단위 벡터.
+ * heading 0 → (0, -1). 이동·어뢰 생성 방향의 단일 기준.
+ * SubmarinePlayerController의 전진 벡터 (-sin h, -cos h)와 동일 정의다.
+ */
+export function bowDirectionXZ(headingRadians: number): DirectionXZ {
+  return { x: -Math.sin(headingRadians), z: -Math.cos(headingRadians) };
+}
+
+/** 선미 방향의 월드 XZ 단위 벡터 — 선수의 반대 */
+export function sternDirectionXZ(headingRadians: number): DirectionXZ {
+  return { x: Math.sin(headingRadians), z: Math.cos(headingRadians) };
+}
+
+/**
+ * 렌더 메시 요 각 — 모델의 로컬 -Z가 선수로 제작되어 있으면
+ * mesh.rotation.y에 이 값을 그대로 대입한다 (변환 없음).
+ */
+export function meshYawRadians(headingRadians: number): number {
+  return headingRadians;
+}
+
+/**
+ * Space 리센터 시 카메라 요 각 — 카메라가 선미 뒤쪽에 서서 선수 방향을
+ * 바라보는 후방 뷰 [확정]. CameraRig의 기존 `heading + π` 배치와 동일 정의.
+ * (상단 배치는 CameraRig의 기본 피치·높이 상수가 담당 — 시각 구도 상수)
+ */
+export function cameraRecenterYawRadians(headingRadians: number): number {
+  return headingRadians + Math.PI;
+}
+
+/**
+ * 프로펠러 회전 비율 (0~1, 최대 회전 속도 대비).
+ *
+ *  - 실제 전후 속도에만 연결 [확정] — 선회(A/D)·카메라 입력은 인자에 없다.
+ *  - 정지 상태에서도 idleSpinRatio만큼 공회전한다
+ *    (params/movement.json propellerIdleSpinRatio 주입 — 기본 0.08).
+ *  - 실제 회전 각속도(rad/s) 최대치는 시각 연출 상수로 렌더 소유 —
+ *    여기서는 비율만 정한다.
+ */
+export function propellerSpinRatio(
+  speedMetersPerSecond: number,
+  maxSpeedMetersPerSecond: number,
+  idleSpinRatio: number,
+): number {
+  if (!Number.isFinite(speedMetersPerSecond) || maxSpeedMetersPerSecond <= 0) {
+    return idleSpinRatio;
+  }
+  const ratio = Math.abs(speedMetersPerSecond) / maxSpeedMetersPerSecond;
+  return Math.min(1, Math.max(idleSpinRatio, ratio));
+}

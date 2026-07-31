@@ -57,6 +57,31 @@ export interface DetectionSystem extends Updatable {
   reportTorpedoLaunch(x: number, z: number): void;
 }
 
+/**
+ * 조준 — 마우스와 PC 화면(HUD) 조준·발사 버튼의 **공용 진입점** (§5.8).
+ *
+ * 확정 규칙 (D+5 리뷰 후속 소회의, INT-CORE-002):
+ *  - 별도 전투 시스템을 만들지 않는다 — 입력 소스(마우스 우클릭·HUD 버튼)가
+ *    무엇이든 전부 이 하나의 AimSystem 메서드를 호출한다.
+ *  - 입력 어댑터와 이 시스템의 연결은 composition root(core/Game.composeSystems)
+ *    에서만 잇는다 — UI·입력 코드가 게임플레이 구현체를 직접 import하지 않는다.
+ *  - 조준 뷰 카메라 고정(§3.2)은 렌더가 aimModeChanged 이벤트 구독으로 처리한다.
+ * 구현은 게임플레이 소유(D6 이후). 수동 조준 + 리드샷 보조선이 기본 [확정].
+ */
+export interface AimSystem extends Updatable {
+  /** 조준 뷰 활성 여부 (읽기 전용 상태) */
+  readonly aiming: boolean;
+  /** 조준 시작. 잠망경 심도가 아니면 거부하고 false (§3.4 — 조준은 잠망경 심도만) */
+  beginAim(): boolean;
+  /** 조준 종료 — 발사 없이 해제하는 경우 포함 */
+  endAim(): void;
+  /**
+   * 발사 요청. 조준 중이 아니거나 TorpedoSystem이 거부(잔량 0·재장전 중)하면
+   * false. 성공 시 torpedoFired 이벤트 발행은 TorpedoSystem 책임이다.
+   */
+  fireTorpedo(): boolean;
+}
+
 /** 어뢰 — 수동 조준 + 리드샷 보조선이 기본 (§5.8). 수치는 params/combat.json */
 export interface TorpedoSystem extends Updatable {
   readonly remaining: number;

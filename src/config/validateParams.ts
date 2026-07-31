@@ -113,6 +113,22 @@ export function validateMovementParams(raw: unknown): MovementParams {
       'accelerationSeconds',
       validateFixedNumber(file, 'accelerationSeconds', raw['accelerationSeconds']),
     ),
+    propellerIdleSpinRatio: (() => {
+      // 최대 회전 대비 비율 — 0(공회전 없음)~1 밖은 형식 오류로 거부
+      const fixed = validateFixedNumber(
+        file,
+        'propellerIdleSpinRatio',
+        raw['propellerIdleSpinRatio'],
+      );
+      if (fixed.value < 0 || fixed.value > 1) {
+        throw new ParamValidationError(
+          file,
+          'propellerIdleSpinRatio.value',
+          `0~1 비율이 필요합니다 (받은 값: ${fixed.value})`,
+        );
+      }
+      return fixed;
+    })(),
   };
 }
 
