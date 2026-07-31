@@ -10,6 +10,7 @@
 
 import type { EventBus, Unsubscribe } from '../core/EventBus';
 import type { LoadingTimer } from './LoadingTimer';
+import { inputTelemetry, type InputMetricsSnapshot } from './InputTelemetry';
 
 interface PerfSample {
   fps: number;
@@ -31,6 +32,8 @@ export interface GateMetricSnapshot {
    * 어느 구간에서 프레임이 떨어졌는지 역추적용.
    */
   fpsSamples: number[];
+  /** 입력·버튼 사용 세션 카운터 (G3 참고 + 화면 버튼 사용률 판단 근거) */
+  input: InputMetricsSnapshot;
   /** 환경 정보만 기록한다 — 개인정보·고유 사용자 식별자 금지 (TOOLING 규칙) */
   browser: string;
   buildMode: string;
@@ -73,6 +76,7 @@ export class GateMetricRecorder {
         ? Math.round(this.loadingTimer.firstRenderMs)
         : null,
       fpsSamples: this.samples.map((s) => round1(s.fps)),
+      input: inputTelemetry.snapshot(),
       browser: navigator.userAgent,
       buildMode: import.meta.env.MODE,
       screen: {

@@ -13,6 +13,7 @@ import { CanyonScene } from '../render/CanyonScene';
 import { CameraInputAdapter } from '../render/CameraInputAdapter';
 import { GameplaySystems } from '../systems/GameplaySystems';
 import { PerformanceOverlay } from '../ui/PerformanceOverlay';
+import { ControlsHud } from '../ui/ControlsHud';
 import { GateMetricRecorder } from '../tools/GateMetricRecorder';
 import { LoadingTimer } from '../tools/LoadingTimer';
 import { EventBus } from './EventBus';
@@ -40,6 +41,7 @@ export class Game {
   private renderer: Renderer | null = null;
   private recorder: GateMetricRecorder | null = null;
   private overlay: PerformanceOverlay | null = null;
+  private controlsHud: ControlsHud | null = null;
 
   // 성능 샘플링 상태
   private frameCount = 0;
@@ -77,11 +79,21 @@ export class Game {
       });
     }
 
-    this.composeSystems(params, scene);
+    const gameplay = this.composeSystems(params, scene);
     this.registry.initializeAll({
       bus: this.bus,
       params,
       stateMachine: this.stateMachine,
+    });
+
+    // 조작 안내·Pointer Lock·화면 버튼 HUD (툴링·UI 소유 — src/ui/ControlsHud.ts).
+    // 일시정지는 루프 정지/재개로 연결한다. 전투 입력은 마우스(MouseCombatInput)와
+    // 같은 gameplay.aim 단일 진입점을 호출한다 (INT-CORE-002 — 별도 전투 시스템 금지,
+    // 배선은 이 composition root에서만. INTEGRATION_NOTES INT-TOOL-002).
+    this.controlsHud = new ControlsHud(this.container, canvas, {
+      setPaused: (paused) => (paused ? this.loop.stop() : this.loop.start()),
+      combat: { aim: gameplay.aim, torpedo: gameplay.torpedo },
+      bus: this.bus,
     });
 
     window.addEventListener('resize', this.handleResize);
@@ -111,7 +123,7 @@ export class Game {
    *  포즈는 게임플레이의 읽기 전용 상태를 여기서 1회 주입한다. 렌더는
    *  판정·이동을 계산하지 않는다.
    */
-  private composeSystems(params: GameParams, scene: CanyonScene): void {
+  private composeSystems(params: GameParams, scene: CanyonScene): GameplaySystems {
     // ① 입력·조작 — 게임플레이. 개발 모드 params 핫리로드는 승인된 로더의
     //    onParamsReloaded를 주입해 유효 값 교체만 허용한다 (JSON 역기록 없음).
     const gameplay = new GameplaySystems(this.bus, params, onParamsReloaded);
@@ -122,11 +134,16 @@ export class Game {
 
     // 구현체 간 직접 참조는 composition root에서만: 읽기 전용 포즈 주입.
     scene.attachPoseSource(gameplay.poseSource);
+
+    // HUD 전투 버튼 배선(start()에서 수행)을 위해 gameplay를 돌려준다.
+    return gameplay;
   }
 
   stop(): void {
     this.loop.stop();
     window.removeEventListener('resize', this.handleResize);
+    this.controlsHud?.dispose();
+    this.controlsHud = null;
     this.registry.disposeAll();
     this.overlay?.dispose();
     this.sceneManager.dispose();

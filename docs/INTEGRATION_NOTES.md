@@ -23,6 +23,80 @@
 
 ## 제안 목록
 
+### INT-TOOL-005 — 입력 모드 2원화 확정: '조준 버튼 = Pointer Lock 진입 겸용' 해석 폐기
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 빌드·툴·UI (화면 버튼·Pointer Lock 실브라우저 최종 검증) |
+| 대상 시스템 | `src/ui/ControlsHud.ts`(일시정지 오버레이 — 모드 선택), 회의 결정 해석 |
+| 필요한 변경 | **회의 문구 해석 기록** — "조준 버튼은 Pointer Lock 진입 요소도 겸할 수 있음"은 실브라우저 제약과 충돌: Pointer Lock 상태에서는 커서가 없어 DOM 버튼을 클릭할 수 없으므로, 조준 버튼이 잠금을 걸면 그 즉시 발사 버튼을 누를 수 없게 된다. **"플레이어가 마우스 방식과 화면 버튼 방식 중 선택 가능"이라는 핵심 목표를 우선**하여 다음 규칙으로 확정: ① 캔버스 클릭 = Pointer Lock **마우스 모드** 진입(우클릭 조준·좌클릭 발사) ② 화면 조준·발사 버튼 = **잠금 없는 UI 모드**에서 같은 AimSystem의 beginAim()/fireTorpedo() 직접 호출(강제 재잠금 없음, 게임 루프 실행 유지) ③ Esc = 마우스 모드 종료 → 일시정지 오버레이에서 '마우스 모드로 계속(잠금 재진입)' / **'화면 버튼으로 계속(잠금 없음)'** 중 선택 ④ 두 모드는 동일 `gameplay.aim`·잔탄·재장전 상태 공유 |
+| 변경 이유 | 실브라우저 검증에서 확인: Esc 해제 시 무조건 일시정지+전체 오버레이라 화면 버튼 모드로 계속할 경로가 없었음(버튼 모드 차단). 오버레이에 잠금 없는 재개 경로 1개를 추가하는 것이 최소 변경(가상 커서·버튼 전용 시스템·잠금 중 DOM 클릭 흉내 전부 배제) |
+| 관련 게이트 | G3(60초 첫 발사 — 두 입력 경로 모두), G5 |
+| 영향을 받는 파일 | src/ui/ControlsHud.ts(+오버레이 선택 버튼 2개·resumeWithoutLock), src/styles.css(스타일 — 자율 영역). 계약·Game.ts 무변경 |
+| 하위 호환 여부 | 유지 — 기존 배경 클릭(마우스 모드 재개)·Esc 일시정지 동작 그대로, 경로 추가만 |
+| 개발 리드 결정 | **확인 대기** — 회의 문구와 해석이 다른 지점이므로 리드·기획 확인 요청. 실측 근거: 시나리오 A/B/C 브라우저 검증 20/20 (모드 전환·상태 공유·중복 발사 없음) |
+| 적용 커밋 | (이 브랜치의 입력 모드 2원화 커밋) |
+
+### INT-TOOL-004 — HUD 전투 버튼 ↔ AimSystem 배선 (Game.ts 선반영 — 리드 확인 대기)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 빌드·툴·UI (HUD ↔ AimSystem 연결 작업) |
+| 대상 시스템 | `src/core/Game.ts`(공통 보호 — composition root 배선), `src/ui/ControlsHud.ts` |
+| 필요한 변경 | ① `composeSystems()`가 `GameplaySystems`를 반환 ② `start()`에서 HUD에 `{ aim: gameplay.aim, torpedo: gameplay.torpedo }`·`bus` 주입 — INT-CORE-002의 "HUD 버튼은 composition root에서 같은 aim 인스턴스 호출" 규칙의 실배선. 정확한 코드는 아래 예시 |
+| 변경 이유 | 임시 `CombatIntentSink`(개발 로그) 제거, 화면 버튼이 실제 조준·발사를 수행해야 함. HUD는 게임플레이 구현체를 import하지 않고 계약 단면(`Pick<AimSystem,...>`)만 본다 |
+| 관련 게이트 | G3, G7 |
+| 영향을 받는 파일 | src/core/Game.ts(+약 12줄), src/ui/ControlsHud.ts(sink 삭제·이벤트 구독) |
+| 하위 호환 여부 | 유지 — 계약 무변경, composeSystems 반환 타입만 void→GameplaySystems |
+| 개발 리드 결정 | **확인 대기** — 작업 지시에 따라 선반영. feat→dev 병합 시 리드가 이 배선을 채택·재작성 |
+| 적용 커밋 | (이 브랜치의 HUD 연결 커밋) |
+
+리드가 dev 병합 시 사용할 배선 코드 (Game.start, composeSystems 뒤):
+
+```ts
+const gameplay = this.composeSystems(params, scene); // 반환 타입: GameplaySystems
+this.registry.initializeAll({ bus: this.bus, params, stateMachine: this.stateMachine });
+
+this.controlsHud = new ControlsHud(this.container, canvas, {
+  setPaused: (paused) => (paused ? this.loop.stop() : this.loop.start()),
+  combat: { aim: gameplay.aim, torpedo: gameplay.torpedo },
+  bus: this.bus,
+});
+// stop()에서: this.controlsHud?.dispose(); this.controlsHud = null; (registry.disposeAll 앞)
+```
+
+**후속(리드 배선 대기 — 렌더 브랜치 병합 시):** 화물선 상태 주입은 현재
+CanyonScene에 `attachCargoShipSource`가 없어(렌더 `cbcbf65` 미병합) 배선
+불가 — 더미·캐스팅 없이 보류. 렌더 병합 후 composeSystems의
+`scene.attachPoseSource(gameplay.poseSource);` 바로 아래에 한 줄 추가:
+
+```ts
+scene.attachCargoShipSource(gameplay.cargoShipState); // CargoShipStateSource 계약 — ARCHITECTURE 'Game 조립 계약'
+```
+
+### INT-TOOL-003 — [폐기] 조준·발사 요청 이벤트 3종 제안 (구 #004)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 빌드·툴·UI (조작 HUD 작업 — 당시 조준 계약 부재) |
+| 필요한 변경 | ~~`aimStartRequested`/`aimEndRequested`/`torpedoFireRequested` 이벤트 신설~~ |
+| 개발 리드 결정 | **폐기** — INT-CORE-002가 상위 해법으로 대체: 요청 이벤트 대신 `AimSystem` 공용 진입점 직접 호출(배선은 composition root) + 상태 통지는 `aimModeChanged`. 계약 파일은 처음부터 미수정이라 되돌릴 코드 없음. 함께 기록했던 이동 파라미터 4종 중 프로펠러 공회전(0.08)은 INT-CORE-002로, 후진·수직 비율은 INT-GAME-004로 각각 흡수됨 — '정지 시 선회 속도 배율 1.0'만 미이관(소비 코드 없음, 필요 시 기획·게임플레이가 INT-GAME-004 절차에 합류) |
+| 적용 커밋 | (해당 없음 — 문서상 폐기) |
+
+### INT-TOOL-002 — HUD 조립을 위한 보호 파일 최소 변경 (구 #003, 선반영 — 확인 대기)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 빌드·툴·UI (조작 HUD 작업) |
+| 대상 시스템 | `src/core/Game.ts`(공통 보호), `params/`(기획 소유 영역에 ui.json 신규) |
+| 필요한 변경 | ① Game.start()에서 `ControlsHud` 생성·일시정지를 `GameLoop.stop()/start()`로 연결, stop()에서 dispose — 조립 코드만, 게임 규칙 없음 ② `params/ui.json` 신규(HUD 투명도·표시 기본값·존재감 축소 기준 5종) — GameParams 계약·validateParams는 무변경, 검증·핫리로드는 툴링 소유 `src/ui/uiParams.ts`에서 독립 수행 |
+| 변경 이유 | HUD를 화면에 띄우는 유일한 조립 지점이 Game.start()임. 일시정지는 기존 GameLoop 재사용(새 상태 머신 상태 추가 없음) |
+| 관련 게이트 | G3~G5 |
+| 영향을 받는 파일 | src/core/Game.ts(+9줄), params/ui.json, src/ui/*, src/styles.css(스타일 추가 — 자율 영역) |
+| 하위 호환 여부 | 유지 — 기존 계약·이벤트·검증 무변경 |
+| 개발 리드 결정 | **확인 대기** — 작업 지시에 따라 선반영. params/ui.json은 기획 파트 통보 필요(밸런스 값 아닌 HUD 표시값) |
+| 적용 커밋 | (이 브랜치의 HUD 커밋) |
+
 ### INT-RENDER-005 — Game 조립 배선 요청: 화물선 상태·torpedoHit 이벤트 주입 (코드 예시 포함)
 
 | 필드 | 내용 |
