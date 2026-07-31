@@ -23,6 +23,34 @@
 
 ## 제안 목록
 
+### INT-GAME-005 — 협곡 레이아웃 단일 소스화 + 렌더의 수직 위치 소비
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 (D+5 리뷰 스프린트 '이동·충돌' 작업 창) |
+| 대상 시스템 | 레벨 레이아웃 데이터 소유 구조(신설 필요 — 리드 결정), `src/render/CanyonScene.ts`(렌더 소유 — 제안만) |
+| 필요한 변경 | ① 협곡 배치(벽·기둥)를 렌더·충돌·시야 차폐가 **공유하는 단일 레이아웃 데이터**로 분리 — 현재 게임플레이는 렌더 직접 참조 금지 규칙 때문에 `src/systems/collision/startingArea.ts`에 CanyonScene.buildCanyonBlockout의 결정식을 **미러(임시 중복)**로 유지 중. 정식 레벨 블록아웃(레벨 디자인 D+5 산출물) 수신 시점에 통합 권장 ② CanyonScene이 잠수함 수직 위치를 소비하도록 `SubmarinePoseSource`에 `positionY` 추가 (현재 SUBMARINE_Y=0 고정 렌더 — 연속 상승·하강이 화면에 보이지 않음) |
+| 변경 이유 | 연속 심도 이동·충돌이 게임플레이에 들어왔으나 렌더가 y를 소비하지 않으면 D+7 빌드에서 상승·하강이 보이지 않음. 레이아웃 중복은 배치 변경 시 렌더-충돌 불일치 위험 (R12 유사) |
+| 관련 게이트 | G4 (심도 조절 이해), G6 (지형 은신 — 시야 차폐가 같은 충돌체 집합 재사용) |
+| 영향을 받는 파일 | `src/render/CanyonScene.ts`, `src/systems/collision/startingArea.ts`(교체·삭제), 시야 차폐(D10~12) 설계 |
+| 하위 호환 여부 | 렌더 poseSource 필드 추가는 하위 호환. 레이아웃 분리는 렌더 내부 재배선 필요 |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
+
+### INT-GAME-004 — PlayerController 수직 상태·부호 속도 계약 반영 + 이동 신규 수치 이관
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 (D+5 리뷰 스프린트 '이동·충돌' 작업 창) |
+| 대상 시스템 | `src/contracts/systems.ts`의 `PlayerController`·`DepthSystem` 주석 의미, `src/contracts/params.ts`의 `MovementParams`, `params/movement.json`, `docs/DECISIONS.md` #2·`docs/INTERFACES.md` |
+| 필요한 변경 | ① `PlayerController`에 `positionY`(수직 위치) 추가, `speed` 주석을 **부호 있는 전후 속도**(양수=전진)로 갱신 — 관리 창 제안 **INT-RENDER-002**(프로펠러 S7용 전후 부호 속도)와 동일 사안이므로 합류 결정 요청 ② `MovementParams`에 후진 비율(0.5)·수직 비율(0.5) 이관 — 현재 `src/systems/provisionalMovement.ts` R7 선진행 (INT-GAME-001과 동일 절차) ③ 수직 상한(12.5)·하한(-5)·심도 구간 경계(잠망경 ≥8 / 순항 ≥-2)는 레벨 값 성격 — params 또는 레벨 데이터로 이관 결정 필요, 현재 `src/systems/provisionalWorld.ts` 선진행 ④ `DepthSystem` 의미 변경 기록: 4차 대회의(D+5 리뷰) 결의에 따라 층 단위 이동 → **연속 이동 + 높이 기반 3구간 판정**. 인터페이스(`currentLayer`·`requestAscend`/`requestDescend`·`depthChanged`)는 유지 — 요청 메서드는 프로그래매틱 층 이동 경로로 존치. 마스터 플랜 §3.4·DECISIONS #2와 상충하므로 **리드의 각주 처리 필요** (마스터 플랜은 게이트 전 수정 금지 — NEXT_SPRINT 방식의 회의록 각주 관리, R16 원본 재대조 대상) |
+| 변경 이유 | 스프린트 지시(W 전진/S 후진/Shift·Ctrl 연속 상승 하강/수면·해저 한계/높이 기반 구간 판정) 구현 완료 — 계약·문서 정합과 수치 이관이 남음. 구현은 계약 파일을 건드리지 않고 확장 상태(구현체 프로퍼티)로 선진행 |
+| 관련 게이트 | G3, G4, G5, G7 (속도·심도는 소음·탐지·회피의 입력값) |
+| 영향을 받는 파일 | `src/contracts/systems.ts`, `src/contracts/params.ts`, `src/config/validateParams.ts`, `params/movement.json`, `src/systems/SubmarinePlayerController.ts`, `src/systems/LayeredDepthSystem.ts`, `src/systems/provisionalMovement.ts`(삭제)·`provisionalWorld.ts`(삭제), `docs/INTERFACES.md`, `docs/DECISIONS.md`(리드만) |
+| 하위 호환 여부 | 깨짐 없음 — 인터페이스 추가·주석 갱신. `speed`가 음수를 가질 수 있게 된 점은 소비 측(소음 산출 등)이 \|speed\| 사용 필요 (현재 소비자 없음) |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
+
 ### INT-TOOL-001 — Node 버전 고정(engines)·ParamLoader 핫리로드 내부 교체
 
 | 필드 | 내용 |

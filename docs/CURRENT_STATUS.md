@@ -26,14 +26,16 @@
 
 ## 게임플레이
 
-- **완료:** D3~D5 조작·심도 — `PlayerController` 구현(`SubmarinePlayerController`: WASD, 잠수함 방향 기준 선회, 정지·가감속 관성, delta time 기반), `DepthSystem` 구현(`LayeredDepthSystem`: 3층 층 단위 이동, Shift/Ctrl, `depthChanged` 발행, 경계 초과 무시), `KeyboardInput`(키 반복 무시·blur/탭 전환 시 키 상태 해제), 조립점 `GameplaySystems`, 결정적 검증 21항목(`src/systems/__verification__/` — `node src/systems/__verification__/run.mjs`, 21/21 통과)
+- **완료:**
+  - D3~D5 조작·심도 (D+5 통합 반영) — WASD·관성·심도·`KeyboardInput`·`GameplaySystems`(GameSystem 수명주기)
+  - **D+5 리뷰 스프린트 '이동·충돌' (통합 순서 [2])** — ① W 전진 / **S 후진**(상한 = 전진의 50%, `speed`는 부호 있는 전후 속도 — 프로펠러 S7 소비용) ② **Shift/Ctrl 연속 상승·하강**(수직 최고 속력 = 전진의 50%, 키 해제 시 관성 감속) ③ 수면 상한(+12.5)·해저 하한(-5) 이탈 방지 ④ 높이 기반 **심도 3구간 판정**(`LayeredDepthSystem` — 잠망경 ≥8 / 순항 ≥-2 / 심해, `depthChanged` 유지, `requestAscend/Descend` 계약은 프로그래매틱 층 이동으로 존치) ⑤ **정적 충돌**(`src/systems/collision/` — 구·AABB 조합, 선체 = 구 3개 캡슐 근사, 통과 방지·밀어내기만, 피해 없음, 반복 해석으로 끼임·떨림 방지) + 시작 지역 임시 레이아웃(CanyonScene 미러) ⑥ 결정적 검증 39항목(39/39 통과)
 - **진행 중:** 없음
-- **다음 작업:** D6 이후 어뢰·탐지(임시)·폭뢰. (카메라 조작은 D+5 통합에서 그래픽스 소유 `CameraInputAdapter`로 책임 확정 — 게임플레이 범위에서 제외)
-- **차단 문제:** 없음 — D+5 통합에서 해소: ① INT-GAME-002 승인·반영 (`GameplaySystems`가 `GameSystem` 구현, composeSystems 등록·initialize/dispose 수명주기) ② INT-GAME-001 승인·반영 (최고 속력 10m/s·가속 3.0s를 `params/movement.json` 임시 초기 테스트값으로 이관, `provisionalMovement.ts` 삭제, params 핫리로드는 onParamsReloaded 주입 구독으로 대응)
-- **변경된 계약:** `MovementParams` 필드 2종 추가 (INT-GAME-001 — 리드 승인 완료)
-- **통합 주의사항:** 좌표 규약 — heading은 Y축 요(yaw), heading 0 전진 = -Z, 전진 벡터 = (-sin h, -cos h) → 렌더는 `mesh.rotation.y = headingRadians` 그대로 사용 가능. A=heading 증가(좌), D=감소(우), (-π, π] 정규화. 심도 시작 층은 `cruise`(초기 `depthChanged` 이벤트 없음 — 초기값은 `currentLayer`로 읽을 것). 위치·방향·속도는 `player`의 읽기 전용 상태로 매 프레임 폴링
-- **마지막 업데이트:** D3~D5 (조작·심도 구현 커밋)
-- **담당 브랜치:** `claude/submarine-controls-depth-3wi424` (원격 세션 지정 브랜치 — `feat/gameplay` 역할)
+- **다음 작업:** INT-GAME-004·005 리드 결정 후 provisional 2종 이관·레이아웃 단일 소스화, 어뢰 `AimSystem`(INT-GAME-003 계약 확정 선행 — 통합 순서 [5])
+- **차단 문제:** 없음. 단 ① 렌더가 `positionY`를 아직 소비하지 않아 상승·하강이 화면에 안 보임(INT-GAME-005) ② 후진·수직 비율과 수직 한계·구간 경계는 params 부재로 R7 선진행(`provisionalMovement.ts`·`provisionalWorld.ts` — INT-GAME-004)
+- **변경된 계약:** 없음 (직접 변경 없음 — INT-GAME-004·INT-GAME-005 제안 등록, `positionY`·`verticalSpeed`·`collision`은 구현체 확장 상태로 선진행)
+- **통합 주의사항:** 좌표 규약 — **잠수함 로컬 -Z가 선수, +Z가 선미** (리드 확정). heading은 Y축 요(yaw), heading 0 선수 = 월드 -Z, 선수 벡터 = (-sin h, 0, -cos h), 렌더는 `mesh.rotation.y = headingRadians` 그대로. A=heading 증가(좌)/D=감소(우), (-π, π] 정규화. **`player.speed`는 부호 있는 값**(음수 = 후진) — 소음 산출 등은 \|speed\| 사용할 것. `player.positionY`(수직)·`verticalSpeed` 추가. 심도 초기 구간은 y=0 → `cruise`(초기 이벤트 없음). **충돌체 집합은 `gameplay.collision.colliders`(읽기 전용) 공유** — 은신 시야 차폐(D10~12)는 이 집합을 재사용할 것(별도 집합 금지). 레벨 교체 시 `collision.clear()` 후 재등록. 렌더 협곡 배치를 바꾸면 `collision/startingArea.ts` 미러도 함께 갱신 필요(단일 소스화 전까지)
+- **마지막 업데이트:** D+5 리뷰 스프린트 (이동·충돌 커밋)
+- **담당 브랜치:** `claude/submarine-controls-depth-3wi424` (원격 세션 지정 브랜치 — `feat/gameplay` 역할, origin/dev 병합 기반)
 
 ## 그래픽스
 
