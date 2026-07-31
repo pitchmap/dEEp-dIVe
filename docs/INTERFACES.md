@@ -15,6 +15,7 @@
 | `detectionChanged` | DetectionSystem | gauge 0~1, stage | AI, 눈 아이콘 UI | 값·단계 변경 시 | — |
 | `aimModeChanged` | AimSystem | aiming | 렌더(조준 중 카메라 고정 §3.2), UI(조준 표시) | 조준 뷰 진입·해제 시 | — |
 | `torpedoFired` | TorpedoSystem | originX, originZ | DetectionSystem(발사 지점 무조건 노출), 오디오, 렌더 | 발사 순간 | 잔량 0·재장전 중이면 fire()가 false, 이벤트 없음 |
+| `torpedoHit` | 게임플레이 명중 판정 (타이밍의 주인) | targetId, x, z (명중 위치) | 렌더(폭발·침몰 연출), 오디오(과장 폭발음), UI(격침 기록), 격침 보상 어뢰 +1 | 명중 순간 1회 | targetId는 CargoShipStateSource.id와 동일 체계 |
 | `depthChargeEnteredWater` | DepthChargeSystem | id, x, z, fuseSeconds | 오디오(입수음 패닝), UI(붉은 호) | 입수 순간 | — |
 | `depthChargeExploded` | DepthChargeSystem | id, x, z | 오디오, 렌더(폭발), HullSystem 연계 | 신관 만료 시 | 타이밍 주인은 판정 로직 — 오디오는 동기화만 |
 | `hullDamaged` | HullSystem | amount, hullRemaining, cause | UI, 렌더(흔들림), 오디오 | 피해 발생 시 | hullRemaining 0 → 실패 국면 전환은 상태 머신 경유 |
@@ -36,6 +37,14 @@
 | `AudioSystem` | 툴링(배관) | 각종 이벤트 구독, assets/audio | unlocked | — | 매 프레임 + 이벤트 | unlock 실패(자동재생 정책) 시 무음 진행, 재시도 |
 | `UISystem` | 게임플레이(최소 UI) | 각종 이벤트 구독 | — | — | 매 프레임 | setMinimalMode로 침묵 항행 연출 대응 |
 
+## 2b. 상태·데이터 계약 (읽기 전용 — 시스템 아님)
+
+| 계약 | 소유자(공급) | 필드 | 소비자 | 규칙 |
+|---|---|---|---|---|
+| `SubmarinePoseSource` (systems.ts) | 게임플레이 (PlayerController 구현체) | positionX/Y/Z, headingRadians, forwardSpeedMetersPerSecond(부호: + 선수/− 선미) | 렌더 장면·카메라·프로펠러·블롭 섀도 | 렌더는 소비만 — 위치 차분으로 속도 재계산 금지. 프로펠러는 forwardSpeed + conventions.propellerSpinRatio()만 사용 |
+| `CargoShipStateSource` (systems.ts) | 게임플레이 (CargoShipSystem) | id, positionX/Y/Z, headingRadians, velocityX/Z, hit, sinkProgress(0~1), removed | 렌더(CargoShipVisual), TargetRegistry, UI | 침몰 시간축 소유는 게임플레이 — 렌더는 sinkProgress 매핑만(자체 타이머 금지), removed로 시각 자원 정리. VS 화물선 1척 = 단일 상태 |
+| `CanyonLayout` (layout.ts) | 리드 승인 데이터 모듈 (정식 블록아웃은 레벨 디자인 산출물 반영) | floorY, seaSurfaceY, submarineSpawn, blocks[](중심 XZ·크기·Y요, 블록 바닥=floorY) | 렌더(메시), 게임플레이(충돌·시작 구역) | 단일 소스 — 렌더·충돌이 같은 인스턴스를 주입받는다. 이번 단계는 인터페이스만 확정, 데이터 모듈은 후속 커밋 |
+
 ## 3. 파라미터 계약
 
 | 파일 | 소유자 | 내용 | 검증 |
@@ -46,3 +55,9 @@
 | `params/crew.json` | 기획 | 4인 쿨다운 [30~120], 어뢰수 재장전 20→8s [5~12] | 5인째 추가 → 거부 |
 
 수치 변경 = 관찰 근거 + `[Gx]` 태그 커밋 + `docs/templates/TUNING_LOG.md` 기록 (마스터 플랜 §11).
+
+**렌더 시각 파라미터와의 경계 (INT-CORE-003):** `src/render/renderVisualParams.json`
+(그래픽스 소유)은 순수 연출 수치(최대 각속도·감쇠·폭발 스케일 등)만 담는다 —
+`params/*.json` 값의 중복 정의 금지. `propellerIdleSpinRatio`·최고 속력의 공식
+소스는 `params/movement.json` 하나이며, 렌더가 필요하면 composition root가
+검증 완료 값을 주입한다 (렌더 측 `idleSpinRatio`·`fullSpinAtSpeedMps`는 제거 대상).
