@@ -93,10 +93,19 @@ CameraRig의 기존 후방 뷰 배치와 동일 정의다. 상단 높이·기본
   idleRatio)` 하나만 사용한다 (속도 외 입력을 받지 않는 시그니처로 강제).
 - 정지 상태 공회전: 최대 회전의 8%가 기본값이며
   `params/movement.json propellerIdleSpinRatio`(FixedNumber, 0~1 검증)로
-  외부 조정한다. 최대 회전 각속도(rad/s) 자체는 렌더 소유 연출 상수.
-- 속도 소스: 렌더는 포즈 소스(`PlayerController.speed`)를 소비만 한다 —
-  현재 `SubmarinePoseSource`(CanyonScene)는 position·heading만 포함하므로
-  프로펠러 구현 시 `speed`를 Pick 목록에 추가해 소비한다 (판정 계산 금지).
+  외부 조정한다. 최대 회전 각속도(rad/s)·감쇠 등 연출 상수는 렌더 소유.
+- 속도 소스 [INT-CORE-003 확정]: **공식 부호 있는 전후 속도
+  `SubmarinePoseSource.forwardSpeedMetersPerSecond`(contracts/systems.ts)만
+  사용한다.** 렌더가 위치 변화(전 프레임 차분)로 속도를 재계산하는 것은
+  금지 — 판정 상태의 복제 계산이며 프레임 순서에 따라 값이 어긋난다.
+  회전 비율 = `conventions.propellerSpinRatio(forwardSpeed, maxSpeed,
+  idleRatio)`, 회전 방향 = forwardSpeed의 부호.
+- 파라미터 단일 소스 [INT-CORE-003 확정]: `propellerIdleSpinRatio`와 최고
+  속력(`maxSpeedMetersPerSecond`)의 공식 소스는 **`params/movement.json`
+  하나다.** 렌더 시각 설정(`src/render/renderVisualParams.json`)에 같은
+  값(idleSpinRatio, fullSpinAtSpeedMps 등)을 중복 정의하지 않는다 — 두 값은
+  composition root가 검증 완료 params에서 렌더에 주입한다. renderVisualParams
+  에는 movement와 겹치지 않는 순수 연출 수치(최대 각속도·감쇠 등)만 남긴다.
 
 ## 조준 입력 단일화 (AimSystem)
 
@@ -112,6 +121,58 @@ CameraRig의 기존 후방 뷰 배치와 동일 정의다. 상단 높이·기본
   처리한다 (렌더·UI가 게임플레이를 직접 참조하지 않음).
 - 구현은 게임플레이 소유, D6 이후. 계약만 선확정해 마우스·HUD가 서로 다른
   방향으로 구현되는 것을 막는다.
+
+## 통합 상태 계약 (INT-CORE-003)
+
+파트 간 상태 전달은 아래 정식 계약으로만 한다 — 임시 인터페이스(로컬 Pick
+타입)·중복 파라미터·파생 재계산을 만들지 않는다.
+
+### 잠수함 포즈 — `SubmarinePoseSource` (contracts/systems.ts)
+`positionX/Y/Z` · `headingRadians` · `forwardSpeedMetersPerSecond`(부호: + =
+선수/전진, − = 선미/후진). 소유는 게임플레이(PlayerController 구현체가 함께
+구현), 렌더 장면·카메라·프로펠러·블롭 섀도는 소비만 한다. `positionY`는 심도
+층 전환 보간을 포함한 월드 Y — 렌더는 상수 높이(SUBMARINE_Y) 대신 이 값을
+사용한다. CanyonScene의 로컬 `SubmarinePoseSource` Pick 타입은 이 정식
+계약 import로 교체한다.
+
+### 화물선 상태 — `CargoShipStateSource` (contracts/systems.ts)
+`id` · `positionX/Y/Z` · `headingRadians` · `velocityX/Z`(리드샷 보조선 입력)
+· `hit` · `sinkProgress`(0~1) · `removed`. 소유는 게임플레이(CargoShipSystem),
+소비는 렌더(CargoShipVisual)·표적 관리(TargetRegistry)·UI. **침몰 시간축의
+주인은 게임플레이다** — 렌더는 sinkProgress를 기울기·하강·폭발 크기로
+매핑만 하고 자체 침몰 타이머(sinkDurationSeconds류)를 돌리지 않는다.
+`removed`가 true가 되면 렌더는 시각 자원을 정리한다. VS는 화물선 1척
+[확정 §12.2] — 단일 상태이며 컬렉션 계약은 만들지 않는다.
+
+### 어뢰 명중 — `torpedoHit` 이벤트 (contracts/events.ts)
+`{ targetId, x, z }`. 발행은 게임플레이 명중 판정(타이밍의 주인) 1곳.
+구독: 렌더(폭발·침몰 연출 트리거), 오디오(아케이드식 과장 폭발음 §4.4),
+UI(격침 기록), 격침 보상 어뢰 +1(§5.9). targetId는
+`CargoShipStateSource.id`와 동일 체계.
+
+### 협곡 레이아웃 — `CanyonLayout` (contracts/layout.ts)
+월드 렌더와 충돌·시작 구역 판정이 같은 배치를 복제하지 않기 위한 단일
+데이터 소스: `floorY` · `seaSurfaceY` · `submarineSpawn` ·
+`blocks[]`(중심 XZ + 크기 + Y요 회전, 블록 바닥 = floorY). **이번 단계는
+인터페이스만 확정** — 데이터 인스턴스 모듈(레이아웃 1개)은 후속 커밋에서
+만들고 composition root가 렌더(메시 생성)·게임플레이(충돌체)에 같은
+인스턴스를 주입한다. 정식 블록아웃(레벨 디자인) 수신 시 데이터 내용만
+교체된다. 레벨 시스템·로더·에디터는 만들지 않는다.
+
+## Game 조립 계약 (composition root 연결 지도)
+
+모든 파트 간 연결은 `Game.composeSystems()`에서만 잇는다 (D6 통합 시
+리드가 배선). 연결 방향은 전부 단방향 소비다:
+
+| 연결 | 방식 |
+|---|---|
+| ControlsHud(UI) → AimSystem | HUD의 CombatIntentSink 어댑터에 **동일 AimSystem 인스턴스** 주입 — HUD는 beginAim/endAim/fireTorpedo만 호출, 별도 전투 경로 금지. 마우스 조준 어댑터도 같은 인스턴스를 받는다 |
+| CargoShipSystem(게임플레이) → TargetRegistry | 화물선 id·상태를 표적 목록에 등록 — 게임플레이 내부 배선 (조준·소나 표시의 표적 소스) |
+| CargoShipSystem → CargoShipVisual | `scene.attachCargoShipSource(cargoShipSystem.state)` — `CargoShipStateSource` 계약으로 읽기 전용 주입 |
+| Submarine pose → CanyonScene·Propeller | `scene.attachPoseSource(gameplay.poseSource)` — `SubmarinePoseSource` 계약. 프로펠러 속도도 이 포즈의 forwardSpeed만 사용 |
+| torpedoHit 이벤트 → 화물선 상태·렌더·오디오 | 발행은 게임플레이 판정 1곳. CargoShipSystem은 hit/sinkProgress 상태 갱신, 렌더·오디오·UI는 EventBus 구독 — 직접 참조 없음 |
+| params.movement → 프로펠러 | composition root가 `propellerIdleSpinRatio`·`maxSpeedMetersPerSecond` 값을 렌더에 주입 — 렌더 JSON에 중복 정의 금지 |
+| CanyonLayout → 렌더·충돌 | 같은 레이아웃 인스턴스를 양쪽에 주입 (후속 커밋) |
 
 ## 게임 상태 전환과 장면 전환의 분리
 

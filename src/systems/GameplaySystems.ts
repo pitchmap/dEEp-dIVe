@@ -25,9 +25,15 @@
  */
 
 import type { GameParams } from '../contracts/params';
-import type { AimSystem, DepthSystem, PlayerController } from '../contracts/systems';
+import type {
+  AimSystem,
+  CargoShipStateSource,
+  DepthSystem,
+  SubmarinePoseSource,
+} from '../contracts/systems';
 import type { EventBus } from '../core/EventBus';
 import type { GameSystem, SystemContext } from '../core/GameSystem';
+import { CargoShipSystem } from './CargoShipSystem';
 import { CollisionWorld } from './collision/CollisionWorld';
 import { computeHullSpheres } from './collision/submarineHull';
 import { registerStartingAreaColliders } from './collision/startingArea';
@@ -65,6 +71,11 @@ export class GameplaySystems implements GameSystem {
   /** 전투 표적 등록소 — 명중 판정·리드샷 보조선이 같은 목록을 읽는다 */
   readonly targets: TargetRegistry;
   /**
+   * 화물선 (VS 1척 [확정 §12.2]) — 계약 `CargoShipStateSource` 구현.
+   * composition root가 렌더(CargoShipVisual)에 상태 소스로 1회 주입한다.
+   */
+  readonly cargoShip: CargoShipSystem;
+  /**
    * 정적 충돌 월드. 시작 지역 임시 레이아웃이 기본 등록되어 있다.
    * 레벨 교체 시 clear() 후 재등록 — colliders는 시야 차폐와 공유(읽기 전용).
    */
@@ -87,6 +98,7 @@ export class GameplaySystems implements GameSystem {
     this.collision = new CollisionWorld();
     registerStartingAreaColliders(this.collision);
     this.targets = new TargetRegistry();
+    this.cargoShip = new CargoShipSystem(bus, this.targets);
     this.torpedo = new StraightRunTorpedoSystem(
       bus,
       params.combat,
@@ -98,9 +110,17 @@ export class GameplaySystems implements GameSystem {
     this.subscribeToParamsReload = subscribeToParamsReload ?? null;
   }
 
-  /** 읽기 전용 포즈 소스 (렌더 장면 주입용 — composition root에서만 연결) */
-  get poseSource(): PlayerController {
+  /**
+   * 읽기 전용 포즈 소스 — 계약 `SubmarinePoseSource` (INT-CORE-003).
+   * 렌더 장면·카메라·프로펠러 주입용, composition root에서만 연결.
+   */
+  get poseSource(): SubmarinePoseSource {
     return this.player;
+  }
+
+  /** 화물선 상태 소스 — 계약 타입으로 노출 (렌더 CargoShipVisual 주입용) */
+  get cargoShipState(): CargoShipStateSource {
+    return this.cargoShip;
   }
 
   initialize(_context: SystemContext): void {
@@ -144,6 +164,9 @@ export class GameplaySystems implements GameSystem {
     // 3) 보정된 최종 높이로 심도 구간 판정 (depthChanged 발행)
     this.depth.update(deltaSeconds);
 
+    // 3.5) 화물선 항행·침몰 진행 — 어뢰 판정(7)보다 먼저 최신 위치로 갱신
+    this.cargoShip.update(deltaSeconds);
+
     // 4) 마우스 조준 의도 → AimSystem 공용 진입점 (에지 단위 — HUD 버튼과 동일 경로)
     const aimHeld = this.mouse.aimHeld;
     if (aimHeld && !this.previousAimHeld) this.aim.beginAim();
@@ -164,6 +187,7 @@ export class GameplaySystems implements GameSystem {
   dispose(): void {
     this.unsubscribeParamsReload?.();
     this.unsubscribeParamsReload = null;
+    this.cargoShip.dispose(); // 표적 등록·참조 정리
     this.detachInput();
   }
 }

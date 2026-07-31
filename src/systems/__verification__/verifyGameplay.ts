@@ -20,6 +20,7 @@ import { EventBus } from '../../core/EventBus';
 import type { DepthLayerId } from '../../contracts/events';
 import { CollisionWorld } from '../collision/CollisionWorld';
 import { computeHullSpheres } from '../collision/submarineHull';
+import { CargoShipSystem, type CargoShipConfig } from '../CargoShipSystem';
 import { GameplaySystems } from '../GameplaySystems';
 import { KeyboardInput, type MovementInput, type VisibilitySource } from '../KeyboardInput';
 import { LayeredDepthSystem } from '../LayeredDepthSystem';
@@ -32,6 +33,7 @@ import {
   PROVISIONAL_VERTICAL_MAX_RATIO,
 } from '../provisionalMovement';
 import {
+  PROVISIONAL_SEA_SURFACE_Y,
   PROVISIONAL_SUBMARINE_MAX_Y,
   PROVISIONAL_SUBMARINE_MIN_Y,
 } from '../provisionalWorld';
@@ -195,16 +197,22 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     const input = new ScriptedInput();
     const controller = new SubmarinePlayerController(params.movement, input);
     input.reverse = true;
-    let minSpeed = 0;
+    let minForward = 0;
     for (let i = 0; i < Math.round(4 / dt); i += 1) {
       controller.update(dt);
-      minSpeed = Math.min(minSpeed, controller.speed);
+      minForward = Math.min(minForward, controller.forwardSpeedMetersPerSecond);
     }
-    const capOk = Math.abs(controller.speed - -maxReverse) < 1e-9 && minSpeed >= -maxReverse - 1e-9;
+    const forward = controller.forwardSpeedMetersPerSecond;
+    const capOk = Math.abs(forward - -maxReverse) < 1e-9 && minForward >= -maxReverse - 1e-9;
     check(
-      '후진: S 최고 속력 = 전진의 50% (부호 있는 속도, 상한 초과 없음)',
+      '후진: S 최고 속력 = 전진의 50% (forwardSpeed 부호 −, 상한 초과 없음)',
       capOk,
-      `speed=${controller.speed.toFixed(3)} / 기대 ${-maxReverse}`,
+      `forward=${forward.toFixed(3)} / 기대 ${-maxReverse}`,
+    );
+    check(
+      '포즈 계약: speed = |forwardSpeedMetersPerSecond| (비부호 크기 — INT-CORE-003)',
+      controller.speed === Math.abs(forward) && controller.speed > 0,
+      `speed=${controller.speed.toFixed(3)}, forward=${forward.toFixed(3)}`,
     );
     check(
       '후진: 선미(+Z) 방향 이동 (heading 0 기준)',
@@ -307,18 +315,28 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       `vy=${controller.verticalSpeed.toFixed(3)} / 기대 ${maxVertical}, y=${controller.positionY.toFixed(2)}`,
     );
 
-    input.release();
+    // 수직 관성 감속률 = maxVertical / stopInertiaSeconds (하드코딩 검출) —
+    // 수면 상한 클램프에 걸리지 않도록 부분 가속 상태에서 측정한다
+    const partial = new ScriptedInput();
+    const partialController = new SubmarinePlayerController(params.movement, partial);
+    partial.ascend = true;
+    simulate(partialController, 1.2, dt);
+    const vy0 = partialController.verticalSpeed;
+    partial.release();
     let elapsed = 0;
-    while (controller.verticalSpeed > 0 && elapsed < stopSeconds * 2) {
-      controller.update(dt);
+    while (partialController.verticalSpeed > 0 && elapsed < stopSeconds * 2) {
+      partialController.update(dt);
       elapsed += dt;
     }
-    const yAfterStop = controller.positionY;
-    simulate(controller, 1, dt);
+    const expectedDecay = vy0 / (maxVertical / stopSeconds);
+    const yAfterStop = partialController.positionY;
+    simulate(partialController, 1, dt);
     check(
-      '수직: 키 해제 = 관성 감속 후 높이 유지 (자동 복원 없음)',
-      Math.abs(elapsed - stopSeconds) <= dt * 2 && controller.positionY === yAfterStop,
-      `감속 ${elapsed.toFixed(3)}s (기대 ${stopSeconds}s), y=${controller.positionY.toFixed(2)}`,
+      '수직: 키 해제 = 관성 감속(정지 관성률) 후 높이 유지 (자동 복원 없음)',
+      vy0 > 0 &&
+        Math.abs(elapsed - expectedDecay) <= dt * 2 &&
+        partialController.positionY === yAfterStop,
+      `감속 ${elapsed.toFixed(3)}s (기대 ${expectedDecay.toFixed(3)}s), y=${partialController.positionY.toFixed(2)}`,
     );
 
     // 상한: 오래 상승해도 수면 상한 고정, 이탈 프레임 없음
@@ -785,7 +803,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     let hits = 0;
     let lastHitZ = 0;
     const cargo: CombatTarget = {
-      id: 'cargo-test',
+      id: 901,
       positionX: 0,
       positionY: 13,
       positionZ: -40,
@@ -817,7 +835,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     const rig = makeCombatRig(params);
     let hits = 0;
     rig.targets.register({
-      id: 'far-cargo',
+      id: 902,
       positionX: 50,
       positionY: 13,
       positionZ: -80,
@@ -927,6 +945,184 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     keySource.dispatchEvent(contextMenu);
     check('입력: 우클릭 컨텍스트 메뉴 방지 (조준 홀드 보호)', contextMenu.defaultPrevented, 'preventDefault');
     systems.detachInput();
+  }
+
+  // 25. 화물선 — 직선 왕복 항행 + 해수면 높이 유지
+  {
+    const bus = new EventBus();
+    const targets = new TargetRegistry();
+    const config: CargoShipConfig = {
+      id: 900,
+      waypointA: { x: 0, z: -30 },
+      waypointB: { x: 20, z: -30 },
+      surfaceY: PROVISIONAL_SEA_SURFACE_Y,
+      speedMetersPerSecond: 4,
+      hitRadius: 9,
+      sinkDurationSeconds: 2,
+    };
+    const ship = new CargoShipSystem(bus, targets, config);
+    const step = 1 / 60;
+
+    const registered = targets.list.length === 1 && targets.list[0]?.id === 900;
+    check('화물선: TargetRegistry에 표적으로 조회 가능', registered, `targets=${targets.list.length}`);
+
+    let maxX = ship.positionX;
+    let zDrift = 0;
+    let surfaceHeld = true;
+    for (let i = 0; i < Math.round(4 / step); i += 1) {
+      ship.update(step);
+      maxX = Math.max(maxX, ship.positionX);
+      zDrift = Math.max(zDrift, Math.abs(ship.positionZ - -30));
+      if (ship.positionY !== PROVISIONAL_SEA_SURFACE_Y) surfaceHeld = false;
+    }
+    const outboundOk =
+      Math.abs(ship.positionX - 16) < 1e-6 && ship.velocityX > 0 && zDrift < 1e-9;
+    check('화물선: 직선 항행 (경로 축 이탈 없음, 속도 = 임시값)', outboundOk, `x=${ship.positionX.toFixed(2)}, zDrift=${zDrift.toExponential(1)}`);
+
+    for (let i = 0; i < Math.round(3 / step); i += 1) {
+      ship.update(step);
+      maxX = Math.max(maxX, ship.positionX);
+      if (ship.positionY !== PROVISIONAL_SEA_SURFACE_Y) surfaceHeld = false;
+    }
+    // 4+3초 × 4m/s = 28m — 20m 지점(B)에서 반전해 x=12로 복귀 중이어야 한다
+    const bounced =
+      maxX <= 20 + 1e-6 && Math.abs(ship.positionX - 12) < 1e-6 && ship.velocityX < 0;
+    check('화물선: 끝점 도달 시 왕복 반전 (경로 초과 없음)', bounced, `maxX=${maxX.toFixed(3)}, x=${ship.positionX.toFixed(2)}`);
+    check('화물선: 해수면 높이 유지 (전 프레임)', surfaceHeld && ship.positionY === PROVISIONAL_SEA_SURFACE_Y, `y=${ship.positionY}`);
+
+    const heading = ship.headingRadians; // 복귀 중 (-X 방향) → 선수 -X: h = +π/2
+    check('화물선: 선수각 = 진행 방향 (conventions 선수 규약)', Math.abs(heading - Math.PI / 2) < 1e-6, `heading=${heading.toFixed(4)}`);
+  }
+
+  // 26. 화물선 — 왕복 궤적의 프레임 독립성 (반전 잔여 이동량 이월)
+  {
+    const run = (stepSeconds: number): number => {
+      const bus = new EventBus();
+      const targets = new TargetRegistry();
+      const ship = new CargoShipSystem(bus, targets, {
+        id: 900,
+        waypointA: { x: 0, z: -30 },
+        waypointB: { x: 10, z: -30 },
+        surfaceY: PROVISIONAL_SEA_SURFACE_Y,
+        speedMetersPerSecond: 4,
+        hitRadius: 9,
+        sinkDurationSeconds: 2,
+      });
+      const steps = Math.round(10 / stepSeconds);
+      for (let i = 0; i < steps; i += 1) ship.update(stepSeconds);
+      return ship.positionX;
+    };
+    const diff = Math.abs(run(1 / 30) - run(1 / 240));
+    check('화물선: 30fps vs 240fps 왕복 위치 일치', diff < 1e-6, `Δx=${diff.toExponential(2)}`);
+  }
+
+  // 27. 화물선 — 어뢰 명중 1회: torpedoHit 1회·hit 고정·표적 제거·중복 침몰 방지
+  {
+    const rig = makeCombatRig(params);
+    const hitEvents: Array<{ targetId: number; x: number; z: number }> = [];
+    rig.bus.on('torpedoHit', (payload) => hitEvents.push(payload));
+    const ship = new CargoShipSystem(rig.bus, rig.targets, {
+      id: 900,
+      waypointA: { x: 0, z: -30 },
+      waypointB: { x: 60, z: -30 },
+      surfaceY: PROVISIONAL_SEA_SURFACE_Y,
+      speedMetersPerSecond: 4,
+      hitRadius: 9,
+      sinkDurationSeconds: 2,
+    });
+
+    rig.depth.requestAscend();
+    rig.aim.beginAim();
+    rig.aim.fireTorpedo();
+    const step = 1 / 60;
+    for (let i = 0; i < Math.round(3 / step); i += 1) {
+      ship.update(step);
+      rig.torpedo.update(step);
+    }
+
+    const hitOnce =
+      hitEvents.length === 1 &&
+      hitEvents[0]?.targetId === 900 &&
+      ship.hit &&
+      ship.velocityX === 0 &&
+      ship.velocityZ === 0 &&
+      rig.torpedo.torpedoes.length === 0;
+    check(
+      '화물선: 어뢰 명중 → torpedoHit 정확히 1회 + 항행 정지',
+      hitOnce,
+      `events=${hitEvents.length}, hit=${ship.hit}, target=${hitEvents[0]?.targetId}`,
+    );
+    check(
+      '화물선: 명중 즉시 표적 목록에서 제거 — 추가 어뢰가 중복 침몰을 시작하지 못함',
+      rig.targets.list.length === 0,
+      `targets=${rig.targets.list.length}`,
+    );
+
+    const progressBefore = ship.sinkProgress;
+    ship.onTorpedoHit(ship.positionX, ship.positionZ); // 중복 통지 시도
+    check(
+      '화물선: 중복 명중 통지 무시 (이벤트·침몰 재시작 없음)',
+      hitEvents.length === 1 && ship.sinkProgress === progressBefore,
+      `events=${hitEvents.length}`,
+    );
+  }
+
+  // 28. 화물선 — 침몰 진행(시간축 게임플레이 소유) → 완료 시 removed
+  {
+    const bus = new EventBus();
+    const targets = new TargetRegistry();
+    const ship = new CargoShipSystem(bus, targets, {
+      id: 900,
+      waypointA: { x: 0, z: -30 },
+      waypointB: { x: 20, z: -30 },
+      surfaceY: PROVISIONAL_SEA_SURFACE_Y,
+      speedMetersPerSecond: 4,
+      hitRadius: 9,
+      sinkDurationSeconds: 2,
+    });
+    ship.onTorpedoHit(ship.positionX, ship.positionZ);
+    const step = 1 / 60;
+
+    for (let i = 0; i < Math.round(1 / step); i += 1) ship.update(step);
+    const midSink =
+      ship.sinkProgress > 0.45 && ship.sinkProgress < 0.55 && !ship.removed && ship.hit;
+    check('화물선: sinkProgress 0→1 진행 (침몰 시간축 = 게임플레이)', midSink, `progress=${ship.sinkProgress.toFixed(3)}`);
+
+    for (let i = 0; i < Math.round(1.2 / step); i += 1) ship.update(step);
+    check(
+      '화물선: 침몰 완료 → sinkProgress=1·removed=true (렌더 정리 신호)',
+      ship.sinkProgress === 1 && ship.removed,
+      `progress=${ship.sinkProgress}, removed=${ship.removed}`,
+    );
+  }
+
+  // 29. 조립 통합 — GameplaySystems 기본 화물선: 계약 상태 노출·항행·정리
+  {
+    const bus = new EventBus();
+    const systems = new GameplaySystems(bus, params);
+    const state = systems.cargoShipState;
+
+    const inRegistry = systems.targets.list.some((target) => target.id === state.id);
+    check(
+      '화물선: 기본 조립에서 1척 생성 + TargetRegistry 등록 + 계약 상태 노출',
+      inRegistry && state.positionY === PROVISIONAL_SEA_SURFACE_Y && !state.hit && !state.removed,
+      `id=${state.id}, y=${state.positionY}`,
+    );
+
+    const xBefore = state.positionX;
+    for (let i = 0; i < Math.round(2 / dt); i += 1) systems.update(dt);
+    check(
+      '화물선: 조립 update 경로에서 항행 진행 (그래픽 폴링용 상태 갱신)',
+      state.positionX !== xBefore && state.positionY === PROVISIONAL_SEA_SURFACE_Y,
+      `x: ${xBefore.toFixed(2)} → ${state.positionX.toFixed(2)}`,
+    );
+
+    systems.dispose();
+    check(
+      '화물선: dispose 시 표적 등록·참조 정리 (removed 신호)',
+      systems.targets.list.length === 0 && state.removed,
+      `targets=${systems.targets.list.length}, removed=${state.removed}`,
+    );
   }
 
   return results;

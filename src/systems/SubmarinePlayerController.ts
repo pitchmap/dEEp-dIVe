@@ -22,12 +22,14 @@
  *    (-sin(heading), 0, -cos(heading)) — 렌더 측은
  *    mesh.rotation.y = headingRadians 로 그대로 사용 가능하다.
  *  - A(좌선회) = heading 증가 / D(우선회) = heading 감소. (-π, π] 정규화.
- *  - `speed`는 **부호 있는 전후 속도**다 (INT-GAME-004 / 관리 창 INT-RENDER-002):
- *    양수 = 전진, 음수 = 후진. 프로펠러 렌더(S7)·소음 산출은 이 값을 소비한다.
+ *  - 속도 노출 (INT-CORE-003 확정): `forwardSpeedMetersPerSecond` =
+ *    부호 있는 전후 속도(+ 선수/− 선미, 프로펠러 S7 입력),
+ *    `speed`(계약 PlayerController) = 그 크기(비부호, 소음 산출 입력).
+ *    이 클래스는 PlayerController와 SubmarinePoseSource 계약을 함께 구현한다.
  */
 
 import type { MovementParams } from '../contracts/params';
-import type { PlayerController } from '../contracts/systems';
+import type { PlayerController, SubmarinePoseSource } from '../contracts/systems';
 import type { MovementInput } from './KeyboardInput';
 import {
   PROVISIONAL_REVERSE_MAX_RATIO,
@@ -63,7 +65,7 @@ export interface SubmarineSpawn {
   headingRadians: number;
 }
 
-export class SubmarinePlayerController implements PlayerController {
+export class SubmarinePlayerController implements PlayerController, SubmarinePoseSource {
   private x: number;
   private y: number;
   private z: number;
@@ -148,8 +150,16 @@ export class SubmarinePlayerController implements PlayerController {
     return this.heading;
   }
 
-  /** 부호 있는 전후 속도 (양수 = 전진). 프로펠러(S7)·소음 산출 입력 */
+  /** 현재 속력 크기 (비부호) — 계약 PlayerController.speed (소음 산출 입력) */
   get speed(): number {
+    return Math.abs(this.currentSpeed);
+  }
+
+  /**
+   * 부호 있는 전후 속도 (+ 선수 / − 선미) — 계약 SubmarinePoseSource
+   * (INT-CORE-003). 프로펠러는 이 값 + conventions.propellerSpinRatio()만 사용
+   */
+  get forwardSpeedMetersPerSecond(): number {
     return this.currentSpeed;
   }
 

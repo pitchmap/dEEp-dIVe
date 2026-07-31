@@ -11,8 +11,8 @@
 
 /** 어뢰가 명중 가능한 수상 표적의 읽기 전용 상태 + 명중 통지 진입점 */
 export interface CombatTarget {
-  /** 식별자 (예: 'cargo-1') — 등록 중복·디버깅용 */
-  readonly id: string;
+  /** 식별자 — `torpedoHit.targetId`·`CargoShipStateSource.id`와 동일 체계 (INT-CORE-003) */
+  readonly id: number;
   readonly positionX: number;
   readonly positionY: number;
   readonly positionZ: number;
