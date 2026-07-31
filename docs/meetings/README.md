@@ -20,5 +20,5 @@
 | `02_graphics_review.md` | 그래픽 방향 1차 소회의 (2.5D 재검토) | 원문 |
 | `03_full3d_review.md` | 풀 3D 전환 소회의 (로우폴리 풀 3D 확정) | 원문 |
 | `04_vertical_slice_spec.md` | 버티컬 슬라이스 사양 확정 대회의 (10개 안건) | 원문 |
-| `05_execution_plan.md` | 실행 계획 확정 대회의 (3차 대회의) | **원본 미제공 — 자리 표시** |
-| `06_devteam_process.md` | 개발팀 파트 분담·프로세스 소회의 | **원본 미제공 — 자리 표시** |
+| `05_execution_plan.md` | 실행 계획 확정 대회의 (3차 대회의 — R&R·튜닝표·컷라인) | 원문 |
+| `06_devteam_process.md` | 개발팀 파트 분담·프로세스 소회의 | 원문 |
