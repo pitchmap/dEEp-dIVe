@@ -13,8 +13,16 @@
  *   y < CRUISE_MIN_Y               → 심해 (deep)
  */
 
-/** 잠수함 중심의 상한 (수면 이탈 방지 — 수면보다 선체 반경만큼 아래) */
-export const PROVISIONAL_SUBMARINE_MAX_Y = 12.5;
+/**
+ * 해수면 높이 (월드 Y) — 렌더 `CanyonScene.SEA_SURFACE_Y`(12)와 정합.
+ * 화물선 흘수선(CargoShipStateSource.positionY)의 기준이다.
+ * 정식 소스는 계약 `contracts/layout.ts` CanyonLayout.seaSurfaceY —
+ * 데이터 모듈 확정(INT-CORE-003 후속) 시 이 값을 삭제·대체한다.
+ */
+export const PROVISIONAL_SEA_SURFACE_Y = 12;
+
+/** 잠수함 중심의 상한 (수면 이탈 방지 — 해수면(12)보다 선체 반경(1)만큼 아래) */
+export const PROVISIONAL_SUBMARINE_MAX_Y = 11;
 
 /** 잠수함 중심의 하한 (해저 FLOOR_Y(-6) + 선체 반경 — 바닥 이탈 방지) */
 export const PROVISIONAL_SUBMARINE_MIN_Y = -5;

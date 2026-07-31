@@ -23,7 +23,35 @@
 
 ## 제안 목록
 
-### INT-RENDER-004 — [보고] 렌더 협곡 벽 높이와 충돌 미러 불일치 (INT-GAME-005 후속)
+### INT-GAME-007 — 화물선 수치 이관 + 격침 보상(어뢰 +1) 배선 결정 요청
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 (CargoShipSystem 작업 창) |
+| 대상 시스템 | `params/combat.json`+`src/contracts/params.ts`(CombatParams 또는 신규 cargo 구획), CanyonLayout 데이터 모듈(INT-CORE-003 후속), `TorpedoSystem`(보상 지급 경로) |
+| 필요한 변경 | ① 화물선 수치 이관 — 항행 속력(임시 4 m/s)·명중 반경(9 m)·침몰 시간(6 s)은 params로, 왕복 경로 끝점·해수면 높이(12 — 렌더 SEA_SURFACE_Y와 정합)는 CanyonLayout 데이터 모듈로. 현재 `src/systems/provisionalCargo.ts`·`provisionalWorld.ts`(PROVISIONAL_SEA_SURFACE_Y) R7 선진행 ② 해수면 정합에 따라 잠수함 수직 상한을 12.5→11(해수면 12 − 선체 반경 1)로 조정함 — 수면 돌출 방지, 레벨 값 확정 시 재검토 ③ 격침 보상 어뢰 +1 [확정 §5.9]: `torpedoHit` 구독으로 지급하는 주체·TorpedoSystem 잔량 증가 경로(메서드 추가 필요 — 계약 변경) 결정 요청 |
+| 변경 이유 | CargoShipSystem(직선 왕복·1발 격침·침몰 시간축) 구현 완료 — 수치·레이아웃 값의 정식 소스와 보상 지급 경로만 남음 |
+| 관련 게이트 | G3(첫 발사 표적), G6·G7 |
+| 영향을 받는 파일 | `params/combat.json`, `src/contracts/params.ts`, `src/config/validateParams.ts`, CanyonLayout 데이터 모듈(위치 미정), `src/systems/CargoShipSystem.ts`, `src/systems/provisionalCargo.ts`(삭제), `src/systems/provisionalWorld.ts`(부분 삭제), `src/contracts/systems.ts`(TorpedoSystem 보상 메서드 — 리드 결정) |
+| 하위 호환 여부 | 깨짐 없음 (이관·추가만) |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
+
+### INT-CORE-003 — 통합 상태 계약 확정 (포즈·화물선·torpedoHit·레이아웃·파라미터 단일 소스)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (D6 통합 전 각 파트 구현 보고 종합 — 임시 인터페이스·중복 파라미터 해소) |
+| 대상 시스템 | `src/contracts/systems.ts`(SubmarinePoseSource·CargoShipStateSource 추가), `src/contracts/events.ts`(torpedoHit 추가), `src/contracts/layout.ts`(신규 — CanyonLayout·CanyonBlockDescriptor) |
+| 필요한 변경 | ① 잠수함 포즈 정식 계약: positionX/Y/Z·headingRadians·forwardSpeedMetersPerSecond(부호: + 선수/− 선미). positionY는 심도 보간 포함 월드 Y ② 프로펠러는 공식 forwardSpeed + `conventions.propellerSpinRatio()`만 사용 — 렌더의 위치 차분 속도 재계산 금지 ③ propellerIdleSpinRatio·최고 속력의 공식 소스는 `params/movement.json` 단일 — renderVisualParams.json의 `idleSpinRatio`·`fullSpinAtSpeedMps` 중복 정의 제거(조립 시 주입으로 대체) ④ 화물선 상태 계약: id·positionX/Y/Z·heading·velocityX/Z·hit·sinkProgress(0~1, 시간축 게임플레이 소유)·removed ⑤ `torpedoHit { targetId, x, z }` 이벤트 ⑥ 렌더·충돌 공용 레이아웃 인터페이스(CanyonLayout — 인터페이스만, 데이터 모듈은 후속) ⑦ composition root 연결 지도 문서화 (ControlsHud→동일 AimSystem, CargoShipSystem→TargetRegistry/CargoShipVisual, pose→장면/프로펠러, torpedoHit→상태·렌더·오디오) |
+| 변경 이유 | 게임플레이가 구현한 positionY·부호 있는 속도가 정식 계약에 없어 렌더가 위치 차분으로 재계산 중(판정 복제), 렌더가 공회전 비율을 중복 정의, 화물선 상태·명중 통지가 렌더 로컬 임시 인터페이스(CanyonScene 內 CargoShipStateSource)로만 존재, CanyonScene과 충돌 startingArea가 배치 복제 |
+| 관련 게이트 | G1(연출 역추적), G3(조준·발사 경로 단일화), G6·G7(표적·명중 인과) |
+| 영향을 받는 파일 | 계약 3파일 + `docs/ARCHITECTURE.md`·`INTERFACES.md`. 적용 측: 게임플레이(poseSource·CargoShipSystem·torpedoHit 발행), 그래픽스(CanyonScene 로컬 타입→계약 import, Propeller 속도 입력 교체, renderVisualParams 중복 키 제거), UI(CombatIntentSink→AimSystem 위임) |
+| 하위 호환 여부 | 기존 코드 깨짐 없음 — 전부 추가(기존 PlayerController·이벤트 불변). dev 빌드·검증 21/21 유지. feat/render의 로컬 CargoShipStateSource는 계약과 필드 확장 차이(velocity·hit/sinkProgress/removed 세분화)가 있어 병합 시 계약 쪽으로 교체 필요 |
+| 개발 리드 결정 | 승인 — PlayerController 확장 대신 별도 SubmarinePoseSource로 공식화(기존 구현·검증 불파괴). 침몰 시간축은 게임플레이 소유('판정이 타이밍의 주인' 원칙 일관 적용), 렌더 sinkDurationSeconds는 진행률 매핑 상수로만 유지. 레이아웃 데이터 모듈 위치는 후속 결정(제안: 리드 승인 공용 모듈 — 레벨 산출물 반영 시 데이터만 교체) |
+| 적용 커밋 | `efd4712` |
+
+### INT-RENDER-004 — [보고] 렌더 협곡 벽 높이와 충돌 미러 불일치 (INT-GAME-005 후속) — ✅ INT-CORE-004로 해소
 
 | 필드 | 내용 |
 |---|---|
@@ -37,7 +65,7 @@
 | 개발 리드 결정 | (대기 — INT-GAME-005와 함께) |
 | 적용 커밋 | — |
 
-### INT-RENDER-003 — 화물선 상태 계약 정의 요청 (렌더 소비용, 구 #003 재정리)
+### INT-RENDER-003 — 화물선 상태 계약 정의 요청 (렌더 소비용, 구 #003 재정리) — ✅ INT-CORE-003으로 해소
 
 | 필드 | 내용 |
 |---|---|
