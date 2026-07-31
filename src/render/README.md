@@ -9,21 +9,26 @@
   결정적 S자 수로) + 잠수함 대체 오브젝트(캡슐+함교) + 기본 수중 포그·배경 +
   블롭 섀도 + 조명 2개 이내(방향광 1 + 보조 환경광)
 - `CameraRig.ts` — 카메라 추적 시각 구조: 후방 추적, 궤도 오프셋(상하 ±60도 제한),
-  `recenter()`. 입력 바인딩은 게임플레이 소유 — `rotate()`/`recenter()` 호출만 연결
+  `recenter()`
+- `CameraInputAdapter.ts` — 카메라 전용 입력(D+5 통합 결정): 좌클릭 드래그
+  궤도 회전 + Space 리센터. `GameSystem`으로 등록되며 잠수함 이동·심도 키와
+  중복되지 않는다. blur 시 드래그 상태 해제, dispose()에서 리스너 전부 해제
 - `BlobShadow.ts` — 코드 생성 방사형 그라데이션 텍스처 평면 (실시간 그림자 금지 대응)
-- `xray/XrayFloodingSpike.ts` — X-ray 반투명 렌더 기술 스파이크 [보호 목록].
-  기본 장면과 분리된 모듈, `?xray` URL 플래그로 장착, 실패 시 격리.
+- `xray/XrayFloodingSpike.ts` — X-ray 반투명 렌더 기술 스파이크 [보호 목록,
+  판정: 성공]. 기본 장면과 분리된 모듈, `?xray` URL 플래그로 장착, 실패 시 격리.
   판정 문서: `docs/RENDER_SPIKE_XRAY.md`
-- `BootstrapScene.ts` — CanyonScene 별칭 재수출 (core/Game.ts가 이 이름을
-  임포트하기 때문 — 임포트 정리는 INTEGRATION_NOTES #002)
+
+(`BootstrapScene.ts` 별칭은 INT-RENDER-001 승인으로 삭제됨 — core/Game.ts가
+`CanyonScene`을 직접 임포트한다.)
 
 ## 연결 방식 (판정 계산 금지 원칙)
 
 - 잠수함 위치·방향: `CanyonScene.attachPoseSource()`로 게임플레이의 읽기 전용
   상태(`PlayerController` 계약 부분집합)를 주입받아 소비만 한다. 미주입 시
-  원점 정지 렌더. 연결 요청: INTEGRATION_NOTES #002
-- 카메라 입력: 게임플레이 측이 `CanyonScene.cameraRig`의 `rotate()`/`recenter()`를
-  호출한다 (§5.2 구현 소유 경계 유지)
+  원점 정지 렌더. 주입은 `Game.composeSystems()`(composition root)에서 1회
+  수행됨 (INT-RENDER-001 반영)
+- 카메라 입력: `CameraInputAdapter`(렌더 소유)가 `CameraRig.rotate()/recenter()`를
+  호출한다 — D+5 통합에서 카메라 입력 책임은 그래픽스로 확정
 - 협곡 임시 배치는 파이프라인 검증용 — 정식 블록아웃(엄폐 3곳+)은 레벨
   디자인 산출물(D+5) 수신 후 교체
 

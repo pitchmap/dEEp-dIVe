@@ -141,13 +141,23 @@ graph TD
     PERF --> GATE
 ```
 
-## 현재 실제 배선 (D3 기준)
+## 현재 실제 배선 (D+5 회색 박스 통합 기준)
 
-`main.ts` → `Game`: 파라미터 로드·검증 → `Renderer`+`BootstrapScene` 생성 →
-오버레이·계측 연결 → `composeSystems()`(시스템 등록 지점 — 현재 등록 0건) →
-`registry.initializeAll(context)` → 루프 시작 → 첫 렌더 시 `LoadingTimer`
-기록 + `BOOT→DEPARTURE` 전환(상태 머신 검증 겸용).
+`main.ts` → `Game`: 파라미터 로드·검증 → `Renderer`+`CanyonScene` 생성
+(`ManagedScene`으로 SceneManager 등록) → 오버레이·계측 연결 →
+`composeSystems(params, scene)` → `registry.initializeAll(context)` →
+루프 시작 → 첫 렌더 시 `LoadingTimer` 기록 + `BOOT→DEPARTURE` 전환.
 
-각 파트 구현체(D3~D5: 조작·심도·카메라·회색 박스 블록아웃)가 feat 브랜치에서
-도착하는 대로 composeSystems에 순서대로 배선된다. 3D 장면(블록아웃)은
-시스템이 아니라 `ManagedScene`으로 SceneManager에 올린다.
+`composeSystems` 등록 순서 (실행 순서와 동일):
+
+1. `gameplay` (`src/systems/GameplaySystems.ts`) — WASD 이동·관성 +
+   Shift/Ctrl 심도 3층. initialize에서 window/document 입력 연결과 params
+   핫리로드 구독(승인된 로더의 `onParamsReloaded` 주입), dispose에서 해제.
+2. `cameraInput` (`src/render/CameraInputAdapter.ts`) — 마우스 궤도 회전·
+   Space 리센터. 렌더 소유 카메라 입력 (D+5 책임 경계 확정).
+
+구현체 간 직접 참조는 composition root에서만: `scene.attachPoseSource(
+gameplay.poseSource)`로 읽기 전용 잠수함 포즈를 1회 주입한다. 렌더는
+판정·이동을 계산하지 않고, 시스템 update 이후 sceneManager.update가
+포즈를 소비한다. `WebAudioSystem`은 아직 미조립(후속 통합 항목 —
+CURRENT_STATUS 빌드·툴 구역).

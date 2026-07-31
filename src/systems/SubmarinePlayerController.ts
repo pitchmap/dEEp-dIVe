@@ -21,10 +21,6 @@
 import type { MovementParams } from '../contracts/params';
 import type { PlayerController } from '../contracts/systems';
 import type { MovementInput } from './KeyboardInput';
-import {
-  PROVISIONAL_ACCELERATION_SECONDS,
-  PROVISIONAL_MAX_SPEED_MPS,
-} from './provisionalMovement';
 
 const QUARTER_TURN_RADIANS = Math.PI / 2;
 const TWO_PI = Math.PI * 2;
@@ -49,13 +45,15 @@ export class SubmarinePlayerController implements PlayerController {
   private heading: number;
   private currentSpeed = 0;
 
-  private readonly maxSpeed: number;
-  /** 가속률 (m/s²) — 임시 기본값 기반 (provisionalMovement.ts 참조) */
-  private readonly accelerationPerSecond: number;
+  // 파생 수치(가감속·선회율)는 applyMovementParams가 재계산한다 —
+  // 개발 모드 params 핫리로드 시 내부 참조 교체를 지원하기 위해 mutable.
+  private maxSpeed = 0;
+  /** 가속률 (m/s²) — accelerationSeconds: 정지→최고 속력 도달 시간 */
+  private accelerationPerSecond = 0;
   /** 감속률 (m/s²) — stopInertiaSeconds: 최고 속력→정지 소요 시간 */
-  private readonly decelerationPerSecond: number;
+  private decelerationPerSecond = 0;
   /** 선회율 (rad/s) — turn90Seconds: 90도 선회 소요 시간 */
-  private readonly turnRatePerSecond: number;
+  private turnRatePerSecond = 0;
 
   // 주의: 생성자 매개변수 프로퍼티를 쓰지 않는다 — 검증 러너(run.mjs)가
   // Node 타입 스트리핑으로 이 파일을 직접 로드하므로 삭제 가능 문법만 사용.
@@ -70,11 +68,21 @@ export class SubmarinePlayerController implements PlayerController {
     this.x = spawn.x;
     this.z = spawn.z;
     this.heading = normalizeAngle(spawn.headingRadians);
+    this.applyMovementParams(movement);
+  }
 
-    this.maxSpeed = PROVISIONAL_MAX_SPEED_MPS;
-    this.accelerationPerSecond = this.maxSpeed / PROVISIONAL_ACCELERATION_SECONDS;
+  /**
+   * 검증 완료된 이동 파라미터를 (재)적용한다. 초기화 1회 + 개발 모드
+   * 핫리로드(onParamsReloaded — 유효 값만 통지됨) 시에만 호출된다.
+   * update()마다 loadParams()를 다시 읽지 않는다.
+   */
+  applyMovementParams(movement: MovementParams): void {
+    this.maxSpeed = movement.maxSpeedMetersPerSecond.value;
+    this.accelerationPerSecond = this.maxSpeed / movement.accelerationSeconds.value;
     this.decelerationPerSecond = this.maxSpeed / movement.stopInertiaSeconds.value;
     this.turnRatePerSecond = QUARTER_TURN_RADIANS / movement.turn90Seconds.value;
+    // 상한이 낮아진 경우 현재 속력이 새 상한을 넘지 않게 맞춘다
+    this.currentSpeed = Math.min(this.currentSpeed, this.maxSpeed);
   }
 
   get positionX(): number {

@@ -11,5 +11,15 @@
     "range": [1.0, 3.0],
     "unit": "seconds",
     "note": "90도 선회 소요 시간. G7 미달 시 감소"
+  },
+  "maxSpeedMetersPerSecond": {
+    "value": 10,
+    "unit": "m/s",
+    "note": "최고 전진 속력. 임시 초기 테스트값(R7 선진행분 이관, INT-GAME-001) — 확정 밸런스 아님. 조정 범위는 기획(박태현)이 튜닝표 §11.2에 행 추가 후 확정"
+  },
+  "accelerationSeconds": {
+    "value": 3.0,
+    "unit": "seconds",
+    "note": "정지→최고 속력 도달 시간. 임시 초기 테스트값(R7 선진행분 이관, INT-GAME-001) — 확정 밸런스 아님. 조정 범위는 기획 튜닝표 확정 대기"
   }
 }

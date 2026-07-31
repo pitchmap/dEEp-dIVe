@@ -92,9 +92,27 @@ function validateTunable(file: string, path: string, raw: unknown): Tunable {
 export function validateMovementParams(raw: unknown): MovementParams {
   const file = 'params/movement.json';
   if (!isRecord(raw)) throw new ParamValidationError(file, '(루트)', '객체가 필요합니다');
+
+  // 속력·가속은 임시 초기 테스트값 (INT-GAME-001) — 합의된 조정 범위가 아직
+  // 없어 FixedNumber로 두되, 0·음수·비유한값은 이동 자체를 망가뜨리므로 거부한다.
+  const requirePositive = (path: string, fixed: FixedNumber): FixedNumber => {
+    if (fixed.value <= 0) {
+      throw new ParamValidationError(file, `${path}.value`, `양수가 필요합니다 (받은 값: ${fixed.value})`);
+    }
+    return fixed;
+  };
+
   return {
     stopInertiaSeconds: validateTunable(file, 'stopInertiaSeconds', raw['stopInertiaSeconds']),
     turn90Seconds: validateTunable(file, 'turn90Seconds', raw['turn90Seconds']),
+    maxSpeedMetersPerSecond: requirePositive(
+      'maxSpeedMetersPerSecond',
+      validateFixedNumber(file, 'maxSpeedMetersPerSecond', raw['maxSpeedMetersPerSecond']),
+    ),
+    accelerationSeconds: requirePositive(
+      'accelerationSeconds',
+      validateFixedNumber(file, 'accelerationSeconds', raw['accelerationSeconds']),
+    ),
   };
 }
 

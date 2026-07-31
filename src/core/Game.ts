@@ -6,10 +6,12 @@
  * 성능·로딩 계측. 시스템 구현 자체는 각 파트 소유 영역에 있다.
  */
 
-import { loadParams } from '../config/ParamLoader';
+import { loadParams, onParamsReloaded } from '../config/ParamLoader';
 import type { GameParams } from '../contracts/params';
 import { Renderer } from '../render/Renderer';
-import { BootstrapScene } from '../render/BootstrapScene';
+import { CanyonScene } from '../render/CanyonScene';
+import { CameraInputAdapter } from '../render/CameraInputAdapter';
+import { GameplaySystems } from '../systems/GameplaySystems';
 import { PerformanceOverlay } from '../ui/PerformanceOverlay';
 import { GateMetricRecorder } from '../tools/GateMetricRecorder';
 import { LoadingTimer } from '../tools/LoadingTimer';
@@ -62,7 +64,9 @@ export class Game {
     this.container.appendChild(canvas);
 
     this.renderer = new Renderer(canvas);
-    this.sceneManager.setActive(new BootstrapScene(this.renderer));
+    // D+5 회색 박스 장면 — BootstrapScene 별칭은 INT-RENDER-001 승인으로 정리됨
+    const scene = new CanyonScene(this.renderer);
+    this.sceneManager.setActive(scene);
 
     this.recorder = new GateMetricRecorder(this.bus, this.loadingTimer);
     if (PerformanceOverlay.shouldShow()) {
@@ -73,7 +77,7 @@ export class Game {
       });
     }
 
-    this.composeSystems(params);
+    this.composeSystems(params, scene);
     this.registry.initializeAll({
       bus: this.bus,
       params,
@@ -95,15 +99,29 @@ export class Game {
    *      ② 판정 (게임플레이: 탐지·어뢰·폭뢰·내구도 — D6 이후)
    *      ③ AI (리드: DestroyerAI — D6 이후)
    *      ④ 표현 연동 (렌더 이펙트·UI·오디오 배관 — 이벤트 구독 측)
-   *  - 파트 간 의존은 EventBus로만. 구현체 간 직접 참조를 여기서 잇지 않는다.
-   *  - params 외 의존성(렌더러 등)은 이 지점에서 생성자 주입한다.
+   *  - 파트 간 통신은 EventBus로만. 구현체 간 직접 참조(포즈 주입 등)는
+   *    이 composition root에서만 잇는다 — 각 파트 코드끼리는 서로 모른다.
+   *  - params 외 의존성(렌더러·장면 등)은 이 지점에서 생성자 주입한다.
    *  - src/core는 공통 보호 파일 — 등록 추가는 feat→dev 병합 시 리드가 배선한다.
    *
-   * D3~D5 현재: 등록할 구현체가 아직 없다 (각 파트 feat 브랜치 작업 중).
-   * 3D 장면(회색 박스 블록아웃)은 시스템이 아니라 SceneManager가 관리한다.
+   * D+5 배선 (INT-GAME-002·INT-RENDER-001 승인 반영):
+   *  ① gameplay    — WASD 이동·관성, Shift/Ctrl 심도 3층 (입력·조작)
+   *  ② cameraInput — 마우스 궤도 회전·Space 리센터 (렌더 소유 카메라 입력)
+   *  장면(CanyonScene)은 시스템이 아니라 SceneManager가 관리하며, 잠수함
+   *  포즈는 게임플레이의 읽기 전용 상태를 여기서 1회 주입한다. 렌더는
+   *  판정·이동을 계산하지 않는다.
    */
-  private composeSystems(_params: GameParams): void {
-    // (D+5 통합 시 여기서 registry.register(...) 순서대로 배선)
+  private composeSystems(params: GameParams, scene: CanyonScene): void {
+    // ① 입력·조작 — 게임플레이. 개발 모드 params 핫리로드는 승인된 로더의
+    //    onParamsReloaded를 주입해 유효 값 교체만 허용한다 (JSON 역기록 없음).
+    const gameplay = new GameplaySystems(this.bus, params, onParamsReloaded);
+    this.registry.register(gameplay);
+
+    // ④ 표현 연동 — 렌더 소유 카메라 입력(회전·리센터). 이동키와 중복 없음.
+    this.registry.register(new CameraInputAdapter(scene.cameraRig));
+
+    // 구현체 간 직접 참조는 composition root에서만: 읽기 전용 포즈 주입.
+    scene.attachPoseSource(gameplay.poseSource);
   }
 
   stop(): void {

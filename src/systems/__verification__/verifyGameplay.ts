@@ -20,10 +20,6 @@ import { GameplaySystems } from '../GameplaySystems';
 import { KeyboardInput, type MovementInput, type VisibilitySource } from '../KeyboardInput';
 import { LayeredDepthSystem } from '../LayeredDepthSystem';
 import { SubmarinePlayerController } from '../SubmarinePlayerController';
-import {
-  PROVISIONAL_ACCELERATION_SECONDS,
-  PROVISIONAL_MAX_SPEED_MPS,
-} from '../provisionalMovement';
 
 export interface VerificationResult {
   name: string;
@@ -96,13 +92,15 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
   {
     const input = new ScriptedInput();
     const controller = new SubmarinePlayerController(params.movement, input);
+    const maxSpeed = params.movement.maxSpeedMetersPerSecond.value;
+    const accelerationSeconds = params.movement.accelerationSeconds.value;
     input.throttleForward = true;
-    simulate(controller, PROVISIONAL_ACCELERATION_SECONDS + 1, dt);
-    const reachedMax = Math.abs(controller.speed - PROVISIONAL_MAX_SPEED_MPS) < 1e-9;
+    simulate(controller, accelerationSeconds + 1, dt);
+    const reachedMax = Math.abs(controller.speed - maxSpeed) < 1e-9;
     check(
-      '이동: 가속 상한 = 임시 최고 속력',
+      '이동: 가속 상한 = movement.json maxSpeedMetersPerSecond',
       reachedMax,
-      `speed=${controller.speed.toFixed(3)} / max=${PROVISIONAL_MAX_SPEED_MPS}`,
+      `speed=${controller.speed.toFixed(3)} / max=${maxSpeed}`,
     );
 
     input.release();
