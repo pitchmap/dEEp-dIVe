@@ -61,8 +61,10 @@ export class CameraRig {
     targetZ: number,
     headingRadians: number,
   ): void {
-    // 후방 뷰 기준: 잠수함 진행 방향의 반대쪽 + 궤도 오프셋
-    const yaw = headingRadians + Math.PI + this.yawOffset;
+    // 후방 뷰 기준: 선수·선미 규약(로컬 -Z = 선수, +Z = 선미)에 따라
+    // 카메라는 선미(+Z) 쪽에 놓여 선수 방향을 바라본다 — 리센터 시
+    // 프로펠러(선미)가 카메라 가까운 쪽에 보인다.
+    const yaw = headingRadians + this.yawOffset;
     const pitch = THREE.MathUtils.clamp(
       BASE_PITCH_RADIANS + this.pitchOffset,
       -PITCH_LIMIT_RADIANS,
