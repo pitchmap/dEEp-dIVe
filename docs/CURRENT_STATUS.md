@@ -41,14 +41,14 @@
 
 ## 빌드·툴
 
-- **완료:** D1~D2 — Vite+TS 프로젝트, 성능 오버레이(FPS·평균·최소·로딩·모드·렌더러), LoadingTimer, GateMetricRecorder(JSON 다운로드), check-build-size(15MB 게이트), print-project-status, CI 워크플로, PR·이슈 템플릿
+- **완료:** D1~D2 — Vite+TS 프로젝트, 성능 오버레이(FPS·평균·최소·로딩·모드·렌더러), LoadingTimer, GateMetricRecorder(JSON 다운로드), check-build-size(15MB 게이트), print-project-status, CI 워크플로, PR·이슈 템플릿 / **단계 0 잔여분** — Node 버전 고정(.nvmrc `22.22.2` + engines `>=22 <23` + .npmrc engine-strict, CI는 node-version-file로 일원화), 잠금 파일 기준 버전 재현 확인(three 0.185.1 · vite 8.2.0 · typescript 7.0.2), GitHub Pages 배포 워크플로(`.github/workflows/deploy.yml` — main 푸시·수동 실행, 배포 전 typecheck·build·check:size 강제, `docs/DEPLOY.md`), JSON 파라미터 핫리로드(Vite HMR — 리로드·재빌드 없이 반영, 범위 밖 값은 기존 validateParams가 거부·이전 값 유지, `loadParams()` 인터페이스 불변 + `onParamsReloaded()` 구독 추가), 게이트 기록에 초당 FPS 시계열(`fpsSamples`)·빌드 모드 추가(G1 구간별 로그 — 개인정보·고유 식별자 없음), Web Audio 최소 배관(`src/audio/WebAudioSystem.ts` — AudioContext unlock·마스터 버스·패너 연결·카메라 기준 리스너까지만, 판정 타이머 없음)
 - **진행 중:** 없음
-- **다음 작업:** 정적 배포 파이프라인 연결(배포 URL 확보 — D2 완료 조건의 잔여분), JSON 핫리로드 툴(fetch 기반 파라미터 교체), Web Audio 배관 골격
-- **차단 문제:** 배포 대상 호스팅 미정 — 리드/경영 결정 필요
-- **변경된 계약:** 없음
-- **통합 주의사항:** ParamLoader는 현재 정적 import — 핫리로드 툴 도입 시 ParamLoader 내부만 교체 (인터페이스 유지)
-- **마지막 업데이트:** D2 (저장소 부트스트랩 커밋)
-- **담당 브랜치:** `claude/deep-dive-bootstrap-6wrpuw` (부트스트랩) → 이후 `feat/tooling-*`
+- **다음 작업:** Pages 활성화 후 첫 배포 URL 확인, D3 이후 AudioSystem을 Game에 조립(리드 승인 경유), 이벤트 구독 기반 사운드 동기화·지연 측정(D+10 사운드 세트 수신 후)
+- **차단 문제:** 배포 URL 미확보 — 저장소 관리자가 Settings→Pages에서 Source를 "GitHub Actions"로 1회 설정 후 워크플로 실행 필요 (`docs/DEPLOY.md`). 이 작업 환경에는 해당 권한·인증 정보 없음
+- **변경된 계약:** 없음 (INTEGRATION_NOTES #002 — package.json engines·ParamLoader 내부 교체, 리드 확인 대기)
+- **통합 주의사항:** 개발 모드에서 params/*.json 저장 시 페이지 리로드 없이 값이 교체된다 — 시스템은 `loadParams()`를 매번 다시 읽거나 `onParamsReloaded()`로 통지받을 것. 프로덕션 빌드는 번들 값 고정(핫리로드 코드 제거됨). WebAudioSystem은 아직 어디에도 조립되지 않음(스텁 아님 — 계약 구현체, 조립은 D3+)
+- **마지막 업데이트:** 단계 0 잔여 작업 완료 (브랜치 `claude/deep-dive-tooling-phase-0-cj6c49`, `feat/tooling` 기반)
+- **담당 브랜치:** `claude/deep-dive-tooling-phase-0-cj6c49` (`feat/tooling`의 세션 사본)
 
 ## 기획
 
@@ -67,7 +67,7 @@
 
 | 단계 | 기간 | 상태 |
 |---|---|---|
-| 0. 환경 구축 | D1~D2 | ✅ 저장소·골격·계측 완료 / ⚠ 배포 URL 미확보 |
+| 0. 환경 구축 | D1~D2 | ✅ 저장소·골격·계측·핫리로드·배포 워크플로 완료 / ⚠ 배포 URL 미확보 (관리자 Pages 1회 설정 대기 — docs/DEPLOY.md) |
 | 1. 회색 박스 | D3~D5 | 대기 |
 | 2. 코어 전투 루프 | D6~D9 | 대기 |
 | 3. 은신·탐지 | D10~D12 | 대기 |
