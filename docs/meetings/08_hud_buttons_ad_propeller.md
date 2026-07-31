@@ -50,9 +50,14 @@
 
 - **로컬 -Z = 선수, +Z = 선미, 월드 +Y = 위**를 `src/core/conventions.ts`
   하나로 코드화한다 (`bowDirectionXZ`·`sternDirectionXZ`·`meshYawRadians`·
-  `cameraRecenterYawRadians`). 파트별 숫자·벡터 복제 금지.
+  카메라 리센터 규약). 파트별 숫자·벡터 복제 금지.
 - Space 리센터 후방 뷰 = **선미 뒤쪽 상단에서 선수 방향을 보는 시점** —
   리센터 시 프로펠러가 카메라 가까이 보인다.
+- *(후속 각주)* 최초 규약 `cameraRecenterYawRadians`는 시선/위치 오프셋
+  이중 해석 문제가 확인되어 INT-CORE-004(`c4841cf`)에서 폐기,
+  `cameraRecenterOffsetDirectionXZ`(카메라 위치 = 선미 방향)와
+  `cameraRecenterLookDirectionXZ`(시선 = 선수 방향)로 분리 확정.
+  검증 기준: 리센터 시 프로펠러가 카메라 가까운 쪽, W 전진 시 화면 안쪽.
 - 기존 D+5 구현(전진 벡터·mesh.rotation.y·CameraRig 배치)과 동일 정의 —
   동작 변경 없음, 규약·계약 추가만.
 
@@ -70,7 +75,7 @@
 
 | 조치 | 담당 | 산출 |
 |---|---|---|
-| 규약·AimSystem·공회전 파라미터 계약화 | 리드 | `b69890b` (INT-CORE-002 승인) |
+| 규약·AimSystem·공회전 파라미터 계약화 | 리드 | `b69890b` (INT-CORE-002 승인) → 리센터 규약 이의 해소 `c4841cf` (INT-CORE-004) |
 | signed speed 제공 (프로펠러 S7 소비용) | 게임플레이 | `218ad86` — 계약 반영 요청 INT-GAME-004 (소회의 중 관리 창 제안 INT-RENDER-002와 합류, 최종 확정은 INT-CORE-003 `SubmarinePoseSource.forwardSpeedMetersPerSecond`) |
-| 프로펠러·선미 규약 적용 | 그래픽스 | `383f257` → 정식 계약 소비 `cbcbf65` (renderVisualParams 중복 공회전 값 제거) |
-| HUD·Pointer Lock·화면 버튼 | 빌드·툴 | `e0f7609` → AimSystem 실연결 `2f8b66f` (임시 CombatIntentSink 삭제, 구 요청 이벤트 3종 제안 INT-TOOL-003 폐기) |
+| 프로펠러·선미 규약 적용 | 그래픽스 | `383f257` → 정식 계약 소비 `cbcbf65` → `c091f30` (forwardSpeed 소비·renderVisualParams는 순수 연출값만·Playwright 실측: A 단독 공회전 확인) |
+| HUD·Pointer Lock·화면 버튼 | 빌드·툴 | `e0f7609` → AimSystem 실연결 `2f8b66f` (임시 CombatIntentSink 삭제, 구 요청 이벤트 3종 제안 INT-TOOL-003 폐기) → 병합 재검증 `1381c08` |

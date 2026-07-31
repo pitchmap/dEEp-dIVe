@@ -21,6 +21,40 @@
 
 ---
 
+## 전체 상태 총괄표 (D+7 문서 정리 시점 — 미결·해결 정리)
+
+> 항목 원문은 각 소재 브랜치의 INTEGRATION_NOTES에 있다 (dev 통합 시
+> 본문 합류). ✅ = 해결(승인·반영), ⏳ = 미결(리드 결정 대기),
+> 🔍 = 선반영·리드 확인 대기, 🔀 = 다른 항목으로 해소, ⛔ = 폐기.
+
+| ID | 제목 | 상태 | 소재·근거 |
+|---|---|---|---|
+| #001 | 초기 계약 정의 | ✅ 반영 완료 | dev (부트스트랩) |
+| INT-CORE-001 | GameSystem·SystemRegistry·composeSystems | ✅ 반영 완료 | dev `d994160` |
+| INT-GAME-001 | 이동 수치(최고 속력·가속) params 이관 | ✅ 반영 완료 | dev `6f83268` |
+| INT-GAME-002 | gameplay 조립 연결 | ✅ 반영 완료 | dev `6f83268` |
+| INT-RENDER-001 | CanyonScene 조립·별칭 정리 | ✅ 반영 완료 | dev `6f83268` |
+| INT-TOOL-001 | Node 고정·params HMR (engines `>=22 <23`) | ✅ 반영 완료 | dev `7e9e363` — 그래픽 브랜치 일치 검증 완료(`c091f30` vs dev diff 0건) |
+| INT-CORE-002 | 축 규약(conventions)·AimSystem·aimModeChanged·propellerIdleSpinRatio | ✅ 승인 — dev 통합 대기 | 리드 `b69890b` |
+| INT-CORE-003 | SubmarinePoseSource·CargoShipStateSource·torpedoHit·layout.ts·파라미터 단일 소스 | ✅ 승인 — dev 통합 대기 | 리드 `efd4712` |
+| INT-CORE-004 | STARTING_CANYON_LAYOUT(`src/world/`)·벽 높이 확정(렌더 하향값)·리센터 규약 이의 해소(Offset/Look 분리) | ✅ 승인 — dev 통합 대기 | 리드 `c4841cf` |
+| INT-GAME-004 | positionY·부호 속도 계약 승격 + 후진·수직 비율·심도 구간 경계 이관 | ⏳ 미결 — 계약 실체는 INT-CORE-003으로 확정, **심도 구간 경계 임시값(provisionalWorld) 이관 잔여** | 게임플레이 `218ad86`~`c46c937` |
+| INT-GAME-005 | 협곡 레이아웃 단일 소스화 + positionY 렌더 소비 | 🔀 **INT-CORE-004로 해소** — 미러 삭제(`c46c937`)·렌더 소비(`c091f30`) 완료. 형식 종결만 잔여 | `c4841cf`·`c46c937`·`c091f30` |
+| INT-GAME-006 | 어뢰 수치(속력 20·사거리 90) params 이관 + 명중 이벤트 | ⏳ 미결 — 이벤트는 INT-CORE-003 `torpedoHit`로 해소, **수치 이관(provisionalCombat) 잔여** | 게임플레이 `10ef604` |
+| INT-GAME-007 | 화물선 수치(속력 4·반경 9·침몰 6s) 이관 + 격침 보상 어뢰 +1 배선 | ⏳ 미결 | 게임플레이 `b7faf44` |
+| INT-RENDER-002 | 프로펠러용 전후 부호 속도 (소회의 관리 창 제안) | 🔀 INT-GAME-004 합류 → **INT-CORE-003 `forwardSpeedMetersPerSecond`로 해소** | 회의록 08 |
+| INT-RENDER-003 | 화물선 상태 계약 | 🔀 **INT-CORE-003으로 해소** — 렌더 계약 소비 전환 완료(`c091f30`) | `c091f30` |
+| INT-RENDER-004 | [보고] 렌더-충돌 벽 높이 불일치 | 🔀 **INT-CORE-004로 해소** — 공유 레이아웃로 '보이지 않는 벽' 소멸 | `c4841cf`·`c46c937` |
+| INT-RENDER-005 | Game 조립 배선 요청: cargoShip 상태·EventBus 주입 (2줄, 코드 예시 포함) | ⏳ 미결 — D6/D+10 dev 통합 시 리드 배선 | 그래픽 `c091f30` |
+| INT-TOOL-002 | HUD 조립 보호 파일 최소 변경 (Game.ts +9줄·params/ui.json) | 🔍 선반영 — 리드 채택 대기 | 툴링 `e0f7609` |
+| INT-TOOL-003 | 조준·발사 요청 이벤트 3종 | ⛔ 폐기 — INT-CORE-002 AimSystem 단일 진입점으로 대체 | 툴링 기록 |
+| INT-TOOL-004 | HUD 전투 버튼 ↔ AimSystem 배선 (Game.ts 선반영, 배선 코드 예시 포함) | 🔍 선반영 — 리드 채택 대기 | 툴링 `2f8b66f`·`1381c08` |
+
+**미결 요약 (dev 통합 전 리드 결정 필요):** INT-TOOL-002·004 채택(HUD 배선),
+INT-RENDER-005 배선(화물선·EventBus), INT-GAME-004·006·007 수치 이관·격침
+보상 결정 (이관은 백로그로 이월 가능 — R7 임시값 상태 유지 시 D+10 게이트
+데이터에 표기).
+
 ## 제안 목록
 
 ### INT-TOOL-001 — Node 버전 고정(engines)·ParamLoader 핫리로드 내부 교체
