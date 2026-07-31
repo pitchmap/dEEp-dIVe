@@ -36,6 +36,7 @@
 | 하위 호환 여부 | 유지 — `loadParams()` 시그니처·검증 동작 불변. Node 20 로컬 환경은 engine-strict로 차단됨(의도) |
 | 개발 리드 결정 | **확인 대기** — 작업 지시에 따라 선반영, D+5 통합 리뷰에서 승인 확인 요청 |
 | 적용 커밋 | `5b33dec` |
+
 ### INT-CORE-001 — 시스템 수명주기(GameSystem)·등록 구조(SystemRegistry) 도입 (기록용)
 
 | 필드 | 내용 |
@@ -49,6 +50,34 @@
 | 하위 호환 여부 | 기존 계약·구현 영향 없음 (추가만) |
 | 개발 리드 결정 | 승인 — 수명주기는 계약이 아닌 core 아키텍처로 두고, 계약 3종은 그대로 유지 |
 | 적용 커밋 | `22f2d15` |
+
+### INT-GAME-002 — core/Game에 게임플레이 시스템 조립 연결 요청
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 (D3~D5 회색 박스 작업 창) |
+| 대상 시스템 | `src/core/Game.ts` (공통 보호 파일 — 게임플레이가 직접 수정 불가) |
+| 필요한 변경 | ① `GameplaySystems`(src/systems/GameplaySystems.ts) 인스턴스 생성: `new GameplaySystems(this.bus, params)` ② `update(dt)`에서 `gameplaySystems.update(dt)` 호출 ③ 초기화 시 `gameplaySystems.attachInput(window, document)` 호출 (정리 시 `detachInput()`) |
+| 변경 이유 | PlayerController·DepthSystem 구현이 완료되었으나 core 조립점에 연결되지 않으면 빌드에서 동작하지 않음. D+5 회색 박스 빌드의 전제 |
+| 관련 게이트 | G3, G4, G5 |
+| 영향을 받는 파일 | `src/core/Game.ts` (구현: `src/systems/GameplaySystems.ts` — 변경 불요) |
+| 하위 호환 여부 | 깨짐 없음 (추가만) |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
+
+### INT-GAME-001 — MovementParams에 최고 속력·가속 수치 추가 요청
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 (D3~D5 회색 박스 작업 창) |
+| 대상 시스템 | `src/contracts/params.ts`의 `MovementParams`, `params/movement.json`, `src/config/validateParams.ts` |
+| 필요한 변경 | `MovementParams`에 ① `maxSpeedMetersPerSecond`(최고 속력, m/s) ② `accelerationSeconds`(정지→최고 속력 도달 시간, 초) 추가. 형식은 기획 판단에 따라 Tunable(범위 포함) 권장 — 조정 범위·판단 기준은 기획(박태현)이 튜닝표(§11.2)에 행 추가 후 확정 |
+| 변경 이유 | 이동 구현에 필수인 속도 스케일이 movement.json·튜닝표에 없음. R7 규칙("수치표 지연 → 임시 기본값 선진행")에 따라 현재 `src/systems/provisionalMovement.ts`에 임시값(최고 속력 10 m/s, 가속 3.0초)으로 선진행 중 — 승인·반영 즉시 해당 파일 삭제 및 주입 경로로 교체 예정. 하드코딩 금지 원칙의 예외 상태를 조기 해소해야 함 |
+| 관련 게이트 | G3, G5, G7 (속도는 이후 소음·탐지의 입력값) |
+| 영향을 받는 파일 | `src/contracts/params.ts`, `params/movement.json`, `src/config/validateParams.ts`, `docs/INTERFACES.md` §3, `src/systems/SubmarinePlayerController.ts`, `src/systems/provisionalMovement.ts`(삭제) |
+| 하위 호환 여부 | 깨짐 없음 (필드 추가 — 기존 두 항목 유지) |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
 
 ### #001 — 초기 계약 정의 (기록용)
 

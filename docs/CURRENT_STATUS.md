@@ -25,14 +25,14 @@
 
 ## 게임플레이
 
-- **완료:** 없음 (D1~D2는 환경 구축 단계)
+- **완료:** D3~D5 조작·심도 — `PlayerController` 구현(`SubmarinePlayerController`: WASD, 잠수함 방향 기준 선회, 정지·가감속 관성, delta time 기반), `DepthSystem` 구현(`LayeredDepthSystem`: 3층 층 단위 이동, Shift/Ctrl, `depthChanged` 발행, 경계 초과 무시), `KeyboardInput`(키 반복 무시·blur/탭 전환 시 키 상태 해제), 조립점 `GameplaySystems`, 결정적 검증 21항목(`src/systems/__verification__/` — `node src/systems/__verification__/run.mjs`, 21/21 통과)
 - **진행 중:** 없음
-- **다음 작업:** D3~D5 — PlayerController(WASD·관성)·DepthSystem(3층)·카메라 조작, `params/movement.json` 수치 주입 사용
-- **차단 문제:** 없음. 수치표 v1(기획, D+3 절대 마감) 미도착 시 현재 params 초기 테스트값으로 선진행 (R7 규칙)
-- **변경된 계약:** 없음
-- **통합 주의사항:** 시스템 구현은 `src/contracts/systems.ts` 인터페이스를 그대로 구현할 것. 소음 값은 noiseChanged 이벤트로만 외부 전달
-- **마지막 업데이트:** D2 (초기화)
-- **담당 브랜치:** (미생성 — `feat/gameplay-*` 예정)
+- **다음 작업:** 카메라 조작(회전·리센터·±60도 — 단계 1 잔여분, 이번 창 범위 제외), INTEGRATION_NOTES INT-GAME-001·INT-GAME-002 리드 결정 후 후속 반영, D6 이후 어뢰·탐지(임시)·폭뢰
+- **차단 문제:** ① core 조립 연결(INT-GAME-002) 전까지 실제 빌드에서 조작 불가 — 리드 결정 필요 ② 최고 속력·가속 수치가 params에 없어 임시 기본값 선진행 중(R7, `src/systems/provisionalMovement.ts`) — INT-GAME-001 결정 필요
+- **변경된 계약:** 없음 (직접 변경 없음 — INTEGRATION_NOTES INT-GAME-001·INT-GAME-002 제안만 등록)
+- **통합 주의사항:** 좌표 규약 — heading은 Y축 요(yaw), heading 0 전진 = -Z, 전진 벡터 = (-sin h, -cos h) → 렌더는 `mesh.rotation.y = headingRadians` 그대로 사용 가능. A=heading 증가(좌), D=감소(우), (-π, π] 정규화. 심도 시작 층은 `cruise`(초기 `depthChanged` 이벤트 없음 — 초기값은 `currentLayer`로 읽을 것). 위치·방향·속도는 `player`의 읽기 전용 상태로 매 프레임 폴링
+- **마지막 업데이트:** D3~D5 (조작·심도 구현 커밋)
+- **담당 브랜치:** `claude/submarine-controls-depth-3wi424` (원격 세션 지정 브랜치 — `feat/gameplay` 역할)
 
 ## 그래픽스
 
