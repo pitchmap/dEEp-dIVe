@@ -34,6 +34,10 @@ CLAUDE.md
 
 - `src/config/` (ParamLoader·validateParams): 계약(`contracts/params.ts`)과 한 몸 —
   **공통 보호에 준함**. 검증 규칙 변경은 리드 승인.
+- `src/world/` (공용 레이아웃 데이터 — startingCanyonLayout 등): 렌더·게임플레이가
+  같은 인스턴스를 소비하는 데이터 모듈 영역 — **공통 보호에 준함**. 내용 교체
+  (정식 블록아웃 반영 등)는 리드 승인 커밋 경유, 로직·시스템 코드 추가 금지
+  (INT-CORE-004).
 - `src/ui/`: 계측 오버레이(현재)는 툴링 소유. 게임 UI(눈 아이콘·붉은 호 등,
   D6 이후)는 게임플레이 소유로 분리한다.
 - `docs/`: 각 역할이 자기 관련 구역 갱신 가능. 단 `deep_dive_master_plan.md`는
