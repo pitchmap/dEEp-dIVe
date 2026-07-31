@@ -22,5 +22,5 @@
 | `04_vertical_slice_spec.md` | 버티컬 슬라이스 사양 확정 대회의 (10개 안건) | 원문 |
 | `05_execution_plan.md` | 실행 계획 확정 대회의 (3차 대회의 — R&R·튜닝표·컷라인) | 원문 |
 | `06_devteam_process.md` | 개발팀 파트 분담·프로세스 소회의 | 원문 |
-| `07_d5_playtest_review.md` | D+5 플레이테스트 리뷰 회의 (4차 대회의) | **원본 미제공 — 자리 표시** (R16) |
-| `08_minor_input_rules.md` | 화면 버튼 · A/D 프로펠러 입력 규칙 소회의 | 원문 |
+| `07_d5_playtest_review.md` | D+5 플레이테스트 리뷰 (4차 대회의 — S 후진·연속 심도·충돌·어뢰 조기 착수) | **요약 재구성** (원문 미보존 — 커밋·INTEGRATION_NOTES 역추적, 원문 확보 시 교체, R16) |
+| `08_minor_input_rules.md` | 화면 버튼 · A/D 프로펠러 입력 규칙 소회의 (AimSystem 단일 진입점) | 원문 |
