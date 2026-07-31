@@ -1,12 +1,5 @@
 {
-  "$comment": "렌더 표현 계층 전용 시각 파라미터 (그래픽스 소유 외부 설정). 게임플레이 밸런스 값이 아니다 — 밸런스는 params/*.json(기획 소유, 튜닝표 관리). 여기 값은 연출·가독성 수치로, 판정·난이도에 영향을 주지 않는다.",
-  "propeller": {
-    "idleSpinRatio": 0.08,
-    "maxSpinRadiansPerSecond": 26,
-    "fullSpinAtSpeedMps": 5,
-    "spinResponseDamping": 3,
-    "reverseThresholdMps": 0.05
-  },
+  "$comment": "렌더 표현 계층 전용 시각 파라미터 (그래픽스 소유 외부 설정). 게임플레이 밸런스 값이 아니다 — 밸런스는 params/*.json(기획 소유, 튜닝표 관리). 프로펠러 공회전 비율은 params/movement.json propellerIdleSpinRatio가 유일한 소스이므로 여기 두지 않는다 (INT-CORE-002).",
   "seaSurface": {
     "waveAmplitude": 0.35,
     "waveTimeScale": 0.8

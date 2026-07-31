@@ -1,13 +1,17 @@
 /**
  * 게임 최상위 조립점.
  *
- * D1~D2 범위: 파라미터 로드·검증, 게임 루프, 상태 머신, 부트스트랩 장면,
- * 성능·로딩 계측만 연결한다. 게임플레이 시스템 구현은 D3 이후 각 파트 소유.
+ * 연결하는 것: 파라미터 로드·검증, 게임 루프, 상태 머신, 장면 관리,
+ * 시스템 등록(SystemRegistry — composeSystems가 유일한 등록 지점),
+ * 성능·로딩 계측. 시스템 구현 자체는 각 파트 소유 영역에 있다.
  */
 
-import { loadParams } from '../config/ParamLoader';
+import { loadParams, onParamsReloaded } from '../config/ParamLoader';
+import type { GameParams } from '../contracts/params';
 import { Renderer } from '../render/Renderer';
-import { BootstrapScene } from '../render/BootstrapScene';
+import { CanyonScene } from '../render/CanyonScene';
+import { CameraInputAdapter } from '../render/CameraInputAdapter';
+import { GameplaySystems } from '../systems/GameplaySystems';
 import { PerformanceOverlay } from '../ui/PerformanceOverlay';
 import { GateMetricRecorder } from '../tools/GateMetricRecorder';
 import { LoadingTimer } from '../tools/LoadingTimer';
@@ -15,6 +19,7 @@ import { EventBus } from './EventBus';
 import { GameLoop } from './GameLoop';
 import { GameStateMachine } from './GameStateMachine';
 import { SceneManager } from './SceneManager';
+import { SystemRegistry } from './SystemRegistry';
 
 /** 성능 샘플 발행 주기 (초) */
 const PERF_SAMPLE_INTERVAL_SECONDS = 1;
@@ -25,6 +30,7 @@ export class Game {
   private readonly bus = new EventBus();
   private readonly stateMachine = new GameStateMachine(this.bus);
   private readonly sceneManager = new SceneManager();
+  private readonly registry = new SystemRegistry();
   private readonly loadingTimer = new LoadingTimer();
   private readonly loop = new GameLoop({
     update: (dt) => this.update(dt),
@@ -58,7 +64,9 @@ export class Game {
     this.container.appendChild(canvas);
 
     this.renderer = new Renderer(canvas);
-    this.sceneManager.setActive(new BootstrapScene(this.renderer));
+    // D+5 회색 박스 장면 — BootstrapScene 별칭은 INT-RENDER-001 승인으로 정리됨
+    const scene = new CanyonScene(this.renderer);
+    this.sceneManager.setActive(scene);
 
     this.recorder = new GateMetricRecorder(this.bus, this.loadingTimer);
     if (PerformanceOverlay.shouldShow()) {
@@ -69,15 +77,57 @@ export class Game {
       });
     }
 
+    this.composeSystems(params, scene);
+    this.registry.initializeAll({
+      bus: this.bus,
+      params,
+      stateMachine: this.stateMachine,
+    });
+
     window.addEventListener('resize', this.handleResize);
     this.handleResize();
 
     this.loop.start();
   }
 
+  /**
+   * 시스템 등록 지점 — 여기가 각 파트 구현체를 조립하는 유일한 자리다.
+   *
+   * 규칙 (docs/ARCHITECTURE.md '시스템 수명주기와 실행 순서'):
+   *  - 실행 순서 = 등록 순서. 아래 그룹 순서를 지킨다:
+   *      ① 입력·조작 (게임플레이: PlayerController, DepthSystem, 카메라)
+   *      ② 판정 (게임플레이: 탐지·어뢰·폭뢰·내구도 — D6 이후)
+   *      ③ AI (리드: DestroyerAI — D6 이후)
+   *      ④ 표현 연동 (렌더 이펙트·UI·오디오 배관 — 이벤트 구독 측)
+   *  - 파트 간 통신은 EventBus로만. 구현체 간 직접 참조(포즈 주입 등)는
+   *    이 composition root에서만 잇는다 — 각 파트 코드끼리는 서로 모른다.
+   *  - params 외 의존성(렌더러·장면 등)은 이 지점에서 생성자 주입한다.
+   *  - src/core는 공통 보호 파일 — 등록 추가는 feat→dev 병합 시 리드가 배선한다.
+   *
+   * D+5 배선 (INT-GAME-002·INT-RENDER-001 승인 반영):
+   *  ① gameplay    — WASD 이동·관성, Shift/Ctrl 심도 3층 (입력·조작)
+   *  ② cameraInput — 마우스 궤도 회전·Space 리센터 (렌더 소유 카메라 입력)
+   *  장면(CanyonScene)은 시스템이 아니라 SceneManager가 관리하며, 잠수함
+   *  포즈는 게임플레이의 읽기 전용 상태를 여기서 1회 주입한다. 렌더는
+   *  판정·이동을 계산하지 않는다.
+   */
+  private composeSystems(params: GameParams, scene: CanyonScene): void {
+    // ① 입력·조작 — 게임플레이. 개발 모드 params 핫리로드는 승인된 로더의
+    //    onParamsReloaded를 주입해 유효 값 교체만 허용한다 (JSON 역기록 없음).
+    const gameplay = new GameplaySystems(this.bus, params, onParamsReloaded);
+    this.registry.register(gameplay);
+
+    // ④ 표현 연동 — 렌더 소유 카메라 입력(회전·리센터). 이동키와 중복 없음.
+    this.registry.register(new CameraInputAdapter(scene.cameraRig));
+
+    // 구현체 간 직접 참조는 composition root에서만: 읽기 전용 포즈 주입.
+    scene.attachPoseSource(gameplay.poseSource);
+  }
+
   stop(): void {
     this.loop.stop();
     window.removeEventListener('resize', this.handleResize);
+    this.registry.disposeAll();
     this.overlay?.dispose();
     this.sceneManager.dispose();
     this.renderer?.dispose();
@@ -91,13 +141,17 @@ export class Game {
     this.sceneManager.resize(width, height);
   };
 
+  /** 프레임 순서: 시스템 시뮬레이션 → 장면(표현) 갱신 → 계측 */
   private update(deltaSeconds: number): void {
+    this.registry.update(deltaSeconds);
     this.sceneManager.update(deltaSeconds);
     this.samplePerformance(deltaSeconds);
   }
 
+  /** 렌더 순서: 3D 장면 → 시스템 render (UI 등 오버레이 계층) */
   private render(): void {
     this.sceneManager.render();
+    this.registry.render();
 
     if (!this.firstRenderDone) {
       this.firstRenderDone = true;

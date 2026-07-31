@@ -11,10 +11,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Node 버전은 프로젝트 전체에서 22 하나로 고정한다
+      # Node 버전의 단일 기준은 .nvmrc — 로컬·CI·배포가 같은 버전을 쓴다
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: '.nvmrc'
           cache: npm
 
       - name: 의존성 설치

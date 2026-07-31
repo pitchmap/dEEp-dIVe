@@ -17,8 +17,11 @@
  */
 
 import * as THREE from 'three';
-import type { ManagedScene } from '../core/SceneManager';
+import { loadParams, onParamsReloaded } from '../config/ParamLoader';
+import type { MovementParams } from '../contracts/params';
 import type { PlayerController } from '../contracts/systems';
+import { meshYawRadians } from '../core/conventions';
+import type { ManagedScene } from '../core/SceneManager';
 import type { Renderer } from './Renderer';
 import { BlobShadow } from './BlobShadow';
 import { CameraRig } from './CameraRig';
@@ -27,16 +30,28 @@ import { Propeller } from './Propeller';
 import { SeaSurface } from './SeaSurface';
 import { XrayFloodingSpike } from './xray/XrayFloodingSpike';
 
-/** 게임플레이가 소유한 포즈 상태의 읽기 전용 부분집합 (contracts/systems.ts) */
+/**
+ * 게임플레이가 소유한 포즈 상태의 읽기 전용 부분집합 (contracts/systems.ts).
+ *
+ *  - `speed`: 정식 signed speed (양수 = 전진 [INT-GAME-004 의미]) —
+ *    프로펠러 회전의 유일한 속도 입력. 렌더는 위치 변화로 속도를 추정하지 않는다.
+ *  - `positionY`: 수직 위치. PlayerController 계약에는 아직 없고(INT-GAME-004
+ *    승인 대기) 구현체 확장 상태로 제공되므로 **선택 필드**로 소비한다 —
+ *    미제공 시 기존 고정 높이로 렌더. 계약 반영 시 필수 필드로 승격한다.
+ */
 export type SubmarinePoseSource = Pick<
   PlayerController,
-  'positionX' | 'positionZ' | 'headingRadians'
->;
+  'positionX' | 'positionZ' | 'headingRadians' | 'speed'
+> & {
+  readonly positionY?: number;
+};
 
 /**
  * 화물선 상태의 읽기 전용 소비 인터페이스 — 이동·격침 '판정'은 게임플레이
- * 소유이며 렌더는 이 상태를 표현만 한다. 공통 계약에 화물선 상태가 아직
- * 없으므로 렌더 측 소비 형태만 정의한다 (정식 계약화 요청: INTEGRATION_NOTES #003).
+ * 소유이며 렌더는 이 상태를 표현만 한다. 정식 화물선 시스템·계약은 D6~D9
+ * 예정이라 아직 없으므로 렌더 측 소비 형태만 정의한다 — 계약 확정 시 이
+ * 인터페이스를 계약 타입으로 교체한다 (INTEGRATION_NOTES INT-RENDER-003,
+ * 명중 이벤트는 INT-GAME-006 ②와 합류 결정 대기).
  */
 export interface CargoShipStateSource {
   readonly positionX: number;
@@ -85,20 +100,27 @@ export class CanyonScene implements ManagedScene {
   private cargoShip: CargoShipVisual | null = null;
   private xraySpike: XrayFloodingSpike | null = null;
 
-  // 실제 전후 속도 파생용 이전 프레임 포즈 (렌더는 위치를 소비만 하고,
-  // 속도는 위치 변화에서 파생한다 — 입력키·판정과 무관)
-  private previousX = 0;
-  private previousZ = 0;
-  private hasPreviousPose = false;
+  // 검증 완료된 이동 파라미터 — 프로펠러(공회전 비율·최고 속력)의 소스.
+  // 핫리로드 통지로 유효한 새 값만 교체된다 (JSON 역기록 없음).
+  private movementParams: MovementParams;
+  private unsubscribeParamsReload: (() => void) | null = null;
 
   // 수면 위/아래 포그 전환 상태
   private cameraAboveSurface = false;
 
-  // ?shipdemo 시연 상태 (렌더 검증용 — 게임플레이 판정 아님)
+  // ?shipdemo — 침몰 '연출 미리보기' 1회 발동 타이머 (렌더 QA 전용).
+  // 이동·판정 시연은 하지 않는다 — 실제 발동은 정식 화물선 상태/이벤트로만.
   private shipDemoEnabled = false;
   private shipDemoElapsed = 0;
 
   constructor(private readonly renderer: Renderer) {
+    // 검증 완료 파라미터 소비 (Game.start에서 이미 로드·검증됨 — 캐시 반환).
+    // JSON → 렌더 단방향. 개발 모드 핫리로드는 유효 값 교체 통지만 받는다.
+    this.movementParams = loadParams().movement;
+    this.unsubscribeParamsReload = onParamsReloaded((params) => {
+      this.movementParams = params.movement;
+    });
+
     this.scene.background = new THREE.Color(WATER_COLOR);
     this.scene.fog = new THREE.Fog(WATER_COLOR, FOG_NEAR, FOG_FAR);
 
@@ -133,7 +155,6 @@ export class CanyonScene implements ManagedScene {
   /** 게임플레이 시스템(PlayerController 구현체) 연결점 — 렌더는 소비만 한다 */
   attachPoseSource(source: SubmarinePoseSource): void {
     this.poseSource = source;
-    this.hasPreviousPose = false;
   }
 
   /** 화물선 상태(게임플레이 소유) 연결점 — 미연결 시 정지 표적으로 렌더 */
@@ -148,26 +169,23 @@ export class CanyonScene implements ManagedScene {
 
   update(deltaSeconds: number): void {
     const x = this.poseSource?.positionX ?? 0;
+    // 수직 위치 — 계약 반영(INT-GAME-004) 전까지 선택 필드. 미제공 시 고정 높이
+    const y = this.poseSource?.positionY ?? SUBMARINE_Y;
     const z = this.poseSource?.positionZ ?? 0;
     const heading = this.poseSource?.headingRadians ?? 0;
 
-    this.submarine.position.set(x, SUBMARINE_Y, z);
-    this.submarine.rotation.y = heading;
-    this.blobShadow.follow(x, z);
-    this.rig.update(deltaSeconds, x, SUBMARINE_Y, z, heading);
+    this.submarine.position.set(x, y, z);
+    this.submarine.rotation.y = meshYawRadians(heading);
+    this.blobShadow.follow(x, z); // 블롭 섀도는 해저 투영 — 수직 이동과 무관
+    this.rig.update(deltaSeconds, x, y, z, heading);
 
-    // 실제 전후 속도(m/s) 파생 — 위치 변화를 선수 방향(-Z 로컬)에 사영한다.
-    // A/D 단독 선회는 위치가 변하지 않으므로 0 → 프로펠러는 공회전만 한다.
-    let forwardSpeed = 0;
-    if (this.hasPreviousPose && deltaSeconds > 0) {
-      const vx = (x - this.previousX) / deltaSeconds;
-      const vz = (z - this.previousZ) / deltaSeconds;
-      forwardSpeed = vx * -Math.sin(heading) + vz * -Math.cos(heading);
-    }
-    this.previousX = x;
-    this.previousZ = z;
-    this.hasPreviousPose = true;
-    this.propeller.update(deltaSeconds, forwardSpeed);
+    // 프로펠러: 정식 signed speed(양수 = 전진)만 사용 — 위치 변화 추정 금지.
+    // A/D 단독 선회는 speed에 영향이 없으므로(게임플레이 S7) 회전에도 없다.
+    this.propeller.update(
+      deltaSeconds,
+      this.poseSource?.speed ?? 0,
+      this.movementParams,
+    );
 
     this.seaSurface.update(deltaSeconds);
     this.updateCargoShip(deltaSeconds);
@@ -204,6 +222,8 @@ export class CanyonScene implements ManagedScene {
   }
 
   dispose(): void {
+    this.unsubscribeParamsReload?.();
+    this.unsubscribeParamsReload = null;
     this.xraySpike?.dispose();
     this.xraySpike = null;
     this.cargoShip?.removeAndDispose();
@@ -324,9 +344,12 @@ export class CanyonScene implements ManagedScene {
   }
 
   /**
-   * 화물선 임시 표적 — 수면 흘수선에 맞춰 배치. 이동·격침 상태는
-   * attachCargoShipSource(게임플레이 소유)에서 오며, 미연결 시 정지 표적.
-   * `?shipdemo` 플래그는 렌더 검증용 시연 구동만 켠다 (판정 아님).
+   * 화물선 임시 표적 — 수면 흘수선에 맞춰 배치.
+   *
+   * 이동·피격·격침 상태는 정식 화물선 시스템(게임플레이 D6~D9)의 상태를
+   * attachCargoShipSource로 주입받아 소비한다 — 렌더는 이동 로직·판정을
+   * 만들지 않는다 (미연결 시 정지 표적, INT-RENDER-003).
+   * `?shipdemo`는 침몰 '연출 미리보기' 1회 발동만 하는 렌더 QA 플래그다.
    */
   private buildCargoShip(): void {
     this.cargoShip = new CargoShipVisual(SEA_SURFACE_Y);
@@ -341,6 +364,7 @@ export class CanyonScene implements ManagedScene {
     if (!ship) return;
 
     if (this.cargoShipSource) {
+      // 정식 상태 소비 — 이동은 게임플레이 값 그대로, 격침은 상태 통지로 시작
       ship.setPose(
         this.cargoShipSource.positionX,
         this.cargoShipSource.positionZ,
@@ -350,13 +374,9 @@ export class CanyonScene implements ManagedScene {
         ship.triggerSink();
       }
     } else if (this.shipDemoEnabled) {
-      // 렌더 검증용 시연: 수로 위 왕복 항해, 15초 후 격침 연출 확인
+      // 연출 미리보기: 15초 후 침몰 연출 1회 발동 (이동·판정 시연 없음)
       this.shipDemoElapsed += deltaSeconds;
-      const t = this.shipDemoElapsed;
-      const x = -7 + 12 * Math.sin(t * 0.25);
-      const movingPositiveX = Math.cos(t * 0.25) >= 0;
-      ship.setPose(x, -30, movingPositiveX ? -Math.PI / 2 : Math.PI / 2);
-      if (t > 15) {
+      if (this.shipDemoElapsed > 15) {
         ship.triggerSink();
       }
     }

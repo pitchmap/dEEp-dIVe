@@ -13,6 +13,7 @@
 | `depthChanged` | DepthSystem | layer | 렌더(포그), 탐지, UI | 층 이동 완료 시 | 최상/최하층 초과 요청은 무시(이벤트 없음) |
 | `noiseChanged` | 소음 산출(게임플레이) | level 0~1 | 탐지·파문(렌더)·엔진음(오디오) | 값 변경 시 | 0~1 범위 밖 값 발행 금지(발행측 책임) |
 | `detectionChanged` | DetectionSystem | gauge 0~1, stage | AI, 눈 아이콘 UI | 값·단계 변경 시 | — |
+| `aimModeChanged` | AimSystem | aiming | 렌더(조준 중 카메라 고정 §3.2), UI(조준 표시) | 조준 뷰 진입·해제 시 | — |
 | `torpedoFired` | TorpedoSystem | originX, originZ | DetectionSystem(발사 지점 무조건 노출), 오디오, 렌더 | 발사 순간 | 잔량 0·재장전 중이면 fire()가 false, 이벤트 없음 |
 | `depthChargeEnteredWater` | DepthChargeSystem | id, x, z, fuseSeconds | 오디오(입수음 패닝), UI(붉은 호) | 입수 순간 | — |
 | `depthChargeExploded` | DepthChargeSystem | id, x, z | 오디오, 렌더(폭발), HullSystem 연계 | 신관 만료 시 | 타이밍 주인은 판정 로직 — 오디오는 동기화만 |
@@ -27,6 +28,7 @@
 | `PlayerController` | 게임플레이 | WASD 입력, movement.json | positionX/Z, headingRadians, speed | (소음 산출 경유 noiseChanged) | 매 프레임 update | 입력 없음 = 관성 감속 |
 | `DepthSystem` | 게임플레이 | Shift/Ctrl, detection.json 보정 | currentLayer | depthChanged | 매 프레임 + 요청 시 | 범위 밖 층 요청 무시 |
 | `DetectionSystem` ★허브 | 게임플레이 | reportNoise, reportTorpedoLaunch, 거리·심도·엄폐 | gauge, stage | detectionChanged | 매 프레임 | 임시→본 구현 교체 시 인터페이스 불변 [확정] |
+| `AimSystem` | 게임플레이 | beginAim/endAim/fireTorpedo — **마우스·HUD 버튼 공용 진입점** (별도 전투 시스템 금지, 어댑터 연결은 composition root) | aiming | aimModeChanged | 매 프레임 + 입력 시 | 잠망경 심도 아니면 beginAim false / 조준 중 아니면 fireTorpedo false (throw 금지) |
 | `TorpedoSystem` | 게임플레이 | fire(), combat.json | remaining, reloadRemainingSeconds | torpedoFired | 매 프레임 + 발사 시 | 불가 시 false 반환 (throw 금지) |
 | `DepthChargeSystem` | 게임플레이 | AI 투하 명령, combat.json | activeCount | depthChargeEnteredWater/Exploded | 매 프레임 | 동시 수 상한 초과 투하는 거부 |
 | `DestroyerAI` | 리드 | detectionChanged, notifyLastKnownPosition | state (patrol/alert/attack/lost) | (폭뢰 시스템 호출) | 매 프레임 | VS는 alert·attack 2상태 우선 [확정] |
@@ -38,7 +40,7 @@
 
 | 파일 | 소유자 | 내용 | 검증 |
 |---|---|---|---|
-| `params/movement.json` | 기획 | 정지 관성 1.5s [0.5~2.0], 90도 선회 2.0s [1.0~3.0] | 범위 밖 → 로드 거부 |
+| `params/movement.json` | 기획 | 정지 관성 1.5s [0.5~2.0], 90도 선회 2.0s [1.0~3.0], 최고 속력 10m/s·가속 3.0s (임시 초기 테스트값 — 조정 범위는 기획 튜닝표 확정 대기, INT-GAME-001), 프로펠러 공회전 비율 0.08 (연출 파라미터, INT-CORE-002) | 범위 밖 → 로드 거부. 속력·가속은 양수·유한, 공회전 비율은 0~1 검증 |
 | `params/detection.json` | 기획 | 게이지 만충 8s [5~15], 심도 3층 보정, 침묵 항행 배율 | 4층 이상 추가 → 거부 |
 | `params/combat.json` | 기획 | 어뢰 3발·재장전 20s [10~30], 신관 3.0s [3.0~4.0 하한 고정], 동시 폭뢰 4 [2~6], 밀려남 8m [4~15] | 신관 하한 <3.0 → 거부 |
 | `params/crew.json` | 기획 | 4인 쿨다운 [30~120], 어뢰수 재장전 20→8s [5~12] | 5인째 추가 → 거부 |
