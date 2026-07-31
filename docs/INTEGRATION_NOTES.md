@@ -23,7 +23,7 @@
 
 ## 제안 목록
 
-### #002 — Node 버전 고정(engines)·ParamLoader 핫리로드 내부 교체
+### INT-TOOL-001 — Node 버전 고정(engines)·ParamLoader 핫리로드 내부 교체
 
 | 필드 | 내용 |
 |---|---|
@@ -35,7 +35,20 @@
 | 영향을 받는 파일 | package.json, .nvmrc(신규), .npmrc(신규), src/config/ParamLoader.ts, .github/workflows/ci.yml |
 | 하위 호환 여부 | 유지 — `loadParams()` 시그니처·검증 동작 불변. Node 20 로컬 환경은 engine-strict로 차단됨(의도) |
 | 개발 리드 결정 | **확인 대기** — 작업 지시에 따라 선반영, D+5 통합 리뷰에서 승인 확인 요청 |
-| 적용 커밋 | (이 브랜치의 단계 0 툴링 커밋) |
+| 적용 커밋 | `5b33dec` |
+### INT-CORE-001 — 시스템 수명주기(GameSystem)·등록 구조(SystemRegistry) 도입 (기록용)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (D3, D+5 회색 박스 통합 준비) |
+| 대상 시스템 | `src/core/GameSystem.ts`(신규), `src/core/SystemRegistry.ts`(신규), `src/core/Game.ts`(등록 지점·프레임 순서 배선) |
+| 필요한 변경 | 시스템 수명주기 계약(id·initialize·update·render?·dispose)과 등록 구조. 실행 순서 = 등록 순서, 유일한 등록 지점은 `Game.composeSystems()` |
+| 변경 이유 | D+5부터 각 파트 구현체를 dev에 병합·조립할 공통 구조 필요. 파트 간 직접 참조 없이(EventBus만) 등록·해제 가능해야 함 |
+| 관련 게이트 | 직접 해당 없음 (아키텍처) |
+| 영향을 받는 파일 | `src/core/*` (리드 소유·공통 보호). **`src/contracts/*` 변경 없음** — `Updatable`을 상속만 함 |
+| 하위 호환 여부 | 기존 계약·구현 영향 없음 (추가만) |
+| 개발 리드 결정 | 승인 — 수명주기는 계약이 아닌 core 아키텍처로 두고, 계약 3종은 그대로 유지 |
+| 적용 커밋 | `22f2d15` |
 
 ### #001 — 초기 계약 정의 (기록용)
 
