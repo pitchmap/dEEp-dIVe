@@ -47,9 +47,19 @@ export interface GameEvents {
   /** 탐지 게이지 값·단계 변경 시 (발행: DetectionSystem) */
   detectionChanged: { gauge: number; stage: DetectionStage };
 
+  /** 조준 뷰 진입·해제 시 (발행: AimSystem — 마우스·HUD 버튼 공용 진입점).
+   *  구독: 렌더(조준 중 카메라 고정 §3.2), UI(조준 표시) */
+  aimModeChanged: { aiming: boolean };
+
   /** 어뢰 발사 순간. 발사 지점(수평면 좌표)은 구축함의
    *  '마지막 목격 위치'로 무조건 기록된다 (§5.10 확정 규칙) */
   torpedoFired: { originX: number; originZ: number };
+
+  /** 어뢰 명중 순간 (발행: 게임플레이 명중 판정 — 타이밍의 주인).
+   *  targetId는 CargoShipStateSource.id와 동일 체계. x/z는 명중 위치(수평면).
+   *  구독: 렌더(폭발·침몰 연출 트리거), 오디오(아케이드식 과장 폭발음 §4.4),
+   *  UI(격침 기록), 격침 보상 어뢰 +1(§5.9)의 게임플레이 진입점 */
+  torpedoHit: { targetId: number; x: number; z: number };
 
   /** 폭뢰 입수 순간 — '풍덩→3초→폭발' 시그니처 리듬의 시작점.
    *  사운드(입수음 패닝)와 판정 타이머가 이 이벤트에 동기화된다 */

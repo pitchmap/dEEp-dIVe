@@ -28,8 +28,33 @@ export interface PlayerController extends Updatable {
   readonly positionZ: number;
   /** 잠수함 기준 선회 — 카메라 기준이 아님 [확정] */
   readonly headingRadians: number;
-  /** 현재 속력 (m/s). 소음 산출의 입력값 */
+  /** 현재 속력 크기 (m/s, 비부호 = |forwardSpeedMetersPerSecond|). 소음 산출의 입력값 */
   readonly speed: number;
+}
+
+/**
+ * 잠수함 포즈 — 표현 계층(렌더 장면·카메라·프로펠러·블롭 섀도)이 소비하는
+ * 읽기 전용 상태의 **정식 계약** (INT-CORE-003).
+ *
+ * 규칙:
+ *  - 소유는 게임플레이 — PlayerController 구현체가 이 계약을 함께 구현해
+ *    poseSource로 노출하고, composition root(core/Game)가 렌더에 1회 주입한다.
+ *  - 렌더는 소비만 한다 — 위치 변화(전 프레임 차분)로 속도를 **재계산하지
+ *    않는다.** 프로펠러의 속도 입력은 forwardSpeedMetersPerSecond 하나다.
+ *  - 축·부호 기준은 core/conventions.ts (로컬 -Z = 선수).
+ */
+export interface SubmarinePoseSource {
+  readonly positionX: number;
+  /** 월드 Y — 심도 층 전환 보간 포함. 렌더는 상수 높이 대신 이 값을 사용한다 */
+  readonly positionY: number;
+  readonly positionZ: number;
+  /** Y축(위) 기준 요 각 — mesh.rotation.y에 그대로 대입 (conventions 규약) */
+  readonly headingRadians: number;
+  /**
+   * 부호 있는 전후 속도 (m/s): + = 선수 방향(전진) / − = 선미 방향(후진).
+   * 프로펠러 회전은 반드시 이 값과 conventions.propellerSpinRatio()로 계산한다.
+   */
+  readonly forwardSpeedMetersPerSecond: number;
 }
 
 /** 심도 3층 전환 — 층 단위 이동, 연속 심도 금지 (§3.4, §5.3) */
@@ -57,6 +82,31 @@ export interface DetectionSystem extends Updatable {
   reportTorpedoLaunch(x: number, z: number): void;
 }
 
+/**
+ * 조준 — 마우스와 PC 화면(HUD) 조준·발사 버튼의 **공용 진입점** (§5.8).
+ *
+ * 확정 규칙 (D+5 리뷰 후속 소회의, INT-CORE-002):
+ *  - 별도 전투 시스템을 만들지 않는다 — 입력 소스(마우스 우클릭·HUD 버튼)가
+ *    무엇이든 전부 이 하나의 AimSystem 메서드를 호출한다.
+ *  - 입력 어댑터와 이 시스템의 연결은 composition root(core/Game.composeSystems)
+ *    에서만 잇는다 — UI·입력 코드가 게임플레이 구현체를 직접 import하지 않는다.
+ *  - 조준 뷰 카메라 고정(§3.2)은 렌더가 aimModeChanged 이벤트 구독으로 처리한다.
+ * 구현은 게임플레이 소유(D6 이후). 수동 조준 + 리드샷 보조선이 기본 [확정].
+ */
+export interface AimSystem extends Updatable {
+  /** 조준 뷰 활성 여부 (읽기 전용 상태) */
+  readonly aiming: boolean;
+  /** 조준 시작. 잠망경 심도가 아니면 거부하고 false (§3.4 — 조준은 잠망경 심도만) */
+  beginAim(): boolean;
+  /** 조준 종료 — 발사 없이 해제하는 경우 포함 */
+  endAim(): void;
+  /**
+   * 발사 요청. 조준 중이 아니거나 TorpedoSystem이 거부(잔량 0·재장전 중)하면
+   * false. 성공 시 torpedoFired 이벤트 발행은 TorpedoSystem 책임이다.
+   */
+  fireTorpedo(): boolean;
+}
+
 /** 어뢰 — 수동 조준 + 리드샷 보조선이 기본 (§5.8). 수치는 params/combat.json */
 export interface TorpedoSystem extends Updatable {
   readonly remaining: number;
@@ -64,6 +114,37 @@ export interface TorpedoSystem extends Updatable {
   readonly reloadRemainingSeconds: number;
   /** 발사 성공 여부 반환 (잔량 0 또는 재장전 중이면 false) */
   fire(): boolean;
+}
+
+/**
+ * 화물선 상태 — 게임플레이(판정 소유)가 공급하고 렌더(CargoShipVisual)·
+ * 표적 관리(TargetRegistry)·UI가 소비하는 읽기 전용 **정식 계약** (INT-CORE-003).
+ *
+ * 규칙:
+ *  - VS는 화물선 1척 [확정 §12.2 동시 적 상한] — 컬렉션이 아닌 단일 상태.
+ *  - 명중 판정·침몰 시간축의 주인은 게임플레이다 ('판정이 타이밍의 주인' 원칙).
+ *    렌더는 sinkProgress를 소비해 기울기·하강·폭발을 **매핑만** 하고
+ *    자체 침몰 타이머를 돌리지 않는다.
+ *  - 연결은 composition root에서 1회 주입 (렌더가 게임플레이를 import 금지).
+ */
+export interface CargoShipStateSource {
+  /** 표적 식별자 — torpedoHit 이벤트의 targetId와 동일 체계 */
+  readonly id: number;
+  readonly positionX: number;
+  /** 수면 흘수선 기준 판정 위치 — 침몰 연출 변위(하강)는 렌더가 sinkProgress로 매핑 */
+  readonly positionY: number;
+  readonly positionZ: number;
+  /** 선수·선미 축 규약은 잠수함과 동일 (로컬 -Z = 선수, conventions) */
+  readonly headingRadians: number;
+  /** 월드 XZ 속도 (m/s) — 리드샷 보조선(§5.8)의 입력값 */
+  readonly velocityX: number;
+  readonly velocityZ: number;
+  /** 명중 통지 — torpedoHit 이벤트 발행과 동시에 true, 이후 불변 (1발 격침 §5.9) */
+  readonly hit: boolean;
+  /** 침몰 진행 0(미침몰)~1(완료) — 시간축 소유는 게임플레이 */
+  readonly sinkProgress: number;
+  /** 시뮬레이션에서 제거됨 — 렌더는 이 신호로 시각 자원을 정리한다 */
+  readonly removed: boolean;
 }
 
 /** 폭뢰 — 입수→신관(3.0초 하한 고정)→폭발 판정의 주인 (§5.12~5.13) */
