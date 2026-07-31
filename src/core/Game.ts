@@ -1,11 +1,13 @@
 /**
  * 게임 최상위 조립점.
  *
- * D1~D2 범위: 파라미터 로드·검증, 게임 루프, 상태 머신, 부트스트랩 장면,
- * 성능·로딩 계측만 연결한다. 게임플레이 시스템 구현은 D3 이후 각 파트 소유.
+ * 연결하는 것: 파라미터 로드·검증, 게임 루프, 상태 머신, 장면 관리,
+ * 시스템 등록(SystemRegistry — composeSystems가 유일한 등록 지점),
+ * 성능·로딩 계측. 시스템 구현 자체는 각 파트 소유 영역에 있다.
  */
 
 import { loadParams } from '../config/ParamLoader';
+import type { GameParams } from '../contracts/params';
 import { Renderer } from '../render/Renderer';
 import { BootstrapScene } from '../render/BootstrapScene';
 import { PerformanceOverlay } from '../ui/PerformanceOverlay';
@@ -15,6 +17,7 @@ import { EventBus } from './EventBus';
 import { GameLoop } from './GameLoop';
 import { GameStateMachine } from './GameStateMachine';
 import { SceneManager } from './SceneManager';
+import { SystemRegistry } from './SystemRegistry';
 
 /** 성능 샘플 발행 주기 (초) */
 const PERF_SAMPLE_INTERVAL_SECONDS = 1;
@@ -25,6 +28,7 @@ export class Game {
   private readonly bus = new EventBus();
   private readonly stateMachine = new GameStateMachine(this.bus);
   private readonly sceneManager = new SceneManager();
+  private readonly registry = new SystemRegistry();
   private readonly loadingTimer = new LoadingTimer();
   private readonly loop = new GameLoop({
     update: (dt) => this.update(dt),
@@ -69,15 +73,43 @@ export class Game {
       });
     }
 
+    this.composeSystems(params);
+    this.registry.initializeAll({
+      bus: this.bus,
+      params,
+      stateMachine: this.stateMachine,
+    });
+
     window.addEventListener('resize', this.handleResize);
     this.handleResize();
 
     this.loop.start();
   }
 
+  /**
+   * 시스템 등록 지점 — 여기가 각 파트 구현체를 조립하는 유일한 자리다.
+   *
+   * 규칙 (docs/ARCHITECTURE.md '시스템 수명주기와 실행 순서'):
+   *  - 실행 순서 = 등록 순서. 아래 그룹 순서를 지킨다:
+   *      ① 입력·조작 (게임플레이: PlayerController, DepthSystem, 카메라)
+   *      ② 판정 (게임플레이: 탐지·어뢰·폭뢰·내구도 — D6 이후)
+   *      ③ AI (리드: DestroyerAI — D6 이후)
+   *      ④ 표현 연동 (렌더 이펙트·UI·오디오 배관 — 이벤트 구독 측)
+   *  - 파트 간 의존은 EventBus로만. 구현체 간 직접 참조를 여기서 잇지 않는다.
+   *  - params 외 의존성(렌더러 등)은 이 지점에서 생성자 주입한다.
+   *  - src/core는 공통 보호 파일 — 등록 추가는 feat→dev 병합 시 리드가 배선한다.
+   *
+   * D3~D5 현재: 등록할 구현체가 아직 없다 (각 파트 feat 브랜치 작업 중).
+   * 3D 장면(회색 박스 블록아웃)은 시스템이 아니라 SceneManager가 관리한다.
+   */
+  private composeSystems(_params: GameParams): void {
+    // (D+5 통합 시 여기서 registry.register(...) 순서대로 배선)
+  }
+
   stop(): void {
     this.loop.stop();
     window.removeEventListener('resize', this.handleResize);
+    this.registry.disposeAll();
     this.overlay?.dispose();
     this.sceneManager.dispose();
     this.renderer?.dispose();
@@ -91,13 +123,17 @@ export class Game {
     this.sceneManager.resize(width, height);
   };
 
+  /** 프레임 순서: 시스템 시뮬레이션 → 장면(표현) 갱신 → 계측 */
   private update(deltaSeconds: number): void {
+    this.registry.update(deltaSeconds);
     this.sceneManager.update(deltaSeconds);
     this.samplePerformance(deltaSeconds);
   }
 
+  /** 렌더 순서: 3D 장면 → 시스템 render (UI 등 오버레이 계층) */
   private render(): void {
     this.sceneManager.render();
+    this.registry.render();
 
     if (!this.firstRenderDone) {
       this.firstRenderDone = true;

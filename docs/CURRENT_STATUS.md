@@ -8,14 +8,20 @@
 
 ## 개발 리드
 
-- **완료:** D1~D2 환경 구축 검수 — 저장소 구조, core 골격(루프·상태 머신·EventBus·SceneManager), 계약 3종(events/systems/params) 정의
+- **완료:**
+  - D1~D2 환경 구축 검수 — 저장소 구조, core 골격(루프·상태 머신·EventBus·SceneManager), 계약 3종(events/systems/params) 정의
+  - D3 — 시스템 등록 구조 구현: `GameSystem` 수명주기(id·initialize·update·render?·dispose) + `SystemRegistry`(실행 순서 = 등록 순서, dispose 역순) + `Game.composeSystems()` 등록 지점·프레임 순서 배선 (INTEGRATION_NOTES #002, ARCHITECTURE.md '시스템 실행 순서' 참조)
 - **진행 중:** 없음
-- **다음 작업:** D3 — 상태 머신 전환 조건 골격, DetectionSystem 임시/본 구현 교체 설계, 구축함 AI 착수 준비
+- **다음 작업:** D+5 통합 — 각 파트 feat 브랜치 구현체를 composeSystems에 배선해 dev 병합, 회색 박스 빌드 산출. 이후 D6 구축함 AI 착수
 - **차단 문제:** 없음
-- **변경된 계약:** 초기 정의 (이후 변경은 INTEGRATION_NOTES 경유)
-- **통합 주의사항:** `src/contracts/*`는 공통 보호 파일 — 직접 수정 금지, 제안은 INTEGRATION_NOTES로
-- **마지막 업데이트:** D2 (저장소 부트스트랩 커밋)
-- **담당 브랜치:** `claude/deep-dive-bootstrap-6wrpuw` (부트스트랩) → 이후 `feat/lead-*`
+- **변경된 계약:** 없음 — `src/contracts/*` 무변경 (GameSystem은 core 아키텍처, `Updatable` 상속만)
+- **통합 주의사항:**
+  - 각 파트는 자기 소유 영역에서 `GameSystem`(`src/core/GameSystem.ts`) 구현체를 export하고, 이 문서 자기 구역에 등록 요청을 남긴다. `src/core` 배선은 feat→dev 병합 시 리드가 수행
+  - 파트 간 통신은 EventBus만 — composeSystems에서 구현체 간 직접 참조를 잇지 않는다
+  - 3D 장면(회색 박스 블록아웃)은 시스템이 아니라 `ManagedScene`으로 SceneManager에 등록
+  - 상태 전환(GameStateMachine)과 장면 전환(SceneManager)은 분리 — 자동 매핑 없음
+- **마지막 업데이트:** D3 (시스템 등록 구조 커밋)
+- **담당 브랜치:** `claude/deep-dive-core-lead-uyg77p` (이 세션의 리드 작업 브랜치 — `feat/core` 상당)
 
 ## 게임플레이
 
@@ -68,7 +74,7 @@
 | 단계 | 기간 | 상태 |
 |---|---|---|
 | 0. 환경 구축 | D1~D2 | ✅ 저장소·골격·계측 완료 / ⚠ 배포 URL 미확보 |
-| 1. 회색 박스 | D3~D5 | 대기 |
+| 1. 회색 박스 | D3~D5 | 🔄 진행 중 — 리드: 시스템 등록 구조 완료 / 조작·블록아웃: 각 파트 대기 |
 | 2. 코어 전투 루프 | D6~D9 | 대기 |
 | 3. 은신·탐지 | D10~D12 | 대기 |
 | 4. 연출 적용 | D13~D14 | 대기 |
