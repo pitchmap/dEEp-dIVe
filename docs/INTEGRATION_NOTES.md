@@ -63,7 +63,7 @@
 | 영향을 받는 파일 | `src/core/Game.ts` (구현: `src/systems/GameplaySystems.ts` — 변경 불요) |
 | 하위 호환 여부 | 깨짐 없음 (추가만) |
 | 개발 리드 결정 | 승인 (D+5 통합) — 단 직접 호출 대신 INT-CORE-001 구조를 따른다: `GameplaySystems`가 `GameSystem`(id `gameplay`)을 구현하고 `composeSystems()`에서 registry 등록. 입력 연결·해제는 initialize/dispose 수명주기로 이동 |
-| 적용 커밋 | (D+5 통합 커밋) |
+| 적용 커밋 | `6f83268` |
 
 ### INT-GAME-001 — MovementParams에 최고 속력·가속 수치 추가 요청
 
@@ -77,7 +77,7 @@
 | 영향을 받는 파일 | `src/contracts/params.ts`, `params/movement.json`, `src/config/validateParams.ts`, `docs/INTERFACES.md` §3, `src/systems/SubmarinePlayerController.ts`, `src/systems/provisionalMovement.ts`(삭제) |
 | 하위 호환 여부 | 깨짐 없음 (필드 추가 — 기존 두 항목 유지) |
 | 개발 리드 결정 | 승인 (D+5 통합) — 형식은 `FixedNumber`(양수·유한 검증). 조정 범위(Tunable 전환)는 근거 없는 범위를 만들지 않기 위해 기획(박태현)이 튜닝표 행·판단 기준을 확정한 뒤에 한다. 값 자체는 임시값 그대로 이관(밸런스 변경 아님) — TUNING_LOG 기록 |
-| 적용 커밋 | (D+5 통합 커밋) |
+| 적용 커밋 | `6f83268` |
 
 ### INT-RENDER-001 — 회색 박스 장면 조립·연결 (core/Game.ts 정리 요청)
 
@@ -91,7 +91,7 @@
 | 영향을 받는 파일 | `src/core/Game.ts`, `src/render/BootstrapScene.ts`(삭제 예정), `src/render/CanyonScene.ts`, (②는 게임플레이 구현 파일) |
 | 하위 호환 여부 | 깨지지 않음 — 별칭 재수출로 현 시그니처가 유지되고 있어 승인 전에도 빌드·실행 정상. 포즈 미주입 시 잠수함은 원점 정지 렌더 |
 | 개발 리드 결정 | 승인 (D+5 통합) — ① CanyonScene 직접 임포트·별칭 파일 삭제 반영 ② `composeSystems()`에서 `attachPoseSource(gameplay.poseSource)` 반영 ③ 카메라 입력 책임은 게임플레이가 아니라 **그래픽스**로 확정 조정: `src/render/CameraInputAdapter.ts`(마우스 회전·Space 리센터)가 rig를 호출한다 — 게임플레이는 Three.js 카메라를 참조하지 않음 ④ EventBus 접근은 D6 이후 필요 시점에 재논의 (지금 배선하지 않음 — 스텁 금지) |
-| 적용 커밋 | (D+5 통합 커밋) |
+| 적용 커밋 | `6f83268` |
 
 ### #001 — 초기 계약 정의 (기록용)
 
