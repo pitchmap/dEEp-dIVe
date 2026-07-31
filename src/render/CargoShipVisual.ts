@@ -1,23 +1,24 @@
 /**
  * 화물선 시각 오브젝트 — 로우폴리 임시 모델 (최종 모델 D+8 임포트 시 교체).
  *
- * 경계 (prompts/GRAPHICS.md — 판정 계산 금지):
- *  - 이동·피격·격침 '판정'은 게임플레이 소유다. 이 클래스는 게임플레이가
- *    제공하는 상태(위치·방향·격침 여부)를 setPose()/triggerSink()로 받아
- *    표현만 한다. 여기서 명중 여부·피해량을 계산하지 않는다.
- *  - 선수·선미 규약은 잠수함과 동일: 로컬 -Z = 선수, +Z = 선미.
+ * 정식 계약 소비 (INT-CORE-003):
+ *  - 이동·명중·침몰 시간축의 주인은 게임플레이(CargoShipSystem)다. 이 클래스는
+ *    계약 `CargoShipStateSource`(contracts/systems.ts)의 상태를 `applyState`로
+ *    받아 **매핑만** 한다 — 자체 이동·왕복 경로·침몰 타이머를 만들지 않는다.
+ *  - `sinkProgress`(0~1)를 기울기·하강 변위로 매핑한다. 매핑 상수(깊이·기울기)는
+ *    renderVisualParams.json의 순수 연출값이다.
+ *  - 폭발은 `torpedoHit` 이벤트(또는 상태 `hit`)로 시작되는 1회성 연출이다 —
+ *    `startHitExplosion()`은 멱등이라 이벤트·상태 경로가 겹쳐도 1회만 발동한다.
+ *  - `removed` 신호는 장면이 보고 `removeAndDispose()`를 호출한다.
  *
- * 명중·침몰 연출 (최소 구현 [확정 — 정밀 유체 침몰 제외]):
- *  - triggerSink() 1회 호출 → 간단한 폭발(자발광 구체 확장·소멸, 조명 추가 없음)
- *    → 선체가 기울며 가라앉음 → 완료 시 isFinished = true.
- *  - 장면이 isFinished를 보고 removeAndDispose()로 시각 리소스를 정리한다.
- *  - 연출 수치는 renderVisualParams.json(렌더 소유 외부 설정)에서 읽는다.
- *
- * 수중 실루엣: 흘수(약 2.2m) 아래 선체가 어두운 색으로 수면 밑에 잠겨 있어,
- * 수중에서 위를 보면 밝은 해수면을 배경으로 발견된다.
+ * 선수·선미 규약은 잠수함과 동일: 로컬 -Z = 선수 (core/conventions).
+ * 수중 실루엣: 흘수(약 2.2m) 아래 선체가 수면 밑에 잠겨, 수중에서 위를 보면
+ * 밝은 해수면을 배경으로 발견된다.
  */
 
 import * as THREE from 'three';
+import type { CargoShipStateSource } from '../contracts/systems';
+import { meshYawRadians } from '../core/conventions';
 import visualParams from './renderVisualParams.json';
 
 const PARAMS = visualParams.cargoShip;
@@ -30,23 +31,20 @@ const HULL_BEAM = 5;
 const DRAFT = 2.2;
 /** 폭발 시작 스케일 — 선체 안에 가려지지 않는 최소 크기 (시각 상수) */
 const EXPLOSION_START_SCALE = 3;
+/** 침몰 기울기가 최대에 도달하는 진행률 지점 (연출 매핑 상수) */
+const TILT_FULL_AT_PROGRESS = 0.625;
 
 export class CargoShipVisual {
   readonly root = new THREE.Group();
 
-  /** 침몰 연출 종료 여부 — 장면이 이 값을 보고 정리한다 */
-  isFinished = false;
-
   private readonly disposables: Array<{ dispose(): void }> = [];
   private readonly explosion: THREE.Mesh;
   private readonly explosionMaterial: THREE.MeshBasicMaterial;
-  private sinkElapsed = -1; // 음수 = 침몰 미시작
-  private baseY: number;
+  private explosionStarted = false;
+  private explosionElapsed = 0;
   private disposed = false;
 
-  constructor(waterlineY: number) {
-    this.baseY = waterlineY;
-
+  constructor() {
     const hullMaterial = new THREE.MeshLambertMaterial({
       color: 0x2a3940,
       flatShading: true,
@@ -56,7 +54,7 @@ export class CargoShipVisual {
       flatShading: true,
     });
 
-    // 선체 — 중심이 수면에 오도록 배치해 흘수(DRAFT)만큼 수면 아래로 잠긴다
+    // 선체 — 그룹 원점이 흘수선(계약 positionY)에 오도록 배치
     const hullGeometry = new THREE.BoxGeometry(HULL_BEAM, HULL_HEIGHT, HULL_LENGTH);
     const hull = new THREE.Mesh(hullGeometry, hullMaterial);
     hull.position.y = HULL_HEIGHT / 2 - DRAFT;
@@ -104,58 +102,58 @@ export class CargoShipVisual {
       explosionGeometry,
       this.explosionMaterial,
     );
-
-    this.root.position.y = waterlineY;
   }
 
-  /** 게임플레이 제공 상태 반영 — 침몰 시작 후에는 연출이 위치 Y·기울기를 소유 */
-  setPose(x: number, z: number, headingRadians: number): void {
-    this.root.position.x = x;
-    this.root.position.z = z;
-    if (this.sinkElapsed < 0) {
-      this.root.rotation.y = headingRadians;
-    }
+  /**
+   * 계약 상태 → 시각 매핑 (매 프레임).
+   * 위치·방향은 게임플레이 값 그대로, 침몰 변위·기울기는 sinkProgress 매핑.
+   */
+  applyState(state: CargoShipStateSource): void {
+    if (this.disposed) return;
+    const progress = THREE.MathUtils.clamp(state.sinkProgress, 0, 1);
+    const eased = progress * progress; // 천천히 시작해 가속 (시각 이징만)
+
+    this.root.position.set(
+      state.positionX,
+      state.positionY - PARAMS.sinkDepthMeters * eased,
+      state.positionZ,
+    );
+    this.root.rotation.y = meshYawRadians(state.headingRadians);
+    this.root.rotation.x =
+      -PARAMS.sinkTiltRadians * Math.min(progress / TILT_FULL_AT_PROGRESS, 1);
   }
 
-  /** 격침 통지(판정은 게임플레이 소유) — 최초 1회만 연출 시작 */
-  triggerSink(): void {
-    if (this.sinkElapsed >= 0) return;
-    this.sinkElapsed = 0;
+  /**
+   * 명중 폭발 시작 — torpedoHit 이벤트(1차) 또는 상태 hit(보조)가 호출.
+   * 멱등: 두 경로가 겹치거나 이벤트가 중복 와도 폭발은 1회만 시작된다.
+   */
+  startHitExplosion(): void {
+    if (this.disposed || this.explosionStarted) return;
+    this.explosionStarted = true;
+    this.explosionElapsed = 0;
     this.explosion.visible = true;
   }
 
+  /** 매 프레임 — 폭발 잔광(1회성 연출)만 진행. 침몰은 applyState가 매핑한다 */
   update(deltaSeconds: number): void {
-    if (this.disposed || this.sinkElapsed < 0) return;
-    this.sinkElapsed += deltaSeconds;
-
-    // 폭발: 확장 + 페이드아웃
-    const explosionProgress = Math.min(
-      this.sinkElapsed / PARAMS.explosionDurationSeconds,
+    if (this.disposed || !this.explosion.visible) return;
+    this.explosionElapsed += deltaSeconds;
+    const progress = Math.min(
+      this.explosionElapsed / PARAMS.explosionDurationSeconds,
       1,
     );
-    if (explosionProgress < 1) {
-      // 시작 스케일을 선체 단면(폭 5×높이 4)보다 크게 잡아 발화 즉시 보이게 한다
+    if (progress < 1) {
       const scale =
         EXPLOSION_START_SCALE +
-        (PARAMS.explosionMaxScale - EXPLOSION_START_SCALE) * explosionProgress;
+        (PARAMS.explosionMaxScale - EXPLOSION_START_SCALE) * progress;
       this.explosion.scale.setScalar(scale);
-      this.explosionMaterial.opacity = 1 - explosionProgress;
-    } else if (this.explosion.visible) {
+      this.explosionMaterial.opacity = 1 - progress;
+    } else {
       this.explosion.visible = false;
-    }
-
-    // 침몰: 기울며 가라앉음 (정밀 유체 없음 — 이징 보간만)
-    const sinkProgress = Math.min(this.sinkElapsed / PARAMS.sinkDurationSeconds, 1);
-    const eased = sinkProgress * sinkProgress; // 천천히 시작해 가속
-    this.root.rotation.x = -PARAMS.sinkTiltRadians * Math.min(sinkProgress * 1.6, 1);
-    this.root.position.y = this.baseY - PARAMS.sinkDepthMeters * eased;
-
-    if (sinkProgress >= 1) {
-      this.isFinished = true;
     }
   }
 
-  /** 시각 오브젝트 정리 — 장면 dispose 또는 침몰 완료 시 호출 */
+  /** 시각 자원 정리 — 상태 removed=true 또는 장면 dispose 시 호출 */
   removeAndDispose(): void {
     if (this.disposed) return;
     this.disposed = true;

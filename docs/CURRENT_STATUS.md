@@ -51,14 +51,14 @@
 
 ## 그래픽스
 
-- **완료:** ① D3~D5 회색 박스 장면(`CanyonScene`) — 회색 협곡 블록아웃(단위 박스 재사용, 결정적 S자 수로 + 임시 기둥, 벽 상단은 해수면 아래), 잠수함 대체 오브젝트(캡슐+함교, **-Z 선수/+Z 선미 규약**), 기본 수중 포그·배경, 조명 2개 이내, 블롭 섀도 / 카메라 추적·리센터 구조(`CameraRig`, 선미 후방 뷰, 상하 ±60도) / **X-ray 스파이크 판정: 성공**(`docs/RENDER_SPIKE_XRAY.md`) ② **선미 프로펠러**(`Propeller` — 실제 전후 속도 파생값으로 정/역회전, 정지 시 8% 공회전, 수치는 `renderVisualParams.json` 외부 설정) ③ **해수면**(`SeaSurface` — 정점 파도, 수면 위/아래 배경·포그 전환, 반사·굴절 없음) ④ **화물선 임시 표적**(`CargoShipVisual` — 흘수 실루엣, 명중 폭발·기울며 침몰·완료 시 dispose. 판정 없음, 상태 주입식) ⑤ **정식 계약 소비 교체 (D+5 리뷰 후속)** — 프로펠러: 위치 변화 추정 제거, 정식 signed `speed` + `conventions.propellerSpinRatio()` + `movement.json propellerIdleSpinRatio`(단일 소스) / 잠수함 Y: `poseSource.positionY` 소비(연속 상승·하강 화면 반영, INT-GAME-005 ②) / 리센터: `conventions.cameraRecenterYawRadians` 기준
+- **완료:** ① D3~D5 회색 박스 장면(`CanyonScene`) — 잠수함 대체 오브젝트(캡슐+함교+선미 프로펠러, **-Z 선수/+Z 선미 규약**), 기본 수중 포그·배경(수면 위/아래 전환), 조명 2개 이내, 블롭 섀도, 해수면(`SeaSurface` — 정점 파도) / 카메라 추적·리센터(`CameraRig`) + 카메라 입력(`CameraInputAdapter`) / **X-ray 스파이크 판정: 성공**(`docs/RENDER_SPIKE_XRAY.md`) ② **INT-CORE-003·004 정식 계약 소비 적용 완료** — ⓐ 포즈: 로컬 Pick 타입 삭제 → 계약 `SubmarinePoseSource`(positionX/Y/Z·heading·forwardSpeedMetersPerSecond, 전 필드 필수) 소비, 잠수함 Y 매 프레임 적용 ⓑ 프로펠러: `forwardSpeedMetersPerSecond` + `conventions.propellerSpinRatio()` + `movement.json`(공회전·최고 속력 단일 소스) — 위치 차분 재계산·중복 정의 없음, renderVisualParams.json에는 최대 각속도·감쇠·폭발·침몰 매핑 등 순수 연출값만 ⓒ 화물선: 로컬 인터페이스 삭제 → 계약 `CargoShipStateSource` 소비(`applyState` 매핑 — 이동·왕복·침몰 타이머 없음), `sinkProgress`→기울기·하강, `removed`→dispose, 폭발은 `torpedoHit` 구독(`attachEventBus` 포트, targetId 일치·멱등) + 상태 `hit` 보조 ⓓ 협곡: 자체 수식 삭제 → **공유 `STARTING_CANYON_LAYOUT`(src/world) 블록 순회로 메시 생성**, 해수면·바닥·스폰도 layout 값 ⓔ 리센터: `cameraRecenterOffsetDirectionXZ` 기준(+π 우회 제거)
 - **진행 중:** 없음
-- **다음 작업:** 레벨 블록아웃 수신 시 임시 협곡 배치 교체(충돌 미러와 단일 소스화 — INT-GAME-005) / 조준 카메라 고정(`aimModeChanged` 구독, EventBus 배선 리드 재논의 후) / 어뢰 항적 표현(`torpedo.torpedoes` 폴링) / 소음 파문 이펙트(D10~12, 인스턴싱) / 심도별 포그·X-ray 본 통합(`floodingChanged` 구독, D13~14) / 모델 임포트(D+8 이후)
-- **차단 문제:** 없음. 단 ① `SubmarinePoseSource.positionY`는 계약(PlayerController) 미반영 상태라 **선택 필드로 소비** 중 — INT-GAME-004 승인 시 필수 필드 승격 ② 화물선 정식 시스템·상태 계약 부재(D6~D9 예정) — `attachCargoShipSource` 주입 포트만 준비, INT-RENDER-003 재요청 ③ 렌더 협곡 벽 높이와 충돌 미러 불일치 — INT-RENDER-004로 통합 담당에 보고 (임의 복제 수정 안 함)
-- **변경된 계약:** 없음 (`src/contracts/*` 미수정 — INT-CORE-002 반영분 `conventions.ts`·`propellerIdleSpinRatio`를 소비만 함)
-- **통합 주의사항:** **프로펠러 회전은 정식 signed speed 소비로 교체됨** — 위치 변화 추정 제거, `conventions.propellerSpinRatio(speed, maxSpeed, idle)` 사용, 공회전 소스는 `params/movement.json propellerIdleSpinRatio` 하나(renderVisualParams.json에서 중복 제거, 핫리로드 반영). 잠수함 Y는 `poseSource.positionY` 소비 — 상승·하강이 화면에 보임(블롭 섀도는 해저 고정 투영 유지). 리센터 후방 뷰는 `conventions.cameraRecenterYawRadians` 기준(선미 뒤쪽 상단→선수 방향 — 카메라 위치는 시선 반대 방향 오프셋으로 환산). 화물선은 상태 주입 대기(미주입 시 정지 표적, `?shipdemo`는 침몰 연출 미리보기만 — 이동 시연 제거). X-ray 선체·해수면 depthWrite:false — 반투명 renderOrder 서열(블롭1<X-ray2<수면3<폭발4) 조율 필요. 실시간 그림자·반사 금지 유지 (§12)
-- **마지막 업데이트:** D+5 리뷰 후속 (정식 계약 소비 교체 — signed speed·positionY·conventions·movement.json 공회전, feat/render)
-- **담당 브랜치:** `feat/render` (게임플레이 `claude/submarine-controls-depth-3wi424` 병합 기반)
+- **다음 작업:** INT-RENDER-005 배선 후 실기 통합 확인 / 조준 카메라 고정(`aimModeChanged` — attachEventBus 확장) / 어뢰 항적(`torpedo.torpedoes` 폴링) / 소음 파문(D10~12) / 심도별 포그·X-ray 본 통합(D13~14) / 모델 임포트(D+8 이후)
+- **차단 문제:** 없음. 단 `attachCargoShipSource(gameplay.cargoShip)`·`attachEventBus(bus)` composition root 배선은 리드 D6 통합 대기(INT-RENDER-005 — 2줄, 코드 예시 기록). 미배선 상태에서도 빌드·기본 장면 정상(화물선 미표시)
+- **변경된 계약:** 없음 (`src/contracts/*`·`src/world/*` 미수정 — INT-CORE-003·004 계약·데이터를 소비만 함)
+- **통합 주의사항:** 검증은 **임시 배선(원복 완료)으로 실제 게임플레이 시스템 구동** — Playwright 실측: 리센터·전진(W, 화면 안쪽)·후진(S)·A 단독(공회전만)·Shift/Ctrl 수직 이동·실제 CargoShipSystem 왕복·torpedoHit 폭발·sinkProgress 침몰·removed 제거·벽 충돌 정지(가시 벽면과 일치) 스크린샷 확보. `?shipdemo=<0~1>`는 고정 상태 스냅샷 QA(정식 소스 주입 시 무시). 게임플레이 `collision/startingArea.ts` 구 미러(구 벽 높이 15/16±3·sin)의 layout 소비 전환은 게임플레이 적용분 대기 — 전환 전까지 가시 능선 위 약 4~6m 구간에 구 충돌 잔존(수평 footprint는 일치). X-ray 선체·해수면 depthWrite:false — 반투명 renderOrder 서열(블롭1<X-ray2<수면3<폭발4). 실시간 그림자·반사 금지 유지 (§12)
+- **마지막 업데이트:** D6 통합 준비 (INT-CORE-003·004 렌더 적용 — 정식 포즈·화물선 계약, 공유 레이아웃, feat/render)
+- **담당 브랜치:** `feat/render` (게임플레이 b7faf44 + 리드 c4841cf 병합 기반)
 
 ## 빌드·툴
 

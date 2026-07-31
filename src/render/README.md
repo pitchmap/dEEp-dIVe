@@ -5,14 +5,16 @@
 ## 현재 상태 (D+5 통합 + 리뷰 후속 반영)
 
 - `Renderer.ts` — WebGLRenderer + PerspectiveCamera 래퍼 (그림자 비활성, 리사이즈 대응)
-- `CanyonScene.ts` — 회색 박스 수중 장면: 협곡 블록아웃(단위 박스 스케일 재사용,
-  결정적 S자 수로, 벽 상단은 해수면 아래 — 충돌 미러와의 차이는 INT-RENDER-004
-  보고 참조) + 잠수함 대체 오브젝트(캡슐+함교+선미 프로펠러, `conventions.ts`
-  -Z 선수/+Z 선미) + 기본 수중 포그·배경(수면 위/아래 색·포그 전환) +
+- `CanyonScene.ts` — 회색 박스 수중 장면: **공유 CanyonLayout 기반** 협곡
+  블록아웃(`src/world/startingCanyonLayout.ts` STARTING_CANYON_LAYOUT —
+  렌더 자체 수식 없음, 충돌과 동일 데이터 [INT-CORE-004]) + 잠수함 대체
+  오브젝트(캡슐+함교+선미 프로펠러, `conventions.ts` -Z 선수/+Z 선미) +
+  기본 수중 포그·배경(수면 위/아래 색·포그 전환 — `layout.seaSurfaceY` 기준) +
   블롭 섀도 + 해수면 + 화물선 + 조명 2개 이내(방향광 1 + 보조 환경광)
 - `CameraRig.ts` — 카메라 추적 시각 구조: 선미 뒤쪽 상단에서 선수 방향을
-  바라보는 후방 뷰(`conventions.cameraRecenterYawRadians` 기준), 궤도 오프셋
-  (상하 ±60도 제한), `recenter()`
+  바라보는 후방 뷰 — 위치 오프셋은 `conventions.cameraRecenterOffsetDirectionXZ`
+  (INT-CORE-004, 임의 +π 보정 없음), 시선은 lookAt(잠수함)으로
+  `cameraRecenterLookDirectionXZ` 충족. 궤도 오프셋(상하 ±60도), `recenter()`
 - `CameraInputAdapter.ts` — 카메라 전용 입력(D+5 통합 결정, 렌더 소유):
   좌클릭 드래그 궤도 회전 + Space 리센터. `GameSystem`으로 등록되며 잠수함
   이동·심도 키와 중복되지 않는다. blur 시 드래그 상태 해제, dispose()에서
@@ -24,10 +26,11 @@
   파라미터화하지 않음)
 - `SeaSurface.ts` — 저비용 평면 해수면: 정점 파도 애니메이션, 양면 렌더,
   수중에서 밝은 배경(실루엣 대비). 반사·굴절 없음
-- `CargoShipVisual.ts` — 화물선 로우폴리 임시 모델(-Z 선수): 흘수 아래 실루엣,
-  명중 폭발(자발광 구체)·기울며 침몰·완료 시 리소스 정리. 판정·이동 로직
-  없음 — 상태는 `attachCargoShipSource`로 주입. 정식 CargoShipSystem은
-  게임플레이 D6~D9 예정 (INT-RENDER-003·INT-GAME-006 참조)
+- `CargoShipVisual.ts` — 화물선 로우폴리 임시 모델(-Z 선수): 흘수 아래 실루엣.
+  **정식 계약 `CargoShipStateSource`(INT-CORE-003)를 `applyState`로 매핑만** —
+  이동·왕복·침몰 타이머 없음. `sinkProgress` 0~1 → 기울기·하강 매핑,
+  폭발은 `torpedoHit` 이벤트/상태 `hit`로 시작(멱등 — 1회 보장),
+  `removed` → `removeAndDispose()`. 상태 공급: 게임플레이 `CargoShipSystem`
 - `renderVisualParams.json` — 렌더 표현 계층 전용 외부 설정(해수면 파도·침몰
   연출 시간 등). 게임플레이 밸런스(`params/*.json`, 기획 소유)와 구분.
   프로펠러 공회전 값은 여기서 **제거됨** — movement.json이 단일 소스
@@ -42,24 +45,28 @@
 ### 검증용 URL 플래그 (렌더 QA 전용 — 판정·게임 로직 아님)
 
 - `?xray` — X-ray 스파이크 장착
-- `?shipdemo` — 화물선 **침몰 연출 미리보기**(15초 후 1회 발동). 이동·판정
-  구동은 없음 — 실제 발동은 정식 화물선 상태/이벤트로만 (INT-RENDER-003)
+- `?shipdemo=<0~1>` — 화물선 **고정 상태 스냅샷**(계약 타입 준수, 이동·타이머·
+  자동 격침 없음): sinkProgress를 URL 값으로 고정해 침몰 매핑·폭발(값>0)을
+  정지 화면으로 검수. 정식 상태 소스가 주입되면 무시된다
 - `?lookup` — 카메라를 앙각으로 젖혀 해수면·실루엣 확인
 
 ## 연결 방식 (판정 계산 금지 원칙)
 
-- 잠수함 포즈: `CanyonScene.attachPoseSource()` — `PlayerController` 계약의
-  `positionX/Z`·`headingRadians`·**signed `speed`** + 확장 상태 `positionY`
-  (INT-GAME-004 계약 반영 대기 — 반영 전까지 선택 필드로 소비, 미제공 시
-  기존 고정 높이 렌더). 주입은 `Game.composeSystems()`(composition root) 1회
-- 프로펠러 속도: 포즈 소스의 signed speed만 사용 — 위치 변화 추정 없음,
-  A/D 단독 입력 무영향(`propellerSpinRatio` 시그니처가 강제)
+- 잠수함 포즈: `CanyonScene.attachPoseSource()` — **정식 계약
+  `SubmarinePoseSource`**(contracts/systems.ts): `positionX/Y/Z`·
+  `headingRadians`·`forwardSpeedMetersPerSecond`(전 필드 필수). 주입은
+  `Game.composeSystems()` 1회(반영됨). 미주입 시 layout.submarineSpawn 정지 렌더
+- 프로펠러 속도: `forwardSpeedMetersPerSecond`만 사용 — 위치 변화 추정 없음,
+  A/D 단독 입력 무영향(`conventions.propellerSpinRatio` 시그니처가 강제)
 - 카메라 입력: `CameraInputAdapter`(렌더 소유)가 `CameraRig.rotate()/recenter()` 호출
-- 화물선: `attachCargoShipSource()` 주입 대기 — 정식 시스템(D6~D9) 등장 시
-  composition root에서 연결. 미주입 시 정지 표적 렌더
-- 협곡 임시 배치는 파이프라인 검증용 — 정식 블록아웃(엄폐 3곳+)은 레벨
-  디자인 산출물 수신 후 교체. 충돌 미러(`src/systems/collision/startingArea.ts`)
-  와의 현재 차이는 INT-RENDER-004에 보고됨 (단일 소스화 = INT-GAME-005)
+- 화물선: `attachCargoShipSource(gameplay.cargoShip)` — composition root 배선
+  요청(INT-RENDER-005, 리드 D6 통합). 미주입 시 화물선을 그리지 않는다
+  (렌더가 상태를 지어내지 않음 — `?shipdemo` 스냅샷은 QA 전용)
+- torpedoHit 폭발: `attachEventBus(bus)` — composition root 배선 요청
+  (INT-RENDER-005). 배선 전에도 상태 `hit` 경로로 폭발이 동작한다(멱등)
+- 협곡 배치는 STARTING_CANYON_LAYOUT이 렌더·충돌 단일 소스 —
+  게임플레이 `collision/startingArea.ts`의 구 미러 삭제는 게임플레이 적용분
+  (리드 INT-CORE-004 적용 요청) 대기
 
 ## 여기에 구현될 것 (D6 이후)
 

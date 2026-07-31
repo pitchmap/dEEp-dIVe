@@ -23,6 +23,20 @@
 
 ## 제안 목록
 
+### INT-RENDER-005 — Game 조립 배선 요청: 화물선 상태·torpedoHit 이벤트 주입 (코드 예시 포함)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스 (feat/render — INT-CORE-003·004 적용 완료 분) |
+| 대상 시스템 | `src/core/Game.ts` (공통 보호 — composeSystems) |
+| 필요한 변경 | 렌더가 준비한 주입 포트 2개를 composition root에서 연결. `composeSystems()`의 기존 `scene.attachPoseSource(gameplay.poseSource);` 다음 줄에:<br>`scene.attachCargoShipSource(gameplay.cargoShip);`<br>`scene.attachEventBus(this.bus);`<br>(레이아웃은 CanyonScene 생성자 기본 인자 `STARTING_CANYON_LAYOUT` — 명시 주입으로 바꾸려면 `new CanyonScene(renderer, STARTING_CANYON_LAYOUT)`) |
+| 변경 이유 | 화물선 시각(CargoShipVisual)이 계약 상태를 소비하고 torpedoHit로 폭발을 시작하려면 composition root 연결이 필요. 렌더는 보호 파일을 수정하지 않고 포트만 제공(임시 배선으로 동작 검증 완료 — 항행·명중 폭발·sinkProgress 침몰·removed 정리 실측 스크린샷 확보 후 원복) |
+| 관련 게이트 | G3 (명중 피드백), G6·G7 |
+| 영향을 받는 파일 | `src/core/Game.ts` 2줄 추가 (렌더 측 변경 불요 — 포트 준비 완료) |
+| 하위 호환 여부 | 깨짐 없음 — 미배선 상태에서도 빌드·기본 장면 정상(화물선 미표시, 폭발은 상태 hit 보조 경로) |
+| 개발 리드 결정 | (대기 — D6 통합 시) |
+| 적용 커밋 | — |
+
 ### INT-CORE-004 — 협곡 레이아웃 단일 데이터 모듈·카메라 리센터 규약 이의(二義) 해소
 
 | 필드 | 내용 |
