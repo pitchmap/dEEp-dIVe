@@ -26,6 +26,54 @@ TorpedoSystem / DepthChargeSystem / DestroyerAI / HullSystem / AudioSystem /
 UISystem. **구현체는 아직 없다** — D3 이후 각 파트 소유 영역에서 구현한다.
 목록·소유자·입출력은 `docs/INTERFACES.md` 표 참조.
 
+### 시스템 수명주기·등록 (`src/core/GameSystem.ts`, `SystemRegistry.ts`)
+각 파트 구현체는 `GameSystem`(id / `initialize` / `update` / `render?` /
+`dispose`)을 구현해 `SystemRegistry`에 등록된다. 호출 규약은 core가 보장한다:
+
+- `initialize(context)` — 루프 시작 전 등록 순서대로 1회. `SystemContext`로
+  `bus`(EventBus)·`params`(검증 완료 파라미터)·`stateMachine`을 공급받는다.
+  그 외 의존성(렌더러 등)은 등록 지점에서 생성자 주입.
+- `update(deltaSeconds)` — 매 프레임 등록 순서대로. 시뮬레이션만, 그리기 금지.
+- `render()` — 매 프레임, SceneManager의 3D 장면 렌더 **후** 등록 순서대로.
+  화면 표현이 있는 시스템(UI 등)만 선택 구현.
+- `dispose()` — 루프 정지 시 등록 **역순** 1회. 구독 해제·자원 정리.
+
+등록 중복 id·초기화 이후 등록·initializeAll 재호출은 예외로 거부한다.
+시스템 내부 예외는 삼키지 않고 전파한다 (상태 머신과 동일 원칙).
+
+## 시스템 실행 순서
+
+**실행 순서 = 등록 순서**다. 우선순위 숫자·의존성 그래프는 도입하지 않는다.
+유일한 등록 지점은 `Game.composeSystems()`이며, 그룹 순서는 다음을 지킨다:
+
+1. **입력·조작** — PlayerController, DepthSystem, 카메라 (게임플레이, D3~D5)
+2. **판정** — 탐지·어뢰·폭뢰·내구도 (게임플레이, D6 이후)
+3. **AI** — DestroyerAI (리드, D6 이후)
+4. **표현 연동** — 렌더 이펙트·UI·오디오 배관 (이벤트 구독 측)
+
+프레임 전체 순서 (core/Game):
+```
+update:  registry.update(dt) → sceneManager.update(dt) → 성능 샘플링
+render:  sceneManager.render()  [3D 장면] → registry.render()  [UI 계층]
+```
+
+`src/core`는 공통 보호 파일이므로 등록 배선 추가는 feat→dev 병합 시
+리드가 수행한다. 각 파트는 자기 소유 영역에서 `GameSystem` 구현체를
+export하고, CURRENT_STATUS의 자기 구역에 "등록 요청" 형태로 알리면 된다.
+
+## 게임 상태 전환과 장면 전환의 분리
+
+- **게임 상태(국면)** — `GameStateMachine`이 소유. 전환은 허용표 검증 후
+  `gameStateChanged` 이벤트 발행. 시스템은 `SystemContext.stateMachine`으로
+  전환을 요청한다.
+- **장면(Three.js 월드)** — `SceneManager`가 소유. 전환은 조립 수준에서
+  `setActive()` 명시 호출로만 일어난다.
+
+상태 전환이 장면 전환을 **자동으로 유발하지 않는다.** 버티컬 슬라이스는
+협곡 단일 해역이므로 국면(BOOT→…→RESULT)이 바뀌어도 장면은 하나다 —
+BGM·포그·UI 변화는 각 시스템이 `gameStateChanged`를 구독해 처리한다.
+상태→장면 자동 매핑 계층은 필요 근거가 생기기 전까지 만들지 않는다.
+
 ## 핵심 설계 결정
 
 ### DetectionSystem이 시스템 허브다
@@ -93,8 +141,23 @@ graph TD
     PERF --> GATE
 ```
 
-## D1~D2 실제 배선 (현재)
+## 현재 실제 배선 (D+5 회색 박스 통합 기준)
 
-`main.ts` → `Game`: 파라미터 로드·검증 → `Renderer`+`BootstrapScene` 생성 →
-오버레이·계측 연결 → 루프 시작 → 첫 렌더 시 `LoadingTimer` 기록 +
-`BOOT→DEPARTURE` 전환(상태 머신 검증 겸용). 게임플레이 시스템은 아직 없다.
+`main.ts` → `Game`: 파라미터 로드·검증 → `Renderer`+`CanyonScene` 생성
+(`ManagedScene`으로 SceneManager 등록) → 오버레이·계측 연결 →
+`composeSystems(params, scene)` → `registry.initializeAll(context)` →
+루프 시작 → 첫 렌더 시 `LoadingTimer` 기록 + `BOOT→DEPARTURE` 전환.
+
+`composeSystems` 등록 순서 (실행 순서와 동일):
+
+1. `gameplay` (`src/systems/GameplaySystems.ts`) — WASD 이동·관성 +
+   Shift/Ctrl 심도 3층. initialize에서 window/document 입력 연결과 params
+   핫리로드 구독(승인된 로더의 `onParamsReloaded` 주입), dispose에서 해제.
+2. `cameraInput` (`src/render/CameraInputAdapter.ts`) — 마우스 궤도 회전·
+   Space 리센터. 렌더 소유 카메라 입력 (D+5 책임 경계 확정).
+
+구현체 간 직접 참조는 composition root에서만: `scene.attachPoseSource(
+gameplay.poseSource)`로 읽기 전용 잠수함 포즈를 1회 주입한다. 렌더는
+판정·이동을 계산하지 않고, 시스템 update 이후 sceneManager.update가
+포즈를 소비한다. `WebAudioSystem`은 아직 미조립(후속 통합 항목 —
+CURRENT_STATUS 빌드·툴 구역).

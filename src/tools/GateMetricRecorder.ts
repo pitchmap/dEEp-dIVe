@@ -20,11 +20,20 @@ interface PerfSample {
 export interface GateMetricSnapshot {
   /** 측정 시각 (ISO 8601) */
   recordedAt: string;
+  /** 누적 샘플 전체의 평균 FPS (구간 평균의 평균이 아니라 초당 샘플의 평균) */
   averageFps: number | null;
+  /** 워밍업(2초) 이후의 최소 FPS — core/Game이 집계 (G1 판정값) */
   minFps: number | null;
-  /** 페이지 진입 → 첫 렌더 완료 (ms) */
+  /** 페이지 진입 → 첫 렌더 완료 (ms) — G2(접속 3초) 판정값 */
   firstRenderMs: number | null;
+  /**
+   * 초당 FPS 시계열 (오래된 것부터) — G1 운영표의 '구간별 fps 로그'.
+   * 어느 구간에서 프레임이 떨어졌는지 역추적용.
+   */
+  fpsSamples: number[];
+  /** 환경 정보만 기록한다 — 개인정보·고유 사용자 식별자 금지 (TOOLING 규칙) */
   browser: string;
+  buildMode: string;
   screen: {
     width: number;
     height: number;
@@ -52,14 +61,20 @@ export class GateMetricRecorder {
 
   snapshot(): GateMetricSnapshot {
     const last = this.samples.at(-1) ?? null;
+    const averageFps =
+      this.samples.length > 0
+        ? this.samples.reduce((sum, s) => sum + s.fps, 0) / this.samples.length
+        : null;
     return {
       recordedAt: new Date().toISOString(),
-      averageFps: last ? round1(last.averageFps) : null,
+      averageFps: averageFps !== null ? round1(averageFps) : null,
       minFps: last ? round1(last.minFps) : null,
       firstRenderMs: this.loadingTimer.firstRenderMs !== null
         ? Math.round(this.loadingTimer.firstRenderMs)
         : null,
+      fpsSamples: this.samples.map((s) => round1(s.fps)),
       browser: navigator.userAgent,
+      buildMode: import.meta.env.MODE,
       screen: {
         width: window.innerWidth,
         height: window.innerHeight,

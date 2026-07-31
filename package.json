@@ -5,7 +5,7 @@
   "description": "브라우저에서 바로 실행되는 세션형(7~10분) 로우폴리 3D 잠수함 서바이벌 액션 — 버티컬 슬라이스",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22 <23"
   },
   "scripts": {
     "dev": "vite",

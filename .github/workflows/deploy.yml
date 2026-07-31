@@ -1,0 +1,65 @@
+name: Deploy (GitHub Pages)
+
+# 정적 호스팅 배포 (마스터 플랜 §7.1: 정적 호스팅 + CDN, 서버 없음).
+#
+# 트리거:
+#  - main 푸시: dev→main 병합은 주간 빌드일(D+5/+10/+15)에만 일어나므로
+#    배포 = 주간 빌드 공유와 자동으로 맞물린다 (docs/BRANCHING.md).
+#  - workflow_dispatch: 자동화 실패 시 수동 재배포 경로 (D2 강등 규칙 대응).
+#
+# 선행 조건(저장소 관리자 1회 설정): Settings → Pages → Source를
+# "GitHub Actions"로 변경해야 한다. 상세: docs/DEPLOY.md
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 동시 배포 방지 — 진행 중인 배포가 있으면 최신 것만 남긴다
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - name: 의존성 설치
+        run: npm ci
+
+      - name: 타입 검사
+        run: npm run typecheck
+
+      - name: 빌드
+        run: npm run build
+
+      - name: 빌드 용량 검사 (15MB 게이트, G2)
+        run: npm run check:size
+
+      - name: Pages 아티팩트 업로드
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Pages 배포
+        id: deployment
+        uses: actions/deploy-pages@v4
