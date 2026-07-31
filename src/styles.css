@@ -62,3 +62,116 @@ body {
   font: 14px/1.6 ui-monospace, Menlo, Consolas, monospace;
   white-space: pre-wrap;
 }
+
+/* ── 조작 안내 + 화면 버튼 HUD (툴링·UI — ControlsHud.ts) ── */
+
+.controls-guide {
+  position: fixed;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 90;
+  padding: 10px 12px;
+  font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #cfe8f5;
+  background: rgba(4, 18, 26, 0.6);
+  border: 1px solid rgba(120, 180, 210, 0.25);
+  border-radius: 4px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.controls-guide-title {
+  font-weight: bold;
+  margin-bottom: 4px;
+  color: #f2a44a;
+}
+
+.controls-guide-row {
+  display: flex;
+  gap: 10px;
+}
+
+.controls-guide-key {
+  min-width: 92px;
+  color: #8fc6dd;
+}
+
+.controls-guide-footer {
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(120, 180, 210, 0.2);
+  color: #7da5b8;
+}
+
+.hud-buttons {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 90;
+  display: flex;
+  gap: 8px;
+  opacity: var(--hud-btn-opacity, 0.45);
+  transition: opacity 0.4s ease;
+}
+
+.hud-buttons-dimmed {
+  opacity: var(--hud-btn-opacity-dim, 0.18);
+}
+
+.hud-buttons:hover {
+  opacity: 0.9;
+}
+
+.hud-btn {
+  font: 13px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #cfe8f5;
+  background: rgba(4, 18, 26, 0.7);
+  border: 1px solid rgba(120, 180, 210, 0.4);
+  border-radius: 4px;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.hud-btn:hover {
+  background: rgba(120, 180, 210, 0.25);
+}
+
+.hud-btn-active {
+  color: #06121a;
+  background: #f2a44a;
+  border-color: #f2a44a;
+}
+
+/* 숨김 유틸리티 — 선언 순서와 무관하게 각 요소의 display 지정을 이겨야 한다 */
+.hud-hidden {
+  display: none !important;
+}
+
+.resume-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #cfe8f5;
+  background: rgba(4, 18, 26, 0.82);
+  font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  cursor: pointer;
+  user-select: none;
+}
+
+.resume-overlay-title {
+  font-size: 22px;
+  font-weight: bold;
+  color: #f2a44a;
+}
+
+.resume-overlay-hint {
+  color: #7da5b8;
+  font-size: 12px;
+}

@@ -9,6 +9,7 @@ import { loadParams } from '../config/ParamLoader';
 import { Renderer } from '../render/Renderer';
 import { BootstrapScene } from '../render/BootstrapScene';
 import { PerformanceOverlay } from '../ui/PerformanceOverlay';
+import { ControlsHud } from '../ui/ControlsHud';
 import { GateMetricRecorder } from '../tools/GateMetricRecorder';
 import { LoadingTimer } from '../tools/LoadingTimer';
 import { EventBus } from './EventBus';
@@ -34,6 +35,7 @@ export class Game {
   private renderer: Renderer | null = null;
   private recorder: GateMetricRecorder | null = null;
   private overlay: PerformanceOverlay | null = null;
+  private controlsHud: ControlsHud | null = null;
 
   // 성능 샘플링 상태
   private frameCount = 0;
@@ -69,6 +71,13 @@ export class Game {
       });
     }
 
+    // 조작 안내·Pointer Lock·화면 버튼 HUD (툴링·UI 소유 — src/ui/ControlsHud.ts).
+    // 일시정지는 루프 정지/재개로 연결한다. 전투 의도 sink는 게임플레이 연결 전
+    // 기본(계측+개발 로그) 구현을 쓴다 (INTEGRATION_NOTES #004).
+    this.controlsHud = new ControlsHud(this.container, canvas, {
+      setPaused: (paused) => (paused ? this.loop.stop() : this.loop.start()),
+    });
+
     window.addEventListener('resize', this.handleResize);
     this.handleResize();
 
@@ -78,6 +87,8 @@ export class Game {
   stop(): void {
     this.loop.stop();
     window.removeEventListener('resize', this.handleResize);
+    this.controlsHud?.dispose();
+    this.controlsHud = null;
     this.overlay?.dispose();
     this.sceneManager.dispose();
     this.renderer?.dispose();
