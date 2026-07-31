@@ -1,0 +1,64 @@
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #06121a;
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+}
+
+#game-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* 개발용 성능 오버레이 */
+.perf-overlay {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 100;
+  padding: 8px 10px;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #cfe8f5;
+  background: rgba(4, 18, 26, 0.75);
+  border: 1px solid rgba(120, 180, 210, 0.35);
+  border-radius: 4px;
+  pointer-events: none;
+  white-space: pre;
+  user-select: none;
+}
+
+.perf-overlay button {
+  margin-top: 6px;
+  pointer-events: auto;
+  font: inherit;
+  color: inherit;
+  background: rgba(120, 180, 210, 0.15);
+  border: 1px solid rgba(120, 180, 210, 0.4);
+  border-radius: 3px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.perf-overlay button:hover {
+  background: rgba(120, 180, 210, 0.3);
+}
+
+.fatal-error {
+  position: fixed;
+  inset: 0;
+  margin: 0;
+  padding: 24px;
+  color: #ffb0b0;
+  background: #1a0606;
+  font: 14px/1.6 ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+}

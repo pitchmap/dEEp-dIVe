@@ -1,0 +1,15 @@
+{
+  "$comment": "이동·관성 [초기 테스트값 — 확정 밸런스 아님]. 변경 절차: 마스터 플랜 §11 + docs/templates/TUNING_LOG.md. 기획(박태현) 직접 커밋 영역, 게이트 태그([G3][G5][G7]) 필수.",
+  "stopInertiaSeconds": {
+    "value": 1.5,
+    "range": [0.5, 2.0],
+    "unit": "seconds",
+    "note": "정지 관성. '씹힌다' 2인+ → 감소 / '잠수함 같지 않다' 2인+ → 증가"
+  },
+  "turn90Seconds": {
+    "value": 2.0,
+    "range": [1.0, 3.0],
+    "unit": "seconds",
+    "note": "90도 선회 소요 시간. G7 미달 시 감소"
+  }
+}

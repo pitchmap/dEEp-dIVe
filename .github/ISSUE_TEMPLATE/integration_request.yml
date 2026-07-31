@@ -1,0 +1,52 @@
+name: 통합 요청
+description: 다른 파트 소유 영역·공통 계약의 변경 요청 (docs/templates/INTEGRATION_REQUEST.md)
+title: "[통합] "
+labels: [integration]
+body:
+  - type: dropdown
+    id: requester
+    attributes:
+      label: 요청 파트
+      options: [리드, 게임플레이, 그래픽스, 빌드·툴, 기획, 아트, 사운드]
+    validations:
+      required: true
+  - type: dropdown
+    id: target
+    attributes:
+      label: 대상 파트
+      options: [리드, 게임플레이, 그래픽스, 빌드·툴, 기획, 공통 계약(src/contracts)]
+    validations:
+      required: true
+  - type: textarea
+    id: change
+    attributes:
+      label: 필요한 계약 변경
+      description: 필요한 이벤트·필드·메서드를 시그니처 수준으로 + 변경 이유
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: 영향 파일
+      description: 계약 파일 + 깨질 수 있는 구현·구독자 목록, 하위 호환 여부
+    validations:
+      required: true
+  - type: dropdown
+    id: gate
+    attributes:
+      label: 관련 게이트
+      multiple: true
+      options: [G1, G2, G3, G4, G5, G6, G7, G8, G9, 해당 없음]
+    validations:
+      required: true
+  - type: dropdown
+    id: urgency
+    attributes:
+      label: 긴급도
+      options:
+        - 차단 (S1급 — 즉시)
+        - 당일
+        - 주간 빌드 전
+        - 여유
+    validations:
+      required: true

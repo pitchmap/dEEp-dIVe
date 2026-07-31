@@ -1,0 +1,32 @@
+{
+  "$comment": "전투 [초기 테스트값 — 확정 밸런스 아님]. 폭뢰 신관 하한 3.0초는 고정(인간 반응 사슬 1.8초 + 관성 근거) — 난이도는 동시 폭뢰 수로 조절한다 (마스터 플랜 §5.12).",
+  "torpedoCapacity": {
+    "value": 3,
+    "unit": "count",
+    "note": "어뢰 보유량 (범위 합의 없음 — 고정 수치)"
+  },
+  "torpedoReloadSeconds": {
+    "value": 20,
+    "range": [10, 30],
+    "unit": "seconds",
+    "note": "어뢰 재장전. 대기 중 이탈 행동 관측 시 감소. 어뢰수 스킬 단축값은 params/crew.json"
+  },
+  "depthChargeFuseSeconds": {
+    "value": 3.0,
+    "range": [3.0, 4.0],
+    "unit": "seconds",
+    "note": "폭뢰 신관 — 풍덩→신관→폭발. 하한 3.0초 고정, 소리 회피 0/5 관측 시 증가"
+  },
+  "simultaneousDepthCharges": {
+    "value": 4,
+    "range": [2, 6],
+    "unit": "count",
+    "note": "동시 폭뢰 수 — 난이도 조절의 주 변수. '시시함' 3인+ → 증가 / 회피 불가 호소 → 감소"
+  },
+  "nearMissPushbackMeters": {
+    "value": 8,
+    "range": [4, 15],
+    "unit": "meters",
+    "note": "근접 폭발 밀려남 거리. '억울한 지형 충돌사' 2인+ → 감소"
+  }
+}

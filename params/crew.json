@@ -1,0 +1,43 @@
+{
+  "$comment": "승무원 4인 스킬 [초기 테스트값 — 확정 밸런스 아님]. 승무원은 4명 고정, 영구 성장·부상 없음 (스코프 가드). 쿨다운 범위 30~120초 (마스터 플랜 §5.16).",
+  "members": {
+    "captain": {
+      "cooldownSeconds": {
+        "value": 60,
+        "range": [30, 120],
+        "unit": "seconds",
+        "note": "함장 — 긴급 회피 (3초간 선회·속도 증가)"
+      }
+    },
+    "sonarOperator": {
+      "cooldownSeconds": {
+        "value": 45,
+        "range": [30, 120],
+        "unit": "seconds",
+        "note": "소나수 — 주변 적·폭뢰 위치 5초 표시"
+      }
+    },
+    "chiefEngineer": {
+      "cooldownSeconds": {
+        "value": 90,
+        "range": [30, 120],
+        "unit": "seconds",
+        "note": "기관장 — 침수·손상 긴급 수리"
+      }
+    },
+    "torpedoOperator": {
+      "cooldownSeconds": {
+        "value": 60,
+        "range": [30, 120],
+        "unit": "seconds",
+        "note": "어뢰수 — 신속 재장전"
+      }
+    }
+  },
+  "torpedoOperatorReloadSeconds": {
+    "value": 8,
+    "range": [5, 12],
+    "unit": "seconds",
+    "note": "어뢰수 스킬 사용 시 재장전 시간 (기본 20초 → 8초). 사용률 0% 관측 시 폭 확대"
+  }
+}

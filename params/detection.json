@@ -1,0 +1,20 @@
+{
+  "$comment": "탐지·은신 [초기 테스트값 — 확정 밸런스 아님]. 탐지 게이지 충전 = 소음 × 거리 × 심도 보정 (마스터 플랜 §5.6). 심도 층은 3개 확정 — 4층 이상 추가 시 로드가 거부된다.",
+  "gaugeFillSecondsAtPeriscope": {
+    "value": 8,
+    "range": [5, 15],
+    "unit": "seconds",
+    "note": "잠망경 심도 기준 탐지 게이지 만충 시간. G6 미달 → 증가 / 긴장 부족 → 감소"
+  },
+  "depthModifiers": {
+    "periscope": 1.0,
+    "cruise": 0.6,
+    "deep": 0.3
+  },
+  "silentRunningNoiseMultiplier": {
+    "value": 0.1,
+    "range": [0.0, 0.5],
+    "unit": "ratio",
+    "note": "침묵 항행(C 토글) 시 기본 소음 배율. 이동 불가·산소만 소모 조건과 세트"
+  }
+}

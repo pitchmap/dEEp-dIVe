@@ -1,0 +1,60 @@
+name: 버그 리포트
+description: 심각도 S1~S4 분류 기반 버그 보고 (마스터 플랜 §10.5)
+title: "[S_] "
+labels: [bug]
+body:
+  - type: input
+    id: build
+    attributes:
+      label: 빌드·브랜치·커밋
+      description: "예: D+5 빌드 / dev / abc1234"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 재현 단계
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대 결과
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 실제 결과
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: 심각도
+      description: S1 차단(게이트 항목 불능—즉시 수정) / S2 핵심(판정 오류—당일) / S3 일반(우회 가능—주간 빌드 전) / S4 사소(미관—백로그)
+      options:
+        - S1 (차단)
+        - S2 (핵심)
+        - S3 (일반)
+        - S4 (사소)
+    validations:
+      required: true
+  - type: dropdown
+    id: gate
+    attributes:
+      label: 관련 게이트
+      multiple: true
+      options: [G1, G2, G3, G4, G5, G6, G7, G8, G9, 해당 없음]
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 환경 정보
+      description: 브라우저·OS·GPU(내장그래픽 여부)·화면 크기. 가능하면 오버레이의 '게이트 기록 다운로드' JSON 첨부
+    validations:
+      required: true

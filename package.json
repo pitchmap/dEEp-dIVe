@@ -1,0 +1,26 @@
+{
+  "name": "deep-dive",
+  "private": true,
+  "version": "0.1.0",
+  "description": "브라우저에서 바로 실행되는 세션형(7~10분) 로우폴리 3D 잠수함 서바이벌 액션 — 버티컬 슬라이스",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "check:size": "node scripts/check-build-size.mjs",
+    "status": "node scripts/print-project-status.mjs"
+  },
+  "dependencies": {
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.185.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.0"
+  }
+}
