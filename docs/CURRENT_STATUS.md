@@ -98,14 +98,14 @@
 
 ## 그래픽스
 
-- **완료:** D3~D5 회색 박스 장면(`CanyonScene`) — 회색 협곡 블록아웃(단위 박스 재사용, 결정적 S자 수로 + 임시 기둥), 잠수함 대체 오브젝트(캡슐+함교), 기본 수중 포그·배경, 조명 2개 이내(방향광 1+보조 환경광), 블롭 섀도(`BlobShadow`) / 카메라 추적·리센터 구조(`CameraRig`, 상하 ±60도 제한) / **X-ray 반투명 렌더 스파이크 판정: 성공** (`src/render/xray/`, `?xray` 플래그 — `docs/RENDER_SPIKE_XRAY.md`, 대체 경로 발동 불필요)
+- **완료:** ① D3~D5 회색 박스 장면(`CanyonScene`) — 잠수함 대체 오브젝트(캡슐+함교+선미 프로펠러, **-Z 선수/+Z 선미 규약**), 기본 수중 포그·배경(수면 위/아래 전환), 조명 2개 이내, 블롭 섀도, 해수면(`SeaSurface` — 정점 파도) / 카메라 추적·리센터(`CameraRig`) + 카메라 입력(`CameraInputAdapter`) / **X-ray 스파이크 판정: 성공**(`docs/RENDER_SPIKE_XRAY.md`) ② **INT-CORE-003·004 정식 계약 소비 적용 완료** — ⓐ 포즈: 로컬 Pick 타입 삭제 → 계약 `SubmarinePoseSource`(positionX/Y/Z·heading·forwardSpeedMetersPerSecond, 전 필드 필수) 소비, 잠수함 Y 매 프레임 적용 ⓑ 프로펠러: `forwardSpeedMetersPerSecond` + `conventions.propellerSpinRatio()` + `movement.json`(공회전·최고 속력 단일 소스) — 위치 차분 재계산·중복 정의 없음, renderVisualParams.json에는 최대 각속도·감쇠·폭발·침몰 매핑 등 순수 연출값만 ⓒ 화물선: 로컬 인터페이스 삭제 → 계약 `CargoShipStateSource` 소비(`applyState` 매핑 — 이동·왕복·침몰 타이머 없음), `sinkProgress`→기울기·하강, `removed`→dispose, 폭발은 `torpedoHit` 구독(`attachEventBus` 포트, targetId 일치·멱등) + 상태 `hit` 보조 ⓓ 협곡: 자체 수식 삭제 → **공유 `STARTING_CANYON_LAYOUT`(src/world) 블록 순회로 메시 생성**, 해수면·바닥·스폰도 layout 값 ⓔ 리센터: `cameraRecenterOffsetDirectionXZ` 기준(+π 우회 제거)
 - **진행 중:** 없음
-- **다음 작업:** 레벨 블록아웃(D+5) 수신 시 임시 협곡 배치 교체 / 소음 파문 이펙트(D10~12, 인스턴싱) / 물 정점 애니메이션·심도별 포그·X-ray 본 통합(`floodingChanged` 구독, D13~14) / 모델 임포트(D+8 이후)
-- **차단 문제:** 없음 — INT-RENDER-001 승인·반영 완료 (D+5 통합): `Game.ts`가 `CanyonScene` 직접 임포트, `BootstrapScene.ts` 별칭 삭제, `attachPoseSource`를 composition root에서 주입. **X-ray 스파이크는 성공으로 확정** — `?xray=1` 플래그로 반투명 선체 안 수위 판독 가능(브라우저 검증 스크린샷 확인), 기본 장면 실패와 격리, 대체 경로(아이콘 점멸 이관) 발동 불필요. 자동 수위 순환은 렌더 검증용 데모 유지 — 실제 침수 이벤트(`floodingChanged`) 연결은 D13~14 범위
-- **변경된 계약:** 없음 (`src/contracts/*` 미수정)
-- **통합 주의사항:** 카메라 입력 책임은 D+5 통합에서 **그래픽스로 확정** — `CameraInputAdapter`(신규, 렌더 소유)가 좌클릭 드래그 회전·Space 리센터를 `CameraRig`에 전달, 잠수함 이동키와 중복 없음, blur 시 드래그 해제, dispose에서 리스너 전부 해제. X-ray 선체가 depthWrite:false이므로 이후 반투명 오브젝트(파문 등)와 renderOrder 조율 필요. 실시간 그림자·반사 금지 유지 (성능 예산 §12)
-- **마지막 업데이트:** D+5 (회색 박스 통합 — 카메라 입력 어댑터 추가는 통합 리드가 렌더 소유 영역에 배선 대행, INT-RENDER-001 결정 기록)
-- **담당 브랜치:** `feat/render` (D+5 통합분은 `claude/deep-dive-d5-gray-box-integration-tree5i`)
+- **다음 작업:** INT-RENDER-005 배선 후 실기 통합 확인 / 조준 카메라 고정(`aimModeChanged` — attachEventBus 확장) / 어뢰 항적(`torpedo.torpedoes` 폴링) / 소음 파문(D10~12) / 심도별 포그·X-ray 본 통합(D13~14) / 모델 임포트(D+8 이후)
+- **차단 문제:** 없음. 단 `attachCargoShipSource(gameplay.cargoShip)`·`attachEventBus(bus)` composition root 배선은 리드 D6 통합 대기(INT-RENDER-005 — 2줄, 코드 예시 기록). 미배선 상태에서도 빌드·기본 장면 정상(화물선 미표시)
+- **변경된 계약:** 없음 (`src/contracts/*`·`src/world/*` 미수정 — INT-CORE-003·004 계약·데이터를 소비만 함)
+- **통합 주의사항:** 검증은 **임시 배선(원복 완료)으로 실제 게임플레이 시스템 구동** — Playwright 실측: 리센터·전진(W, 화면 안쪽)·후진(S)·A 단독(공회전만)·Shift/Ctrl 수직 이동·실제 CargoShipSystem 왕복·torpedoHit 폭발·sinkProgress 침몰·removed 제거·벽 충돌 정지(가시 벽면과 일치) 스크린샷 확보. `?shipdemo=<0~1>`는 고정 상태 스냅샷 QA(정식 소스 주입 시 무시). 게임플레이 `collision/startingArea.ts` 구 미러(구 벽 높이 15/16±3·sin)의 layout 소비 전환은 게임플레이 적용분 대기 — 전환 전까지 가시 능선 위 약 4~6m 구간에 구 충돌 잔존(수평 footprint는 일치). X-ray 선체·해수면 depthWrite:false — 반투명 renderOrder 서열(블롭1<X-ray2<수면3<폭발4). 실시간 그림자·반사 금지 유지 (§12)
+- **마지막 업데이트:** D6 통합 준비 (INT-CORE-003·004 렌더 적용 — 정식 포즈·화물선 계약, 공유 레이아웃, feat/render)
+- **담당 브랜치:** `feat/render` (게임플레이 b7faf44 + 리드 c4841cf 병합 기반)
 
 ## 빌드·툴
 

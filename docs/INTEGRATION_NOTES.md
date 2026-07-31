@@ -23,6 +23,48 @@
 
 ## 제안 목록
 
+### INT-RENDER-005 — Game 조립 배선 요청: 화물선 상태·torpedoHit 이벤트 주입 (코드 예시 포함)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스 (feat/render — INT-CORE-003·004 적용 완료 분) |
+| 대상 시스템 | `src/core/Game.ts` (공통 보호 — composeSystems) |
+| 필요한 변경 | 렌더가 준비한 주입 포트 2개를 composition root에서 연결. `composeSystems()`의 기존 `scene.attachPoseSource(gameplay.poseSource);` 다음 줄에:<br>`scene.attachCargoShipSource(gameplay.cargoShip);`<br>`scene.attachEventBus(this.bus);`<br>(레이아웃은 CanyonScene 생성자 기본 인자 `STARTING_CANYON_LAYOUT` — 명시 주입으로 바꾸려면 `new CanyonScene(renderer, STARTING_CANYON_LAYOUT)`) |
+| 변경 이유 | 화물선 시각(CargoShipVisual)이 계약 상태를 소비하고 torpedoHit로 폭발을 시작하려면 composition root 연결이 필요. 렌더는 보호 파일을 수정하지 않고 포트만 제공(임시 배선으로 동작 검증 완료 — 항행·명중 폭발·sinkProgress 침몰·removed 정리 실측 스크린샷 확보 후 원복) |
+| 관련 게이트 | G3 (명중 피드백), G6·G7 |
+| 영향을 받는 파일 | `src/core/Game.ts` 2줄 추가 (렌더 측 변경 불요 — 포트 준비 완료) |
+| 하위 호환 여부 | 깨짐 없음 — 미배선 상태에서도 빌드·기본 장면 정상(화물선 미표시, 폭발은 상태 hit 보조 경로) |
+| 개발 리드 결정 | (대기 — D6 통합 시) |
+| 적용 커밋 | — |
+
+### INT-RENDER-004 — [보고] 렌더 협곡 벽 높이와 충돌 미러 불일치 (INT-GAME-005 후속) — ✅ INT-CORE-004로 해소
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스 (feat/render) — **통합 담당 보고용** (계약 변경 요청 아님) |
+| 대상 시스템 | `src/render/CanyonScene.ts`(렌더 배치) vs `src/systems/collision/startingArea.ts`(충돌 미러) |
+| 필요한 변경 | 없음 — 차이 보고. 그래픽스는 D+5 후속에서 수중 해수면·화물선 실루엣 시인성을 위해 벽 높이를 낮췄으나(`11 + 2·sin(i·2.7)` / `12 − 2·sin(i·2.7)`, 이전 `15 + 3·sin` / `16 − 3·sin`), 충돌 미러는 이전 높이 기준이다. **수평 footprint(X 중심·폭·Z·기둥 3개)는 1:1 동일** — 차이는 벽 높이뿐. 효과: 가시 능선 상단(좌 +3~+7 / 우 +4~+8)과 충돌 상단(좌 +6~+12 / 우 +7~+13) 사이 약 4m 구간에서 '보이지 않는 벽' — 연속 상승(수면 상한 +12.5)으로 능선 위를 넘으려 할 때 시각적으로는 통과 가능해 보이나 충돌에 막힘. 임의로 한쪽을 복제 수정하지 않고(렌더 낮춤은 시인성 근거, 충돌 높임은 게임플레이 소유) 리드의 INT-GAME-005 단일 레이아웃 결정에 합류한다. 결정 전 잠정 대응이 필요하면 리드 판단: ⓐ 렌더 벽 높이를 미러 값으로 복원(수면 시인성 후퇴) ⓑ 미러 높이를 렌더 값으로 갱신(게임플레이 창 작업) |
+| 변경 이유 | 렌더-충돌 불일치는 G4·G6 관찰을 오염시킬 수 있음 — 통합 전 명시 보고 |
+| 관련 게이트 | G4 (심도 조절 이해), G5 (방향 상실), G6 (지형 은신) |
+| 영향을 받는 파일 | `src/render/CanyonScene.ts`, `src/systems/collision/startingArea.ts` |
+| 하위 호환 여부 | 해당 없음 (보고) |
+| 개발 리드 결정 | (대기 — INT-GAME-005와 함께) |
+| 적용 커밋 | — |
+
+### INT-RENDER-003 — 화물선 상태 계약 정의 요청 (렌더 소비용, 구 #003 재정리) — ✅ INT-CORE-003으로 해소
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스 (feat/render) |
+| 대상 시스템 | `src/contracts/systems.ts`(화물선 시스템 인터페이스) 또는 `src/contracts/events.ts`(명중·격침 이벤트 — INT-GAME-006 ②와 동일 사안이므로 **합류 결정 요청**) |
+| 필요한 변경 | 렌더가 소비할 화물선 읽기 전용 상태: 위치 X/Z(+흘수 기준 Y는 렌더 상수), `headingRadians`, 격침 여부. 현재 렌더는 자체 소비 인터페이스 `CargoShipStateSource`(CanyonScene.ts — positionX/Z·headingRadians·isSunk)를 정의해 두고 `attachCargoShipSource()` 주입 포트로 대기 중. 게임플레이 `TargetRegistry.CombatTarget`(positionX/Y/Z·velocityX/Z·hitRadius·onTorpedoHit)과 형태가 이웃하므로, 화물선 시스템(D6~D9) 설계 시 ⓐ CombatTarget 확장(+heading·격침 상태) ⓑ 별도 상태 인터페이스 ⓒ `torpedoHit`/`shipSunk` 이벤트 중 리드가 결정하면 렌더 측 인터페이스를 그 계약으로 교체한다. 침몰 연출 시작은 결정된 이벤트 또는 상태 전이 1회 통지면 충분 |
+| 변경 이유 | 화물선 시각 표현(임시 표적·실루엣·명중 폭발·침몰)은 렌더에 준비 완료됐으나 정식 화물선 시스템·계약이 아직 없음(게임플레이 D6~D9 예정). 렌더에서 이동·판정 로직을 만들지 않는 원칙 유지 |
+| 관련 게이트 | G3 (명중 피드백 가독성), G1 |
+| 영향을 받는 파일 | `src/contracts/systems.ts` 또는 `events.ts`, `src/render/CanyonScene.ts`, `src/render/CargoShipVisual.ts`, (게임플레이 화물선 시스템 — D6~D9) |
+| 하위 호환 여부 | 깨지지 않음 — 미주입 시 정지 표적 렌더. `?shipdemo`는 침몰 연출 미리보기(이동·판정 시연 없음)로 축소됨 |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
+
 ### INT-CORE-004 — 협곡 레이아웃 단일 데이터 모듈·카메라 리센터 규약 이의(二義) 해소
 
 | 필드 | 내용 |
