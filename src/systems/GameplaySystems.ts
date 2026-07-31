@@ -24,6 +24,7 @@
  * 내부 참조를 교체한다. update()마다 loadParams()를 호출하지 않는다.
  */
 
+import type { CanyonLayout } from '../contracts/layout';
 import type { GameParams } from '../contracts/params';
 import type {
   AimSystem,
@@ -33,7 +34,8 @@ import type {
 } from '../contracts/systems';
 import type { EventBus } from '../core/EventBus';
 import type { GameSystem, SystemContext } from '../core/GameSystem';
-import { CargoShipSystem } from './CargoShipSystem';
+import { STARTING_CANYON_LAYOUT } from '../world/startingCanyonLayout';
+import { CargoShipSystem, defaultCargoShipConfig } from './CargoShipSystem';
 import { CollisionWorld } from './collision/CollisionWorld';
 import { computeHullSpheres } from './collision/submarineHull';
 import { registerStartingAreaColliders } from './collision/startingArea';
@@ -76,10 +78,13 @@ export class GameplaySystems implements GameSystem {
    */
   readonly cargoShip: CargoShipSystem;
   /**
-   * 정적 충돌 월드. 시작 지역 임시 레이아웃이 기본 등록되어 있다.
-   * 레벨 교체 시 clear() 후 재등록 — colliders는 시야 차폐와 공유(읽기 전용).
+   * 정적 충돌 월드 — 공유 CanyonLayout.blocks를 충돌체로 해석해 등록한다
+   * (렌더와 동일 데이터, INT-CORE-004). 레벨 교체 = 새 레이아웃 주입
+   * (clear() 후 재등록) — colliders는 시야 차폐와 공유(읽기 전용).
    */
   readonly collision: CollisionWorld;
+  /** 소비 중인 협곡 레이아웃 (단일 소스) — 렌더·검증 참조용 읽기 전용 */
+  readonly layout: CanyonLayout;
 
   private readonly subscribeToParamsReload: ParamsReloadSubscribe | null;
   private unsubscribeParamsReload: (() => void) | null = null;
@@ -90,15 +95,26 @@ export class GameplaySystems implements GameSystem {
     bus: EventBus,
     params: GameParams,
     subscribeToParamsReload?: ParamsReloadSubscribe,
+    /** 협곡 레이아웃 — composition root 주입 우선, 기본은 공유 단일 인스턴스 */
+    layout: CanyonLayout = STARTING_CANYON_LAYOUT,
   ) {
+    this.layout = layout;
     this.input = new KeyboardInput();
     this.mouse = new MouseCombatInput();
-    this.player = new SubmarinePlayerController(params.movement, this.input);
+    this.player = new SubmarinePlayerController(params.movement, this.input, {
+      x: layout.submarineSpawn.x,
+      y: 0,
+      z: layout.submarineSpawn.z,
+      headingRadians: layout.submarineSpawn.headingRadians,
+    });
     this.depth = new LayeredDepthSystem(bus, this.player);
     this.collision = new CollisionWorld();
-    registerStartingAreaColliders(this.collision);
+    registerStartingAreaColliders(this.collision, layout);
     this.targets = new TargetRegistry();
-    this.cargoShip = new CargoShipSystem(bus, this.targets);
+    this.cargoShip = new CargoShipSystem(bus, this.targets, {
+      ...defaultCargoShipConfig(),
+      surfaceY: layout.seaSurfaceY, // 해수면은 공유 레이아웃 값 하나만 사용
+    });
     this.torpedo = new StraightRunTorpedoSystem(
       bus,
       params.combat,

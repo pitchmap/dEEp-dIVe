@@ -1,11 +1,14 @@
 /**
- * ⚠ 임시 수직 월드 구성 — 확정 레벨·밸런스 값 아님 (R7 선진행, INT-GAME-004).
+ * 수직 월드 값 — 공유 레이아웃 파생 + 심도 구간 임시 경계.
  *
- * 연속 심도 이동에 필요한 수면 상한·해저 하한·심도 3구간 경계는
- * 레벨 디자인(최윤아) 블록아웃·params 어디에도 아직 없다. 현재 회색 박스
- * 장면(src/render/CanyonScene.ts)의 시각 상수(해저 FLOOR_Y = -6, 잠수함
- * 시작 y = 0)와 맞물리는 임시값을 여기 한 곳에만 둔다.
- * 정식 블록아웃 수신·params 이관 시 이 파일을 삭제·교체한다.
+ * 해수면·해저는 공유 레이아웃(`src/world/startingCanyonLayout.ts`,
+ * INT-CORE-004 단일 소스)에서 읽고, 잠수함 수직 한계는 여기서 **파생**만
+ * 한다 — 수치 복제 없음:
+ *   상한 = seaSurfaceY − 선체 반경 (수면 돌출 방지)
+ *   하한 = floorY + 선체 반경 (해저 이탈 방지)
+ *
+ * ⚠ 심도 3구간 경계(잠망경/순항)만 임시값이다 (R7 선진행, INT-GAME-004) —
+ * params·레벨 데이터 이관 시 이 파일을 삭제·교체한다.
  *
  * 구간 규칙 (마스터 플랜 §3.4 — 심도는 정확히 3구간, 4구간 이상 금지):
  *   y ≥ PERISCOPE_MIN_Y            → 잠망경 심도 (periscope)
@@ -13,22 +16,17 @@
  *   y < CRUISE_MIN_Y               → 심해 (deep)
  */
 
-/**
- * 해수면 높이 (월드 Y) — 렌더 `CanyonScene.SEA_SURFACE_Y`(12)와 정합.
- * 화물선 흘수선(CargoShipStateSource.positionY)의 기준이다.
- * 정식 소스는 계약 `contracts/layout.ts` CanyonLayout.seaSurfaceY —
- * 데이터 모듈 확정(INT-CORE-003 후속) 시 이 값을 삭제·대체한다.
- */
-export const PROVISIONAL_SEA_SURFACE_Y = 12;
+import { STARTING_CANYON_LAYOUT } from '../world/startingCanyonLayout';
+import { SUBMARINE_HULL_RADIUS } from './collision/submarineHull';
 
-/** 잠수함 중심의 상한 (수면 이탈 방지 — 해수면(12)보다 선체 반경(1)만큼 아래) */
-export const PROVISIONAL_SUBMARINE_MAX_Y = 11;
+/** 잠수함 중심의 상한 — 공유 레이아웃 해수면 − 선체 반경 (파생값) */
+export const SUBMARINE_MAX_Y = STARTING_CANYON_LAYOUT.seaSurfaceY - SUBMARINE_HULL_RADIUS;
 
-/** 잠수함 중심의 하한 (해저 FLOOR_Y(-6) + 선체 반경 — 바닥 이탈 방지) */
-export const PROVISIONAL_SUBMARINE_MIN_Y = -5;
+/** 잠수함 중심의 하한 — 공유 레이아웃 해저 + 선체 반경 (파생값) */
+export const SUBMARINE_MIN_Y = STARTING_CANYON_LAYOUT.floorY + SUBMARINE_HULL_RADIUS;
 
-/** 이 높이 이상 = 잠망경 심도 */
+/** 이 높이 이상 = 잠망경 심도 [임시값 — INT-GAME-004 이관 대기] */
 export const PROVISIONAL_PERISCOPE_MIN_Y = 8;
 
-/** 이 높이 이상(잠망경 미만) = 순항 심도. 미만 = 심해 */
+/** 이 높이 이상(잠망경 미만) = 순항 심도. 미만 = 심해 [임시값] */
 export const PROVISIONAL_CRUISE_MIN_Y = -2;

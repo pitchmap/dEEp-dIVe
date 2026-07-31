@@ -30,7 +30,7 @@ import {
   PROVISIONAL_CARGO_WAYPOINT_A,
   PROVISIONAL_CARGO_WAYPOINT_B,
 } from './provisionalCargo';
-import { PROVISIONAL_SEA_SURFACE_Y } from './provisionalWorld';
+import { STARTING_CANYON_LAYOUT } from '../world/startingCanyonLayout';
 import type { CombatTarget, TargetRegistry } from './TargetRegistry';
 
 export interface CargoShipWaypoint {
@@ -55,7 +55,7 @@ export function defaultCargoShipConfig(): CargoShipConfig {
     id: PROVISIONAL_CARGO_ID,
     waypointA: PROVISIONAL_CARGO_WAYPOINT_A,
     waypointB: PROVISIONAL_CARGO_WAYPOINT_B,
-    surfaceY: PROVISIONAL_SEA_SURFACE_Y,
+    surfaceY: STARTING_CANYON_LAYOUT.seaSurfaceY,
     speedMetersPerSecond: PROVISIONAL_CARGO_SPEED_MPS,
     hitRadius: PROVISIONAL_CARGO_HIT_RADIUS,
     sinkDurationSeconds: PROVISIONAL_CARGO_SINK_DURATION_SECONDS,

@@ -32,11 +32,10 @@ import {
   PROVISIONAL_REVERSE_MAX_RATIO,
   PROVISIONAL_VERTICAL_MAX_RATIO,
 } from '../provisionalMovement';
-import {
-  PROVISIONAL_SEA_SURFACE_Y,
-  PROVISIONAL_SUBMARINE_MAX_Y,
-  PROVISIONAL_SUBMARINE_MIN_Y,
-} from '../provisionalWorld';
+import { SUBMARINE_MAX_Y, SUBMARINE_MIN_Y } from '../provisionalWorld';
+import { STARTING_CANYON_LAYOUT } from '../../world/startingCanyonLayout';
+import { blockToColliderBounds } from '../collision/startingArea';
+import { SUBMARINE_HULL_RADIUS } from '../collision/submarineHull';
 
 export interface VerificationResult {
   name: string;
@@ -348,9 +347,9 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     }
     check(
       '수직: 수면 상한 이탈 없음 (연속 상승 유지 시 상한 고정)',
-      controller.positionY === PROVISIONAL_SUBMARINE_MAX_Y &&
-        maxObservedY <= PROVISIONAL_SUBMARINE_MAX_Y + 1e-9,
-      `y=${controller.positionY} (상한 ${PROVISIONAL_SUBMARINE_MAX_Y})`,
+      controller.positionY === SUBMARINE_MAX_Y &&
+        maxObservedY <= SUBMARINE_MAX_Y + 1e-9,
+      `y=${controller.positionY} (상한 ${SUBMARINE_MAX_Y})`,
     );
 
     // 하한: Ctrl 유지 시 해저 하한 고정
@@ -363,9 +362,9 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     }
     check(
       '수직: 해저 하한 이탈 없음 (연속 하강 유지 시 하한 고정)',
-      controller.positionY === PROVISIONAL_SUBMARINE_MIN_Y &&
-        minObservedY >= PROVISIONAL_SUBMARINE_MIN_Y - 1e-9,
-      `y=${controller.positionY} (하한 ${PROVISIONAL_SUBMARINE_MIN_Y})`,
+      controller.positionY === SUBMARINE_MIN_Y &&
+        minObservedY >= SUBMARINE_MIN_Y - 1e-9,
+      `y=${controller.positionY} (하한 ${SUBMARINE_MIN_Y})`,
     );
   }
 
@@ -645,7 +644,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       systems.depth.currentLayer === 'deep' &&
       emitted.length === 1 &&
       emitted[0] === 'deep' &&
-      systems.player.positionY >= PROVISIONAL_SUBMARINE_MIN_Y;
+      systems.player.positionY >= SUBMARINE_MIN_Y;
     check(
       '통합: W+Ctrl → 전진 + 연속 하강 + 심해 구간 전이 (depthChanged)',
       moved && dived,
@@ -947,6 +946,58 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     systems.detachInput();
   }
 
+  // 24b. 공유 CanyonLayout 소비 — 블록↔충돌체 1:1 정합 (INT-CORE-004)
+  {
+    const bus = new EventBus();
+    const systems = new GameplaySystems(bus, params);
+    const layout = systems.layout;
+    const colliders = systems.collision.colliders;
+
+    check(
+      '레이아웃: 블록 수 = 충돌체 수 (자체 수식·복제 없음)',
+      layout === STARTING_CANYON_LAYOUT && colliders.length === layout.blocks.length,
+      `blocks=${layout.blocks.length}, colliders=${colliders.length}`,
+    );
+
+    let mismatches = 0;
+    for (let i = 0; i < layout.blocks.length; i += 1) {
+      const block = layout.blocks[i];
+      const collider = colliders[i];
+      if (!block || !collider || collider.kind !== 'box') {
+        mismatches += 1;
+        continue;
+      }
+      const expected = blockToColliderBounds(block, layout.floorY);
+      const equal =
+        collider.minX === expected.minX &&
+        collider.minY === expected.minY &&
+        collider.minZ === expected.minZ &&
+        collider.maxX === expected.maxX &&
+        collider.maxY === expected.maxY &&
+        collider.maxZ === expected.maxZ;
+      if (!equal) mismatches += 1;
+    }
+    check(
+      '레이아웃: 각 블록의 중심·크기 ↔ 충돌체 경계 정합 (순서 1:1)',
+      mismatches === 0,
+      `불일치 ${mismatches}/${layout.blocks.length}`,
+    );
+
+    check(
+      '레이아웃: 잠수함 수직 상한 = seaSurfaceY − 선체 반경 (파생, 복제 없음)',
+      SUBMARINE_MAX_Y === layout.seaSurfaceY - SUBMARINE_HULL_RADIUS &&
+        SUBMARINE_MIN_Y === layout.floorY + SUBMARINE_HULL_RADIUS,
+      `maxY=${SUBMARINE_MAX_Y} (수면 ${layout.seaSurfaceY} − ${SUBMARINE_HULL_RADIUS}), minY=${SUBMARINE_MIN_Y}`,
+    );
+
+    check(
+      '레이아웃: 화물선 흘수선 = 공유 seaSurfaceY',
+      systems.cargoShipState.positionY === layout.seaSurfaceY,
+      `cargoY=${systems.cargoShipState.positionY}`,
+    );
+    systems.dispose();
+  }
+
   // 25. 화물선 — 직선 왕복 항행 + 해수면 높이 유지
   {
     const bus = new EventBus();
@@ -955,7 +1006,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       id: 900,
       waypointA: { x: 0, z: -30 },
       waypointB: { x: 20, z: -30 },
-      surfaceY: PROVISIONAL_SEA_SURFACE_Y,
+      surfaceY: STARTING_CANYON_LAYOUT.seaSurfaceY,
       speedMetersPerSecond: 4,
       hitRadius: 9,
       sinkDurationSeconds: 2,
@@ -973,7 +1024,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       ship.update(step);
       maxX = Math.max(maxX, ship.positionX);
       zDrift = Math.max(zDrift, Math.abs(ship.positionZ - -30));
-      if (ship.positionY !== PROVISIONAL_SEA_SURFACE_Y) surfaceHeld = false;
+      if (ship.positionY !== STARTING_CANYON_LAYOUT.seaSurfaceY) surfaceHeld = false;
     }
     const outboundOk =
       Math.abs(ship.positionX - 16) < 1e-6 && ship.velocityX > 0 && zDrift < 1e-9;
@@ -982,13 +1033,13 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     for (let i = 0; i < Math.round(3 / step); i += 1) {
       ship.update(step);
       maxX = Math.max(maxX, ship.positionX);
-      if (ship.positionY !== PROVISIONAL_SEA_SURFACE_Y) surfaceHeld = false;
+      if (ship.positionY !== STARTING_CANYON_LAYOUT.seaSurfaceY) surfaceHeld = false;
     }
     // 4+3초 × 4m/s = 28m — 20m 지점(B)에서 반전해 x=12로 복귀 중이어야 한다
     const bounced =
       maxX <= 20 + 1e-6 && Math.abs(ship.positionX - 12) < 1e-6 && ship.velocityX < 0;
     check('화물선: 끝점 도달 시 왕복 반전 (경로 초과 없음)', bounced, `maxX=${maxX.toFixed(3)}, x=${ship.positionX.toFixed(2)}`);
-    check('화물선: 해수면 높이 유지 (전 프레임)', surfaceHeld && ship.positionY === PROVISIONAL_SEA_SURFACE_Y, `y=${ship.positionY}`);
+    check('화물선: 해수면 높이 유지 (전 프레임)', surfaceHeld && ship.positionY === STARTING_CANYON_LAYOUT.seaSurfaceY, `y=${ship.positionY}`);
 
     const heading = ship.headingRadians; // 복귀 중 (-X 방향) → 선수 -X: h = +π/2
     check('화물선: 선수각 = 진행 방향 (conventions 선수 규약)', Math.abs(heading - Math.PI / 2) < 1e-6, `heading=${heading.toFixed(4)}`);
@@ -1003,7 +1054,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
         id: 900,
         waypointA: { x: 0, z: -30 },
         waypointB: { x: 10, z: -30 },
-        surfaceY: PROVISIONAL_SEA_SURFACE_Y,
+        surfaceY: STARTING_CANYON_LAYOUT.seaSurfaceY,
         speedMetersPerSecond: 4,
         hitRadius: 9,
         sinkDurationSeconds: 2,
@@ -1025,7 +1076,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       id: 900,
       waypointA: { x: 0, z: -30 },
       waypointB: { x: 60, z: -30 },
-      surfaceY: PROVISIONAL_SEA_SURFACE_Y,
+      surfaceY: STARTING_CANYON_LAYOUT.seaSurfaceY,
       speedMetersPerSecond: 4,
       hitRadius: 9,
       sinkDurationSeconds: 2,
@@ -1075,7 +1126,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       id: 900,
       waypointA: { x: 0, z: -30 },
       waypointB: { x: 20, z: -30 },
-      surfaceY: PROVISIONAL_SEA_SURFACE_Y,
+      surfaceY: STARTING_CANYON_LAYOUT.seaSurfaceY,
       speedMetersPerSecond: 4,
       hitRadius: 9,
       sinkDurationSeconds: 2,
@@ -1105,7 +1156,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     const inRegistry = systems.targets.list.some((target) => target.id === state.id);
     check(
       '화물선: 기본 조립에서 1척 생성 + TargetRegistry 등록 + 계약 상태 노출',
-      inRegistry && state.positionY === PROVISIONAL_SEA_SURFACE_Y && !state.hit && !state.removed,
+      inRegistry && state.positionY === STARTING_CANYON_LAYOUT.seaSurfaceY && !state.hit && !state.removed,
       `id=${state.id}, y=${state.positionY}`,
     );
 
@@ -1113,7 +1164,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     for (let i = 0; i < Math.round(2 / dt); i += 1) systems.update(dt);
     check(
       '화물선: 조립 update 경로에서 항행 진행 (그래픽 폴링용 상태 갱신)',
-      state.positionX !== xBefore && state.positionY === PROVISIONAL_SEA_SURFACE_Y,
+      state.positionX !== xBefore && state.positionY === STARTING_CANYON_LAYOUT.seaSurfaceY,
       `x: ${xBefore.toFixed(2)} → ${state.positionX.toFixed(2)}`,
     );
 
