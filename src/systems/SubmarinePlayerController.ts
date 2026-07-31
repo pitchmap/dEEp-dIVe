@@ -36,8 +36,8 @@ import {
   PROVISIONAL_VERTICAL_MAX_RATIO,
 } from './provisionalMovement';
 import {
-  PROVISIONAL_SUBMARINE_MAX_Y,
-  PROVISIONAL_SUBMARINE_MIN_Y,
+  SUBMARINE_MAX_Y,
+  SUBMARINE_MIN_Y,
 } from './provisionalWorld';
 
 const QUARTER_TURN_RADIANS = Math.PI / 2;
@@ -182,11 +182,11 @@ export class SubmarinePlayerController implements PlayerController, SubmarinePos
     this.z += -Math.cos(this.heading) * distance;
 
     this.y += this.currentVerticalSpeed * deltaSeconds;
-    if (this.y >= PROVISIONAL_SUBMARINE_MAX_Y) {
-      this.y = PROVISIONAL_SUBMARINE_MAX_Y;
+    if (this.y >= SUBMARINE_MAX_Y) {
+      this.y = SUBMARINE_MAX_Y;
       if (this.currentVerticalSpeed > 0) this.currentVerticalSpeed = 0;
-    } else if (this.y <= PROVISIONAL_SUBMARINE_MIN_Y) {
-      this.y = PROVISIONAL_SUBMARINE_MIN_Y;
+    } else if (this.y <= SUBMARINE_MIN_Y) {
+      this.y = SUBMARINE_MIN_Y;
       if (this.currentVerticalSpeed < 0) this.currentVerticalSpeed = 0;
     }
   }
@@ -211,7 +211,7 @@ export class SubmarinePlayerController implements PlayerController, SubmarinePos
   }
 
   private clampY(y: number): number {
-    return Math.min(PROVISIONAL_SUBMARINE_MAX_Y, Math.max(PROVISIONAL_SUBMARINE_MIN_Y, y));
+    return Math.min(SUBMARINE_MAX_Y, Math.max(SUBMARINE_MIN_Y, y));
   }
 
   private updateHeading(deltaSeconds: number): void {

@@ -22,8 +22,8 @@ import type { EventBus } from '../core/EventBus';
 import {
   PROVISIONAL_CRUISE_MIN_Y,
   PROVISIONAL_PERISCOPE_MIN_Y,
-  PROVISIONAL_SUBMARINE_MAX_Y,
-  PROVISIONAL_SUBMARINE_MIN_Y,
+  SUBMARINE_MAX_Y,
+  SUBMARINE_MIN_Y,
 } from './provisionalWorld';
 
 /** 얕은 구간 → 깊은 구간 순서. 길이 3 고정 (DepthLayerId와 1:1) */
@@ -51,8 +51,8 @@ export interface DepthZoneConfig {
 const PROVISIONAL_ZONES: DepthZoneConfig = {
   periscopeMinY: PROVISIONAL_PERISCOPE_MIN_Y,
   cruiseMinY: PROVISIONAL_CRUISE_MIN_Y,
-  maxY: PROVISIONAL_SUBMARINE_MAX_Y,
-  minY: PROVISIONAL_SUBMARINE_MIN_Y,
+  maxY: SUBMARINE_MAX_Y,
+  minY: SUBMARINE_MIN_Y,
 };
 
 export class LayeredDepthSystem implements DepthSystem {
