@@ -70,7 +70,8 @@
 - **차단 문제:** 배포 URL 미확보 — 저장소 관리자가 Settings→Pages에서 Source를 "GitHub Actions"로 1회 설정 후 워크플로 실행 필요 (`docs/DEPLOY.md`). 이 작업 환경에는 해당 권한·인증 정보 없음
 - **변경된 계약:** 없음 — 계약 파일 직접 수정 없음 (INT-CORE-002의 `AimSystem`·`aimModeChanged`를 소비만). INT-TOOL-001 승인 완료(리드 D+5). INT-TOOL-002(HUD 조립 선반영)·INT-TOOL-004(HUD 전투 배선 선반영) 확인 대기, INT-TOOL-003(구 #004 요청 이벤트 3종)은 **폐기**
 - **통합 주의사항:** ① **전투 마우스 입력의 소유자는 게임플레이(MouseCombatInput)** — HUD는 캔버스 mousedown을 계측+게이트키핑만 하고 aim을 호출하지 않는다. 전투로 가면 안 되는 클릭(잠금 진입·진입 직후 250ms·비잠금·일시정지)은 HUD가 stopPropagation으로 소비하므로, MouseCombatInput을 window보다 안쪽(캔버스 자체)에 부착하도록 바꾸면 이 차단이 깨진다 — 부착 지점 변경 시 툴링과 협의 필요 ② 일시정지(잠금 해제)는 GameLoop 정지 방식 — 게임플레이 update가 멈추므로 HUD가 잠금 해제 시 `aim.endAim()`을 보장 호출한다. 일시정지 중 쌓일 수 있는 클릭은 오버레이가 소비 ③ Esc·H는 HUD가 선점(Esc=잠금 해제·일시정지, 조준 취소 키 아님) — 새 키 추가 시 `controlsConfig.ts` 단일 소스에 등록 ④ 개발 모드 params/*.json(ui.json 포함) 저장 시 리로드 없이 반영 ⑤ WebAudioSystem은 미조립 유지(D13~14 조립 — 리드 D+5 결정) ⑥ PC 화면 버튼은 INT-CORE-002로 리드 승인 확인됨(별도 전투 시스템 금지 계약)
-- **마지막 업데이트:** HUD ↔ AimSystem 실연결 (게임플레이·리드 브랜치 병합 포함)
+- **완료(추가 3):** 최신 리드(`c4841cf` — CanyonLayout 단일 데이터·카메라 리센터 규약)·게임플레이(`b7faf44` — CargoShipSystem·INT-CORE-003 포즈/화물선 계약) 병합 후 HUD 재검증 — Game.ts 충돌 없음(병합 양측 모두 미수정, 기존 배선 그대로 유효), `torpedoHit` 이벤트 추가에도 EventBus 타입 무영향, `poseSource`의 `SubmarinePoseSource` 계약 전환과 구조 호환 확인. HUD 헤드리스 33/33 + 게임플레이 결정적 검증 71/71 통과(버튼·마우스 실발사, 재장전·잔탄 동등, 중복 발사 없음)
+- **마지막 업데이트:** 리드 c4841cf·게임플레이 b7faf44 병합 재검증 완료. 화물선 Scene 배선(`attachCargoShipSource`)은 렌더 `cbcbf65` 병합 전이라 보류 — 배선 한 줄 예시를 INT-TOOL-004에 기록
 - **담당 브랜치:** `claude/deep-dive-tooling-phase-0-cj6c49` (`feat/tooling`의 세션 사본)
 
 ## 기획

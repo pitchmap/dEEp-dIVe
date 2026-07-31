@@ -93,6 +93,15 @@ this.controlsHud = new ControlsHud(this.container, canvas, {
 // stop()에서: this.controlsHud?.dispose(); this.controlsHud = null; (registry.disposeAll 앞)
 ```
 
+**후속(리드 배선 대기 — 렌더 브랜치 병합 시):** 화물선 상태 주입은 현재
+CanyonScene에 `attachCargoShipSource`가 없어(렌더 `cbcbf65` 미병합) 배선
+불가 — 더미·캐스팅 없이 보류. 렌더 병합 후 composeSystems의
+`scene.attachPoseSource(gameplay.poseSource);` 바로 아래에 한 줄 추가:
+
+```ts
+scene.attachCargoShipSource(gameplay.cargoShipState); // CargoShipStateSource 계약 — ARCHITECTURE 'Game 조립 계약'
+```
+
 ### INT-GAME-006 — 어뢰 수치 params 이관 + 명중 통지 이벤트 신설 요청
 
 | 필드 | 내용 |
