@@ -23,6 +23,34 @@
 
 ## 제안 목록
 
+### INT-GAME-003 — AimSystem 진입점 2개(enter/fire) 계약 신설 [결정 대기]
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 작업 관리자 (8차 소회의 결의 1 이행 — 실구현 협의는 오세진·임찬영) |
+| 대상 시스템 | `src/contracts/systems.ts` — 조준·발사 진입점. 기존 `TorpedoSystem.fire()`와의 관계 정리 필요 |
+| 필요한 변경 | 8차 결의 1: 마우스(우클릭 홀드 조준/좌클릭 발사)와 화면 버튼이 **동일한** 조준·발사 시스템을 호출해야 하며, 진입점은 `AimSystem.enter()` / `AimSystem.fire()` 2개만 존재하도록 강제. 선택지: ① TorpedoSystem에 `enterAim()/exitAim()` 추가 ② 별도 AimSystem 인터페이스 신설 후 TorpedoSystem.fire() 위임 — 리드 결정 필요 |
+| 변경 이유 | 입력 경로 이원화(마우스/버튼)로 조준 시스템이 갈라지면 밸런스 테스트 2배 (8차 회의 박태현 우려의 원천 차단) |
+| 관련 게이트 | G3 (버튼 = 튜토리얼 겸용), G7 |
+| 영향을 받는 파일 | `src/contracts/systems.ts`, `docs/INTERFACES.md`, (구현) `src/systems/*`, (버튼) `src/ui/*` |
+| 하위 호환 여부 | TorpedoSystem 구현체 아직 없음 — 지금 결정하면 깨짐 없음. **D+7 마감 내 흡수 전제이므로 조기 결정 필요 (스프린트 병목)** |
+| 개발 리드 결정 | **대기** |
+| 적용 커밋 | — |
+
+### INT-RENDER-002 — PlayerController 전후 부호 있는 속도 노출 [결정 대기]
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 작업 관리자 (8차 소회의 결의 2 이행 — 실소비자는 그래픽스 프로펠러 렌더) |
+| 대상 시스템 | `src/contracts/systems.ts`의 `PlayerController` — 현재 `speed`는 부호 규약 미명세 |
+| 필요한 변경 | 프로펠러 회전 = "실제 전후 속도값의 함수 (W 정회전 / S 역회전, 하한 공회전)"이므로 렌더가 **부호 있는 전후 속도**를 읽을 수 있어야 함. 선택지: ① `speed`를 부호 있는 값으로 명세 확정 ② `signedSpeed` 별도 노출 — 리드 결정 필요. `A/D`는 이 값에 어떤 항도 추가하지 않음 (8차 결의 2) |
+| 변경 이유 | 규약 없는 곳에서 구현자 임의 판단 방지 (8차 회의 개최 사유 그 자체) |
+| 관련 게이트 | G5 |
+| 영향을 받는 파일 | `src/contracts/systems.ts`, `docs/INTERFACES.md`, `src/systems/SubmarinePlayerController.ts`, (소비) `src/render/*` 프로펠러 |
+| 하위 호환 여부 | 현 구현(`SubmarinePlayerController`)의 내부 속도 부호 규약 확인 후 명세화 — 명세만 추가하면 깨짐 없음 |
+| 개발 리드 결정 | **대기** |
+| 적용 커밋 | — |
+
 ### INT-TOOL-001 — Node 버전 고정(engines)·ParamLoader 핫리로드 내부 교체
 
 | 필드 | 내용 |
