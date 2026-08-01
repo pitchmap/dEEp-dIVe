@@ -23,6 +23,13 @@ const TIER_ACCENT_COLOR = 0x6d7a82;
 /** 선체 반長 — 프로펠러(선미 +Z) 장착 위치 (시각 상수) */
 const SUBMARINE_HALF_LENGTH = 2.8;
 
+/**
+ * 어뢰관 앵커 — 모델이 정의하는 단일 지점 (13차 결의 2: 앵커는 모델 정의,
+ * 파생 소켓은 앵커에서만 파생). 로컬 -Z = 선수 규약(core/conventions).
+ * 선수 하부 어뢰관 군의 중앙 — 최종 에셋 교체 시 이 값만 갱신한다.
+ */
+const TORPEDO_TUBE_ANCHOR_LOCAL = Object.freeze({ x: 0, y: -0.5, z: -2.6 });
+
 export type VisualTier = 1 | 2 | 3;
 
 function clampTier(value: number): VisualTier {
@@ -35,6 +42,14 @@ export class SubmarineVisual {
   readonly root = new THREE.Group();
   /** 프로펠러 장착 Z (선미) */
   readonly sternMountZ = SUBMARINE_HALF_LENGTH + 0.15;
+  /** 어뢰관 앵커 로컬 좌표 — 계약 이관(INT-RENDER-008) 시 참조용 공개 값 */
+  readonly torpedoTubeAnchorLocal = TORPEDO_TUBE_ANCHOR_LOCAL;
+  /**
+   * 조준 카메라 소켓 (13차 결의 2) — 어뢰관 앵커 **정위치**, 전방축은 모델
+   * 전방(-Z)과 동일. 별도 오프셋 없음 — 소비 측(조준 카메라)은 이 소켓의
+   * 월드 위치·방향을 그대로 사용해야 하며 독자 오프셋 계산 금지.
+   */
+  readonly aimCameraSocket = new THREE.Object3D();
 
   private readonly disposables: Array<{ dispose(): void }> = [];
   /** 단계별 부품 그룹 — [0]=2단계 추가분, [1]=3단계 추가분 (1단계 = 기본형) */
@@ -63,6 +78,13 @@ export class SubmarineVisual {
     const sail = new THREE.Mesh(sailGeometry, material);
     sail.position.set(0, 1.2, -0.5);
     this.root.add(sail);
+
+    this.aimCameraSocket.position.set(
+      TORPEDO_TUBE_ANCHOR_LOCAL.x,
+      TORPEDO_TUBE_ANCHOR_LOCAL.y,
+      TORPEDO_TUBE_ANCHOR_LOCAL.z,
+    );
+    this.root.add(this.aimCameraSocket);
 
     this.buildHullTierParts(material, accentMaterial);
     this.buildWeaponTierParts(accentMaterial);

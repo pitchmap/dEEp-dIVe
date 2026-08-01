@@ -72,6 +72,26 @@ const WALL_COLOR = 0x59646c;
 /** 포즈 미주입 시 기본 수직 위치 — 스폰 관례(y=0, 순항 구간)와 동일 */
 const DEFAULT_SUBMARINE_Y = 0;
 
+/**
+ * 자기 선체 전용 렌더 레이어 (13차 결의 3) — 조준 카메라에서 **레이어
+ * 마스크로만** 자기 선체를 제외한다. 객체 visible·material 전역 변경 금지:
+ * 블롭 섀도·수면·타 카메라(QA·기지 뷰)에는 선체가 그대로 남는다.
+ */
+const SELF_HULL_LAYER = 1;
+
+/**
+ * 미세 조준 각 소스 — 게임플레이 소유 상태의 구조적 소비 인터페이스
+ * (13차 결의 4: aiming.json 한계각·감도·복귀는 게임플레이가 판정).
+ * 렌더는 결과 각도만 소비하며, 소스 부재 시 0(정면)으로 취급한다.
+ * 정식 계약 이관은 INT-RENDER-008 요청.
+ */
+export interface AimAngleSource {
+  /** 소켓 전방축 기준 미세 yaw (rad) — 게임플레이 한계각 적용 후 값 */
+  readonly yawRadians: number;
+  /** 소켓 전방축 기준 미세 pitch (rad, 양수 = 위) */
+  readonly pitchRadians: number;
+}
+
 export class CanyonScene implements ManagedScene {
   private readonly scene = new THREE.Scene();
   private readonly layout: CanyonLayout;
@@ -89,6 +109,7 @@ export class CanyonScene implements ManagedScene {
   private poseSource: SubmarinePoseSource | null = null;
   private cargoShipSource: CargoShipStateSource | null = null;
   private torpedoSource: TorpedoStateSource | null = null;
+  private aimAngleSource: AimAngleSource | null = null;
   private cargoShip: CargoShipVisual | null = null;
   private xraySpike: XrayFloodingSpike | null = null;
 
@@ -141,6 +162,11 @@ export class CanyonScene implements ManagedScene {
     this.buildCanyonFromLayout();
     this.mountSubmarine();
 
+    // 자기 선체(프로펠러·조준 소켓 포함 서브트리)를 전용 레이어에만 둔다.
+    // 3인칭 카메라는 이 레이어를 켠 채 시작 — 조준 중에만 끈다 (13차 결의 3).
+    this.submarine.root.traverse((node) => node.layers.set(SELF_HULL_LAYER));
+    this.renderer.camera.layers.enable(SELF_HULL_LAYER);
+
     this.blobShadow = new BlobShadow(this.layout.floorY);
     this.scene.add(this.blobShadow.mesh);
 
@@ -162,6 +188,16 @@ export class CanyonScene implements ManagedScene {
     this.mountXraySpikeIfRequested();
     this.mountBossSpikeIfRequested();
     this.mountBaseViewIfRequested();
+
+    // `?aimdemo=1` — 어뢰 조준경 **표시 고정** QA 플래그: 조준경·조준 카메라·
+    // 선체 레이어 제외를 임의 심도에서 정지 검수한다. 게임플레이 조준 판정
+    // (전 심도 진입 — 창2 작업)과 무관한 렌더 검수 전용이며, 정식
+    // aimModeChanged 이벤트가 오면 그 상태가 우선한다 (?shipdemo 관례).
+    if (new URLSearchParams(window.location.search).get('aimdemo') === '1') {
+      this.ensurePeriscope().setAiming(true);
+      this.setAimCameraActive(true);
+      console.info('[CanyonScene] 조준경 표시 고정 (?aimdemo=1 — 렌더 QA 전용).');
+    }
   }
 
   /**
@@ -235,6 +271,15 @@ export class CanyonScene implements ManagedScene {
   }
 
   /**
+   * 미세 조준 각 소스 연결점 — 게임플레이가 aiming.json 한계각·감도를 적용해
+   * 계산한 결과 각을 렌더가 소비만 한다 (렌더 독자 한계각·감도 금지).
+   * 미주입 시 조준 카메라는 소켓 정면(미세각 0)을 본다.
+   */
+  attachAimAngleSource(source: AimAngleSource): void {
+    this.aimAngleSource = source;
+  }
+
+  /**
    * 외형 단계(visualTier) 주입 — 리드 메타 루프가 제공하는 명시적 단계만
    * 소비한다 (업그레이드 수치 계산 금지, INT-RENDER-007).
    */
@@ -283,7 +328,24 @@ export class CanyonScene implements ManagedScene {
     this.unsubscribeAimMode?.();
     this.unsubscribeAimMode = bus.on('aimModeChanged', (payload) => {
       this.ensurePeriscope().setAiming(payload.aiming);
+      this.setAimCameraActive(payload.aiming);
     });
+  }
+
+  /**
+   * 조준 카메라 전환 (aimModeChanged 전이에서만 호출 — 렌더 독자 전환 없음).
+   *  - 진입: 자기 선체 레이어를 조준 카메라 마스크에서만 끈다 (13차 결의 3 —
+   *    그림자·수면·타 카메라 보존, visible·material 전역 변경 없음).
+   *  - 해제: 레이어 복원 + 현 카메라 위치에서 3인칭 후방 뷰로 자연 복귀.
+   */
+  private setAimCameraActive(active: boolean): void {
+    const camera = this.renderer.camera;
+    if (active) {
+      camera.layers.disable(SELF_HULL_LAYER);
+      return;
+    }
+    camera.layers.enable(SELF_HULL_LAYER);
+    this.rig.beginReturnFrom(camera.position);
   }
 
   /** 조준경 오버레이 지연 생성 — 캔버스 부모(#app)에 겹친다 */
@@ -318,7 +380,14 @@ export class CanyonScene implements ManagedScene {
     this.submarine.root.position.set(x, y, z);
     this.submarine.root.rotation.y = meshYawRadians(heading);
     this.blobShadow.follow(x, z); // 블롭 섀도는 해저 투영 — 수직 이동과 무관
-    this.rig.update(deltaSeconds, x, y, z, heading);
+
+    if (this.periscope?.isAiming) {
+      // 어뢰 조준경 — 선수 발사관 시점. 모든 심도에서 동일 진입(별도 잠망경
+      // 심도 카메라 전환 없음): 소켓이 잠수함을 따라가므로 심도별 분기 불필요.
+      this.updateAimCamera();
+    } else {
+      this.rig.update(deltaSeconds, x, y, z, heading);
+    }
 
     // B안 스파이크 전용 — 근접 통과 카메라 흔들림 (지수 감쇠, 기본 0)
     if (this.bossShakeIntensity > 0.001) {
@@ -345,6 +414,24 @@ export class CanyonScene implements ManagedScene {
     this.updateFogByCameraDepth();
     this.xraySpike?.update(deltaSeconds);
     this.bossSpike?.update(deltaSeconds);
+  }
+
+  /**
+   * 어뢰 조준경 카메라 — aimCameraSocket의 월드 위치·방향을 **그대로**
+   * 사용한다 (13차 결의 2: 독자 오프셋 계산 금지 — 소켓 정의가 단일 지점).
+   * 미세 조준 각은 게임플레이 소스(aimAngleSource)의 결과 값만 소켓 로컬축
+   * 기준으로 더한다 — 렌더가 한계각·감도를 판정하지 않는다. 발사 후에도
+   * aimModeChanged(false)가 올 때까지 이 시점을 유지한다.
+   */
+  private updateAimCamera(): void {
+    const camera = this.renderer.camera;
+    const socket = this.submarine.aimCameraSocket;
+    this.submarine.root.updateMatrixWorld(true);
+    socket.getWorldPosition(camera.position);
+    socket.getWorldQuaternion(camera.quaternion);
+    // 소켓 로컬축 기준 미세각: yaw(로컬 Y, 양수=좌) → pitch(로컬 X, 양수=위)
+    camera.rotateY(this.aimAngleSource?.yawRadians ?? 0);
+    camera.rotateX(this.aimAngleSource?.pitchRadians ?? 0);
   }
 
   /**
@@ -406,6 +493,8 @@ export class CanyonScene implements ManagedScene {
   }
 
   dispose(): void {
+    // 조준 카메라 레이어 복원 — 장면 수명과 함께 마스크 상태를 남기지 않는다
+    this.renderer.camera.layers.enable(SELF_HULL_LAYER);
     this.unsubscribeParamsReload?.();
     this.unsubscribeParamsReload = null;
     this.unsubscribeTorpedoHit?.();
