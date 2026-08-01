@@ -319,16 +319,20 @@ OfficialRuntimeParams (contracts/officialParams.ts)
   ├─ economy.creditLossOnDestroyedRatio → MetaLoop (provisional 삭제됨)
   ├─ upgrades → UpgradePurchaseSystem·UpgradeState·BaseScreenPort·UI 포트
   ├─ equipment → BaseScreenPort
+  ├─ economy·cargo·equipment → GameplaySystems 생성자 1회 주입
   ├─ economy.salvageSpawns ─┐
-  └─ aiming·cargo → 게임플레이 주입 API 도착 대기 (적용 지침)
+  └─ aiming → 조준 로더 배선 대기 (provisionalAiming 잔존)
                             │ spawnId 결합 (composeSalvageSpawnPlan)
-SalvagePlacementSource ─────┘   좌표 = 월드·그래픽스 소유 (미도착 = unwired)
+SalvagePlacementSource ─────┘   좌표 = world/salvagePlacements.ts (월드·그래픽스)
         │
         ▼
 SortieSalvageSpawner.beginSortie()  ← sessionPort.start() (출항당 1회 가드)
         │
         ▼
-gameplay.economy.spawnSalvage(kind, x, y, z, rarePartId)
+gameplay.spawnSalvageFromPlan(entry)   ← 결합 entry 전체 (spawnId 보존)
+        │
+        ▼
+EconomySystem — spawnId 기준 중복·회수 후 재생성 거부 (이중 방어)
 ```
 
 - 공식 로더 호출은 composition root **각 1회** — 시스템·UI의 JSON·로더
@@ -338,9 +342,18 @@ gameplay.economy.spawnSalvage(kind, x, y, z, rarePartId)
 - 같은 출항 중복 생성·파괴분 재생성 금지(출항당 플래그 가드), 새 출항 시
   재생성 (`resetSortieSession` 직후 `beginSortie`).
 - 배치 미도착 상태는 명시적 unwired — 임시 좌표를 만들지 않는다.
-- `src/meta/provisionalEconomy.ts` 삭제 완료 (손실률 0.5는 economy.json이
-  정본). 게임플레이 `systems/economy/provisionalEconomy.ts`의 주입 교체는
-  게임플레이 소유 (INT-CORE-011 소비 지침).
+- **spawnId는 결합부터 생성까지 유실 없이 전달된다.** 좌표만 넘기던 구
+  어댑터(`spawnSalvage(kind,x,y,z,rarePartId)`)는 spawnId·확정 credits를
+  잃어 게임플레이 측 중복 거부가 성립하지 않았으므로 폐기했다.
+- 경제 계열 provisional 모듈은 **전부 삭제됐다** — `meta/provisionalEconomy`·
+  `systems/economy/provisionalEconomy`·`systems/provisionalCargo`·
+  `systems/provisionalEquipment`·`provisionalUpgradeCost`·`purchaseTypes`.
+  production import 0건 (verify:gameplay·verify:meta 정적 검사로 고정).
+  손실률 0.5·픽업 6m·드롭 120/60/40/25는 `params/economy.json`이 정본이다.
+- 저장 loadout 복원도 이 조립 지점 1회다:
+  `restoreSavedLoadout(loaded.source === 'fresh' ? null : loaded.data.equippedGear)`.
+  `null`(저장 없음)과 `[]`(명시적 전부 해제)를 **구분**한다 — 빈 배열에
+  기본 어뢰를 되돌려 주면 '전부 해제'가 새로고침마다 무효가 된다.
 
 ## 게임 상태 전환과 장면 전환의 분리
 

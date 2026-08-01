@@ -1,9 +1,13 @@
-# ECONOMY_V1_PROPOSAL — 스프린트 A8 공식 경제 수치 제안 (DRAFT)
+# ECONOMY_V1_PROPOSAL — 스프린트 A8 공식 경제 수치 (승인 완료)
 
-> **상태: 제안(DRAFT) — 승인 전. `params/upgrades.json`·`params/equipment.json`의
-> null은 이 문서만으로는 변경하지 않는다.** 승인 또는 수정값 전달 후에만 입력한다.
+> **상태: 승인(APPROVED) — 제안 A·B와 결정 D1~D7이 원안대로 승인되었다.**
+> 승인값은 `params/upgrades.json`·`params/equipment.json`·`params/economy.json`·
+> `params/cargo.json`에 입력 완료(미확정 null 0개)이며, 이 문서는 그 결정의
+> 근거 기록이다. **수치의 정본은 params JSON이고 이 문서는 사본이 아니라 설명**
+> — 값을 바꿀 때는 JSON을 고치고 `verify:sprint-a`로 대조한다.
 > 근거: 6차 대회의 결의 5·6·9 / 7차 대회의(`meetings/12`) 결의 4·8 /
 > 개발 소회의(`meetings/13`) 보완분. 검증기: `src/tools/economyMath.ts`.
+> 공식 로더: `src/tools/economyParams.ts`.
 
 ---
 
@@ -211,9 +215,9 @@
 
 ---
 
-## 6. 결정이 필요한 항목 (승인 시 함께 회신 요청)
+## 6. 결정 항목 — 전부 제안 원안대로 승인됨
 
-| # | 항목 | 선택지 | 제안 |
+| # | 항목 | 선택지 | 제안 → **승인 결과** |
 |---|---|---|---|
 | **D1** | **해저 재화 배치** — 현재 production 미배치. 곡선의 전제 | (a) 배치 조립 요청(게임플레이/리드) (b) 수송선만 기준으로 가격 하향 | **(a)** — 미배치 시 보스 준비 10회로 목표 이탈 |
 | **D2** | **희귀 부품 획득 경로** — 현재 production 0건 | (a) 해저 재화에 `rarePartId` 배치 (b) 스프린트 A에서는 희귀 요구를 0으로 두고 B/C에서 도입 | **(a)**, 불가 시 (b)로 4·5단계 희귀 요구 일시 0 |
@@ -225,15 +229,54 @@
 
 ---
 
-## 7. 승인 후 실행 예정 (지금은 미실행)
+### 6-1. D1·D2 승인 반영 방식 (`params/economy.json`)
 
-1. 승인값을 `params/upgrades.json`·`params/equipment.json`에 입력 → **null 0개**
-2. `economyMath` 검증기 통과(7항목·4종 상한, 음수 거부, 배열 길이 일치,
-   희귀 부품 정수, 미등록 ID 거부)
-3. provisional 경제값의 production 참조 제거
-   (`provisionalUpgradeCost`·`provisionalEconomy` 등 → 주입 경로 교체)
-4. A8 검증 갱신 → `verify:sprint-a` **24/24** 목표
-5. 커밋 태그 `[ECON]`
+D1(해저 재화 배치)·D2(희귀 부품 경로)는 **확률이 아니라 MVP 확정 배치**로
+승인되어 `salvageSpawns` 3건으로 정의했다. `salvage-3`이 `rarePartId:
+"rare-alloy-core"`를 확정 드롭하는 **MVP 유일 희귀 부품 획득 경로**다.
+배치 좌표는 월드·그래픽스 소유이므로 여기에는 `spawnId`·`kind`·보상만 두고,
+좌표 연결은 통합 창이 `spawnId`로 수행한다 — 툴링이 위치를 정하지 않는다.
+
+---
+
+## 7. 승인 후 실행 — 완료 상태
+
+| # | 항목 | 상태 |
+|---|---|---|
+| 1 | 승인값을 `upgrades.json`·`equipment.json`에 입력 → **null 0개** | ✅ 완료 (105+9 → 0) |
+| 2 | `economyMath` 검증기 통과 (상한·음수·배열 길이·희귀 정수·미등록 ID) | ✅ 완료 (+ 슬롯 용량 2·시작 보유 검증 추가) |
+| 3 | provisional 경제값을 공식 params로 이관 | ✅ **params 측 완료** — `economy.json`·`cargo.json` 신설, `economyParams.ts` 로더 제공 |
+| 3-b | production의 provisional import 제거 | ⛔ **툴링 소유 밖** — 잔여 5건은 게임플레이(`src/systems/`)·리드(`src/core`,`src/meta`) 소유. §7-1 참조 |
+| 4 | A8 검증 갱신 | ✅ `verify:sprint-a` 자동 **29/29** 통과 |
+| 5 | 커밋 태그 `[ECON]` | ✅ |
+
+### 7-1. 남은 production provisional import 5건 (소유 역할별)
+
+| 파일 | import | 소유 |
+|---|---|---|
+| `src/core/Game.ts:26` | `../meta/provisionalEconomy` | 리드 (공통 보호 파일) |
+| `src/meta/provisionalEconomy.ts` | (정의 파일) | 리드 |
+| `src/systems/CargoShipSystem.ts:37` | `./provisionalCargo` | 게임플레이 |
+| `src/systems/EquipmentSystem.ts:34` | `./provisionalEquipment` | 게임플레이 |
+| `src/systems/economy/EconomySystem.ts:27` | `./provisionalEconomy` | 게임플레이 |
+| `src/systems/economy/UpgradePurchaseSystem.ts:30` | `./provisionalUpgradeCost` | 게임플레이 |
+
+교체 방법은 동일하다: 해당 provisional 상수 대신
+`loadEconomyParams()`(`src/tools/economyParams.ts`)가 돌려주는
+`{ upgrades, equipment, economy, cargo }`를 소비한다. 값은 이미 전부 일치하므로
+(provisional 런타임 값을 그대로 이관했다) **배선 교체만으로 동작 변화가 없다** —
+`creditLossOnDestroyedRatio`만 예외로, D5 승인에 따라 게임플레이 0.4 → 0.5로
+통일된다. `verify:sprint-a`의 `A8-migration-consumers`가 잔여 목록을 계속
+출력하며, 0건이 되면 자동 통과로 전환된다.
+
+### 7-2. 기준값이 없어 배율만 정의된 4항목 (임의 생성 금지 준수)
+
+`hullIntegrity`·`maxDepth`·`sonarRange`는 **base stat params도 소비 코드도
+저장소에 없다**. `torpedoDamage`는 소비 후보(`EquipmentSystem.setUpgradeModifiers`)가
+있으나 production 조립에 배선되어 있지 않다. 따라서 이 4항목은 승인된
+`effectBonus`만 정의하고 `paramRef`를 비워 두었으며, **기준값을 추정해
+입력하지 않았다**. 기준값 도착 시 `paramRef` 한 줄 추가로 시뮬레이터 최종값
+계산이 활성화된다 (검증기가 미해석 `paramRef`를 거부하므로 오타는 즉시 잡힌다).
 
 ---
 

@@ -12,7 +12,7 @@
  *  ② SaveBridge — 리드 `saveRequested` → 툴링 `SaveStore` 기록/복원.
  *     저장 코드가 메타 상태 머신을 조작하지 않는다 (읽기 스냅샷만).
  *  ③ UpgradeState — 저장된 단계 → 공식 `UpgradeModifiers` → 유효 파라미터.
- *     계산은 리드 `meta/upgradeMath`, 카탈로그는 툴링 `tools/upgradeMath`.
+ *     계산은 리드 `meta/upgradeMath`, 카탈로그는 툴링 `tools/economyMath`.
  */
 
 import type {
@@ -47,14 +47,6 @@ import type {
   SalvageSpawnPlanEntry,
 } from '../contracts/officialParams';
 import type { SalvageKind } from '../systems/economy/SalvageObject';
-import type {
-  DeparturePort,
-  EquipmentUiPort,
-  MetaCommandResult,
-  SortieEarningsSource,
-  UpgradeOfferView,
-  UpgradePurchasePort,
-} from '../ui/metaEconomyPorts';
 import type { WorldDrop } from '../systems/economy/CreditDropField';
 import type { EventBus, Unsubscribe } from './EventBus';
 import type { GameSystem, SystemContext } from './GameSystem';
@@ -279,7 +271,7 @@ function isUpgradeStatId(id: string): id is UpgradeStatId {
  * 영구 업그레이드 단계 보관 + 공식 보정 집합 산출.
  *
  * 계산식은 리드 `meta/upgradeMath`(단일 구현), 카탈로그 정의·상한은 툴링
- * `tools/upgradeMath`가 소유한다. 이 클래스는 둘을 잇기만 한다.
+ * `tools/economyMath`가 소유한다. 이 클래스는 둘을 잇기만 한다.
  * `params/*.json` 원본은 절대 수정하지 않는다 — 유효값은 파생 복사본이다.
  */
 export class UpgradeState implements UpgradeLevelsPort {
@@ -438,7 +430,10 @@ export interface EquipmentSystemFacade {
   unequipItem(slotIndex: number): GameplayTransactionResult;
 }
 
-/** 게임플레이 purchaseTypes.TransactionResult의 구조 단면 (직접 import 대신) */
+/**
+ * 게임플레이 `EquipmentSystem.EquipmentChangeResult`의 구조 단면
+ * (구현체 직접 import 대신 — 구 `systems/economy/purchaseTypes`는 삭제됨).
+ */
 export type GameplayTransactionResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly category: 'condition' | 'save'; readonly reason: string };
@@ -688,107 +683,12 @@ export function createBaseScreenPort(deps: BaseScreenDeps): BaseScreenPort & {
 }
 
 /* ─────────────────────────────────────────────────────────────
-   ⑤ production UI 포트 어댑터 (그래픽스 metaEconomyPorts 단면 공급)
-   — UI는 이 포트들만 소비한다. QA 데모(econUiQaDemo)는 여기와 무관하며
-   production composition에 포함되지 않는다 (?econdemo 플래그 전용).
+   ⑤ production UI 수명주기 어댑터
+   — UI(EconomyHud·SortiePrepScreen)는 BaseScreenPort v2를 **직접** 소비한다.
+   구계약 변환 어댑터(createMetaUiPorts·toUiCommandResult)는 UI v2 동기화로
+   불필요해져 제거됐다 (INT-RENDER-010 §2). QA 데모(econUiQaDemo)는 여기와
+   무관하며 production composition에 포함되지 않는다 (?econdemo 플래그 전용).
    ───────────────────────────────────────────────────────────── */
-
-/** 공식 결과 코드 → UI 표시 코드 (그래픽스 metaEconomyPorts.MetaCommandResult) */
-export function toUiCommandResult(
-  outcome: BaseCommandOutcome | DepartureResult,
-): MetaCommandResult {
-  switch (outcome) {
-    case 'success':
-    case 'departed':
-      return 'ok';
-    case 'maxLevelReached':
-      return 'maxLevel';
-    case 'saveFailedRolledBack':
-    case 'saveFailed':
-      return 'saveFailed';
-    default:
-      return outcome; // insufficient*/slotFull/alreadyEquipped/economyDataUnavailable/invalidState — 동일 표기
-  }
-}
-
-/** 공식 UpgradeStatId 여부 — UI 문자열 id의 안전한 좁히기 (any 캐스팅 금지) */
-export function isOfficialUpgradeStatId(id: string): id is UpgradeStatId {
-  return isUpgradeStatId(id);
-}
-
-/**
- * SortiePrepScreen·EconomyHud가 소비하는 포트 일괄 생성 — 전부
- * BaseScreenPort(단일 진입점) 위임이다. UI가 지갑·단계·loadout·저장소를
- * 직접 만지는 경로는 존재하지 않는다.
- */
-export function createMetaUiPorts(deps: {
-  readonly baseScreen: BaseScreenPort;
-  readonly rawCatalog: readonly UpgradeEntry[];
-  readonly slotsOf: () => readonly (EquipmentId | null)[];
-}): {
-  upgradePort: UpgradePurchasePort;
-  equipmentPort: EquipmentUiPort;
-  departurePort: DeparturePort;
-  earningsSource: SortieEarningsSource;
-} {
-  const { baseScreen, rawCatalog, slotsOf } = deps;
-
-  const upgradePort: UpgradePurchasePort = {
-    listOffers(): readonly UpgradeOfferView[] {
-      const levels = baseScreen.upgradeLevels;
-      return baseScreen.upgradeCatalog.map((item) => {
-        const raw = rawCatalog.find((entry) => entry.id === item.id);
-        const currentLevel = levels[item.id] ?? 0;
-        const nextEffect =
-          raw && currentLevel < item.maxLevel ? (raw.effectBonus[currentLevel] ?? null) : null;
-        return {
-          statId: item.id,
-          displayName: item.label,
-          currentLevel,
-          maxLevel: item.maxLevel,
-          // 공식 effectBonus 값의 전달 표기 — UI·조립부가 수치를 발명하지 않는다
-          nextEffectText: nextEffect === null ? null : `보정 합 +${Math.round(nextEffect * 100)}%`,
-          cost: item.nextCost,
-        };
-      });
-    },
-    purchase: (statId: string): MetaCommandResult => {
-      if (!isOfficialUpgradeStatId(statId)) return 'invalidState';
-      return toUiCommandResult(baseScreen.purchaseUpgrade(statId));
-    },
-  };
-
-  const equipmentPort: EquipmentUiPort = {
-    get slots(): readonly (EquipmentId | null)[] {
-      return slotsOf();
-    },
-    equip(slotIndex: number, id: EquipmentId): MetaCommandResult {
-      const occupied = slotsOf()[slotIndex] !== null && slotsOf()[slotIndex] !== undefined;
-      const outcome = occupied
-        ? baseScreen.replaceItem(id, slotIndex)
-        : baseScreen.equipItem(id, slotIndex);
-      return toUiCommandResult(outcome);
-    },
-    unequip(slotIndex: number): MetaCommandResult {
-      return toUiCommandResult(baseScreen.unequipItem(slotIndex));
-    },
-  };
-
-  const departurePort: DeparturePort = {
-    confirmDeparture: (): MetaCommandResult => toUiCommandResult(baseScreen.confirmDeparture()),
-  };
-
-  const earningsSource: SortieEarningsSource = {
-    get creditsEarnedThisSortie(): number {
-      return baseScreen.sortieCreditsEarned;
-    },
-    get rarePartsSecuredThisSortie(): number {
-      return baseScreen.sortieRarePartsSecured;
-    },
-  };
-
-  return { upgradePort, equipmentPort, departurePort, earningsSource };
-}
 
 /**
  * 경제 UI 수명주기 어댑터 — 그래픽스 UI 컴포넌트(EconomyHud·SortiePrepScreen)
@@ -895,9 +795,18 @@ export function composeSalvageSpawnPlan(
   return plan;
 }
 
-/** 게임플레이 스폰 진입점의 최소 단면 — EconomySystem.spawnSalvage가 충족 */
+/**
+ * 게임플레이 스폰 진입점의 최소 단면 — `GameplaySystems.spawnSalvageFromPlan`
+ * (내부적으로 `EconomySystem.spawnSalvageFromPlan`)이 충족한다.
+ *
+ * **결합 entry를 통째로** 넘긴다. 좌표만 넘기던 구 시그니처
+ * (`spawnSalvage(kind, x, y, z, rarePartId)`)는 `spawnId`와 확정 보상
+ * (`credits`)을 잃어, 게임플레이 측의 spawnId 기반 중복·회수 후 재생성
+ * 거부가 아예 작동하지 못했다. 스포너의 출항당 1회 가드는 그대로 두고
+ * 게임플레이 가드와 **이중 방어**가 된다 (INT-GAME-011 ③).
+ */
 export interface SalvageSpawnAdapter {
-  spawnSalvage(kind: SalvageKind, x: number, y: number, z: number, rarePartId: string | null): unknown;
+  spawnSalvageFromPlan(entry: SalvageSpawnPlanEntry): { readonly status: string };
 }
 
 export type SalvageSpawnReport =
@@ -958,16 +867,13 @@ export class SortieSalvageSpawner {
       return { status: 'rejected', message: error instanceof Error ? error.message : String(error) };
     }
 
+    // 결합 entry 전체를 그대로 전달한다 — spawnId·확정 보상이 유실되면
+    // 게임플레이 측 중복 거부가 성립하지 않는다.
+    let spawnedCount = 0;
     for (const entry of plan) {
-      this.adapter.spawnSalvage(
-        entry.kind,
-        entry.worldPosition.x,
-        entry.worldPosition.y,
-        entry.worldPosition.z,
-        entry.rarePartId,
-      );
+      if (this.adapter.spawnSalvageFromPlan(entry).status === 'spawned') spawnedCount += 1;
     }
     this.spawnedThisSortie = true;
-    return { status: 'spawned', count: plan.length };
+    return { status: 'spawned', count: spawnedCount };
   }
 }

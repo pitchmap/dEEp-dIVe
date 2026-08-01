@@ -35,7 +35,7 @@ import { META_TRANSITIONS } from './MetaState';
 import { computeSortieSettlement } from './settlement';
 
 export interface MetaLoopOptions {
-  /** 파괴 시 크레딧 손실률 0~1 (임시: provisionalEconomy — params 이관 대기) */
+  /** 파괴 시 크레딧 손실률 0~1 — 공식 `params/economy.json` 주입값 (조립부 1회) */
   creditLossOnDestroyedRatio: number;
 }
 

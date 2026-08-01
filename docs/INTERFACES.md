@@ -97,6 +97,15 @@
 | `SalvagePlacementSource` | salvage 배치의 **월드 좌표 소유** — spawnId·worldPosition·(선택)orientation. 경제 params(`economy.salvageSpawns`)는 spawnId·kind·dropTableId(credits)·rarePartId 소유. composition이 동일 spawnId로 결합 | 좌표 = 월드·그래픽스, 보상 = 기획(economy.json), 결합 = 리드 |
 | `SalvageSpawnPlanEntry` | 결합 결과 — 보상은 economy에서, 좌표는 placement에서만 파생. 누락·중복·미지 spawnId·미지 dropTableId·미지 kind = **거부**(무시 금지) | 리드 (`composeSalvageSpawnPlan`) |
 | production spawn 규칙 | 출항 월드 초기화 시 salvageSpawns 전체(MVP 3개) 1회 생성. 같은 출항 중복·파괴분 재생성 금지(출항당 1회 가드). 새 출항 시 재생성(resetSortieSession 규칙). 배치 미도착 시 임시 좌표 금지 — 명시적 unwired | 스포너 = 리드, 드롭 런타임 = 게임플레이 |
+| `SalvageSpawnAdapter` | 스포너 → 게임플레이 진입점. **결합 entry를 통째로** 넘긴다: `spawnSalvageFromPlan(entry)`. 좌표만 넘기던 구 시그니처는 `spawnId`·확정 `credits`를 잃어 게임플레이 측 중복·회수 후 재생성 거부가 성립하지 않으므로 **폐기**. 스포너의 출항당 1회 가드와 게임플레이의 spawnId 가드가 이중 방어 | 어댑터 정의 = 리드, 구현 = 게임플레이 `GameplaySystems.spawnSalvageFromPlan` |
+
+### 주입 지점 (composition root 1회씩)
+
+| 대상 | 호출 | 규칙 |
+|---|---|---|
+| 공식 params | `new GameplaySystems(bus, params, subscribe, layout, official)` | 생성자 1회 주입. `attachOfficialParams(official)`는 생성자에서 못 받은 경우의 대체 경로 — **둘을 함께 쓰지 않는다** |
+| 저장 loadout | `gameplay.restoreSavedLoadout(saved)` | `saved === null`(SaveStore `source: 'fresh'`) → 공식 시작 장비 부여 / `saved === []`(명시적 전부 해제) → **그대로 유지**. 두 경우를 섞으면 '전부 해제'가 새로고침마다 무효가 된다 |
+| salvage 배치 | `salvageSpawner.attachPlacementSource(STARTING_AREA_SALVAGE_PLACEMENTS)` | 좌표 소유는 `src/world/salvagePlacements.ts`. 미연결이면 unwired(임시 좌표 금지) |
 
 ## 3. 파라미터 계약
 

@@ -14,8 +14,12 @@
  *    이 시스템이 진행하고, 완료 시 removed=true — 렌더(CargoShipVisual)는
  *    이 신호로 시각 자원을 정리한다. 렌더 직접 참조 없음 (상태 주입은
  *    composition root 소관).
- *  - 수치는 params·레벨 산출물 부재로 임시값(provisionalCargo.ts — R7,
- *    이관 요청 INT-GAME-007).
+ *  - 수치는 **공식 `params/cargo.json`**이 유일한 출처다 [INT-CORE-011].
+ *    조립부가 `official.cargo`를 주입하며(생성자 또는 `applyCargoParams`),
+ *    이 시스템은 JSON을 읽거나 툴링 로더를 호출하지 않는다. provisional
+ *    모듈 소비는 제거됐다 — 이관된 값은 기존 런타임 값과 동일하다.
+ *  - 미주입(unwired)이면 **임시 수치를 만들지 않는다**: 표적 미등록·항행
+ *    정지 상태(`configured === false`)로 남고 조립 오류가 드러난다.
  *  - 격침 보상(어뢰 +1, §5.9)은 torpedoHit 이벤트가 진입점 — 보상 지급
  *    구현은 코어 전투 루프 잔여 작업(D6~D9)에서 별도 배선한다.
  */
@@ -23,24 +27,22 @@
 import type { CargoShipStateSource, Updatable } from '../contracts/systems';
 import type { EventBus } from '../core/EventBus';
 import type { ShipHullBox } from './collision/shipHullBox';
-import {
-  PROVISIONAL_CARGO_FREEBOARD,
-  PROVISIONAL_CARGO_HALF_BEAM,
-  PROVISIONAL_CARGO_HALF_LENGTH,
-  PROVISIONAL_CARGO_HIT_RADIUS,
-  PROVISIONAL_CARGO_ID,
-  PROVISIONAL_CARGO_JUDGMENT_DRAFT,
-  PROVISIONAL_CARGO_SINK_DURATION_SECONDS,
-  PROVISIONAL_CARGO_SPEED_MPS,
-  PROVISIONAL_CARGO_WAYPOINT_A,
-  PROVISIONAL_CARGO_WAYPOINT_B,
-} from './provisionalCargo';
-import { STARTING_CANYON_LAYOUT } from '../world/startingCanyonLayout';
+import type { CargoRuntimeParams } from './economy/officialEconomyCatalog';
 import type { CombatTarget, FactionId, TargetRegistry } from './TargetRegistry';
 
 export interface CargoShipWaypoint {
   readonly x: number;
   readonly z: number;
+}
+
+/** 선체 박스 근사 치수 (5차 결의 1 — 어뢰 명중·잠수함 충돌 공유 데이터) */
+export interface CargoHullDimensions {
+  readonly halfLengthMeters: number;
+  readonly halfBeamMeters: number;
+  /** 판정용 흘수 (m) — 흘수선 아래로 잠기는 판정 깊이 */
+  readonly judgmentDraftMeters: number;
+  /** 흘수선 위 선체 높이 (m) */
+  readonly freeboardMeters: number;
 }
 
 export interface CargoShipConfig {
@@ -52,26 +54,53 @@ export interface CargoShipConfig {
   readonly speedMetersPerSecond: number;
   readonly hitRadius: number;
   readonly sinkDurationSeconds: number;
+  readonly hullBox: CargoHullDimensions;
   /** 세력 태그 (소회의 11 결의 2 — 클래스 분화 금지, 태그 방식) */
   readonly faction: FactionId;
   /** 드롭 테이블 참조 — 경제 시스템이 해석 (적대 파괴 시 드롭) */
   readonly dropTableId?: string;
 }
 
-/** 임시 기본 구성 (provisionalCargo.ts — 정식 params/레이아웃 이관 시 교체) */
-export function defaultCargoShipConfig(): CargoShipConfig {
+/**
+ * 공식 화물선 params → 구성 [INT-CORE-011].
+ * 해수면 높이만 레이아웃(월드 소유)에서 오고, 나머지는 전부 params 값이다.
+ * 세력·드롭 테이블은 경제 계약의 고정 태그이며 밸런스 수치가 아니다.
+ */
+export function cargoShipConfigFromOfficial(
+  cargo: CargoRuntimeParams,
+  surfaceY: number,
+): CargoShipConfig {
   return {
-    id: PROVISIONAL_CARGO_ID,
-    waypointA: PROVISIONAL_CARGO_WAYPOINT_A,
-    waypointB: PROVISIONAL_CARGO_WAYPOINT_B,
-    surfaceY: STARTING_CANYON_LAYOUT.seaSurfaceY,
-    speedMetersPerSecond: PROVISIONAL_CARGO_SPEED_MPS,
-    hitRadius: PROVISIONAL_CARGO_HIT_RADIUS,
-    sinkDurationSeconds: PROVISIONAL_CARGO_SINK_DURATION_SECONDS,
+    id: cargo.targetId,
+    waypointA: cargo.waypointA,
+    waypointB: cargo.waypointB,
+    surfaceY,
+    speedMetersPerSecond: cargo.speedMetersPerSecond,
+    hitRadius: cargo.hitRadiusMeters,
+    sinkDurationSeconds: cargo.sinkDurationSeconds,
+    hullBox: cargo.hullBox,
     faction: 'hostile', // 기본 화물선 = 적대 수송선 (파괴 시 크레딧 드롭)
     dropTableId: 'cargo-standard',
   };
 }
+
+/** 미주입 상태의 비활성 구성 — 수치를 만들지 않는다 (전부 무효과) */
+const UNWIRED_CARGO_CONFIG: CargoShipConfig = Object.freeze({
+  id: 0,
+  waypointA: Object.freeze({ x: 0, z: 0 }),
+  waypointB: Object.freeze({ x: 0, z: 0 }),
+  surfaceY: 0,
+  speedMetersPerSecond: 0,
+  hitRadius: 0,
+  sinkDurationSeconds: 0,
+  hullBox: Object.freeze({
+    halfLengthMeters: 0,
+    halfBeamMeters: 0,
+    judgmentDraftMeters: 0,
+    freeboardMeters: 0,
+  }),
+  faction: 'hostile',
+});
 
 export class CargoShipSystem implements Updatable, CargoShipStateSource, CombatTarget {
   private x: number;
@@ -88,15 +117,35 @@ export class CargoShipSystem implements Updatable, CargoShipStateSource, CombatT
   // 생성자 매개변수 프로퍼티 미사용 — 검증 러너(run.mjs)의 Node 타입
   // 스트리핑 호환(삭제 가능 문법만)을 위해 명시적 필드로 둔다.
   private readonly bus: EventBus;
-  private readonly config: CargoShipConfig;
+  private readonly targets: TargetRegistry;
+  private config: CargoShipConfig;
+  private configured: boolean;
 
-  constructor(bus: EventBus, targets: TargetRegistry, config: CargoShipConfig = defaultCargoShipConfig()) {
+  constructor(bus: EventBus, targets: TargetRegistry, config: CargoShipConfig | null = null) {
     this.bus = bus;
-    this.config = config;
-    this.x = config.waypointA.x;
-    this.z = config.waypointA.z;
+    this.targets = targets;
+    this.configured = config !== null;
+    this.config = config ?? UNWIRED_CARGO_CONFIG;
+    this.x = this.config.waypointA.x;
+    this.z = this.config.waypointA.z;
     this.faceCurrentWaypoint();
-    this.unregisterFromTargets = targets.register(this);
+    // 미주입이면 표적으로 등록하지 않는다 — 치수·속력 0짜리 유령선 금지
+    if (this.configured) this.unregisterFromTargets = targets.register(this);
+  }
+
+  /**
+   * 공식 화물선 params 주입 (조립부 전용) — 시작 웨이포인트에서 새로 항행을
+   * 시작한다. 조립 시점 1회 호출을 전제로 하며, 격침 상태는 초기화된다.
+   */
+  applyCargoParams(cargo: CargoRuntimeParams, surfaceY: number): void {
+    this.config = cargoShipConfigFromOfficial(cargo, surfaceY);
+    this.configured = true;
+    this.resetForNewSortie(this.targets);
+  }
+
+  /** 공식 수치 배선 여부 — false면 표적·충돌·항행이 전부 비활성 */
+  get cargoParamsWired(): boolean {
+    return this.configured;
   }
 
   // ── CargoShipStateSource (계약 — 렌더·UI 소비) ─────────────────────────
@@ -162,11 +211,12 @@ export class CargoShipSystem implements Updatable, CargoShipStateSource, CombatT
    * **공유하는 단일 충돌체 데이터** (5차 결의 1)
    */
   get hullBox(): ShipHullBox {
+    const hull = this.config.hullBox;
     return {
-      halfBeamX: PROVISIONAL_CARGO_HALF_BEAM,
-      halfLengthZ: PROVISIONAL_CARGO_HALF_LENGTH,
-      bottomY: this.config.surfaceY - PROVISIONAL_CARGO_JUDGMENT_DRAFT,
-      topY: this.config.surfaceY + PROVISIONAL_CARGO_FREEBOARD,
+      halfBeamX: hull.halfBeamMeters,
+      halfLengthZ: hull.halfLengthMeters,
+      bottomY: this.config.surfaceY - hull.judgmentDraftMeters,
+      topY: this.config.surfaceY + hull.freeboardMeters,
     };
   }
 
@@ -185,7 +235,7 @@ export class CargoShipSystem implements Updatable, CargoShipStateSource, CombatT
 
   update(deltaSeconds: number): void {
     if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0) return;
-    if (this.removedFlag) return;
+    if (!this.configured || this.removedFlag) return;
 
     if (this.hitFlag) {
       this.sinkElapsed += deltaSeconds;
@@ -235,7 +285,7 @@ export class CargoShipSystem implements Updatable, CargoShipStateSource, CombatT
     this.velX = 0;
     this.velZ = 0;
     this.faceCurrentWaypoint();
-    this.unregisterFromTargets = targets.register(this);
+    if (this.configured) this.unregisterFromTargets = targets.register(this);
   }
 
   dispose(): void {

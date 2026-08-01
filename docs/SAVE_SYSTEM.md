@@ -21,6 +21,29 @@
 (`progress` — 단서 수·보스 개방·격파) / 저장 필요 설정
 (`settings.keyboardLockNoticeShown` — 입력 안내 1회 플래그).
 
+## 부팅 복원 (저장의 역방향 — 조립부 1회)
+
+`SaveStore.load()`는 `{ data, source, recovered }`를 돌려주며, `source`가
+복원 규칙을 가른다. composition root에서 **부팅 1회씩만** 수행한다:
+
+| 대상 | 복원 |
+|---|---|
+| 지갑 | `MetaLoop.restoreWallet({ credits, rareParts })` |
+| 업그레이드 단계 | `UpgradePurchaseSystem.restoreLevels(upgradeLevels)` (단일 저장소) → `UpgradeState`는 파생 뷰 |
+| 장착 장비 | `GameplaySystems.restoreSavedLoadout(...)` — 아래 규칙 |
+
+**`equippedGear` 복원 규칙 (혼동 금지):**
+
+| `source` | 넘기는 값 | 결과 |
+|---|---|---|
+| `'fresh'` (저장 데이터 자체가 없음) | `null` | 공식 시작 장비(`startingItem: true` = `standardTorpedo`) 부여 |
+| `'current'` / `'backup'` + `equippedGear: []` | `[]` | **빈 상태 그대로 유지** — 기본 어뢰를 되돌려 주지 않는다 |
+| `'current'` / `'backup'` + 값 있음 | 그 배열 | 저장된 장비 복원 (공식 4종 외 id는 조립부에서 제거) |
+
+빈 배열을 '저장 없음'으로 오인하면 사용자가 전부 해제한 상태가 **새로고침마다
+되살아난다.** 이 구분은 `SaveStore.load()`의 `source` 하나로만 판정한다 —
+배열 길이로 추론하지 않는다.
+
 ## 저장 시점 5종 [확정 — 6차 결의 7 + 소회의(13) 결의 4 개정]
 
 > **저장 책임 단일화 [INT-CORE-010, 리드 결정]:** 한 사용자 명령 = SavePort
