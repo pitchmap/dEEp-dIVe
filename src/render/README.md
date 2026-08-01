@@ -37,15 +37,25 @@
 - `BlobShadow.ts` — 코드 생성 방사형 그라데이션 텍스처 평면 (실시간 그림자 금지 대응)
 - `TorpedoVisuals.ts` — 어뢰 로우폴리 + 기포 항적(풀링·인스턴싱 1드로우).
   `attachTorpedoSource` 주입(INT-RENDER-006 배선 대기) — 판정 없음
-- `PeriscopeView.ts` — 조준경(5차 결의 3): 동일 카메라 + 원형 마스크(DOM) +
-  FOV 보간 + 십자선·눈금. `aimModeChanged` 소비만 — 렌더 독자 전환 없음
+- `PeriscopeView.ts` — 어뢰 조준경(5차 결의 3·13차 결의 1): 동일 카메라 +
+  원형 마스크(DOM) + FOV 보간 + 십자선·눈금 + **하단 2D 발사관 프레임**
+  (관 내부 어둠·관구 림·좌우 관벽 — 마스크와 일체, 십자선·눈금·보조선 뒤
+  레이어). `aimModeChanged` 소비만 — 렌더 독자 전환 없음. 관측용 잠망경은
+  백로그(구현 금지) — 조준경 명칭은 '어뢰 조준경'
 - `LeadShotIndicator.ts` — 조준경 내 리드샷 보조선(요격 지점 링) — 표적
   위치·속도·어뢰 속력의 읽기 전용 소비 표현
 - `EnvironmentDressing.ts` — 부활 1호(5차 결의 5): 산호 3종·어군 2종
   (인스턴싱)·침몰선 잔해·원경 실루엣. 연안 한정, 밀도 캡 기록, 보스 전장은
   이 예산 재배분(11차 결의 1)
 - `SubmarineVisual.ts` — 잠수함 + 외형 단계 어댑터(선체·주무장 각 3단계,
-  visualTier 주입만). 최종 에셋 교체 지점 2함수 격리
+  visualTier 주입만). 최종 에셋 교체 지점 2함수 격리. **어뢰관 앵커·조준
+  카메라 소켓**(13차 결의 2): `torpedoTubeAnchorLocal`(모델 정의 단일 지점)
+  + `aimCameraSocket`(앵커 정위치·전방축 -Z 동일 — 소비 측 독자 오프셋 금지)
+- 조준 카메라(CanyonScene): 조준 중 `aimCameraSocket` 월드 위치·방향 그대로
+  사용(전 심도 동일 — 심도 카메라 전환 없음, 발사 후 유지), 미세 조준각은
+  `attachAimAngleSource`(게임플레이 소스, 부재 시 0), 자기 선체는 **layer 1
+  마스크로만** 제외(visible·material 전역 변경 금지 — 그림자·수면·타 카메라
+  보존), 해제 시 layer 복원 + `CameraRig.beginReturnFrom` 자연 복귀
 - `BaseSceneView.ts` — 기지 화면 경량 3D 배경 — 메타 시각 상태 소비 전용
   (상점·구매·저장 판정 없음, INT-RENDER-007 배선 대기)
 - `boss/` — 보스 분절 애니 스파이크(강체 5분절 계층 트랜스폼 + 사인파,
@@ -69,6 +79,12 @@
 - `?bossSpike=1` — 보스 분절 스파이크 (`&bossMotion=b` = B안, 기본 비활성)
 - `?base=1` — 기지 화면 미리보기 (메타 루프 배선 전 QA 경로)
 - `?tiers=<hull>,<weapon>` — 외형 단계(각 1~3) 시연 주입
+- `?aimdemo=1` — 어뢰 조준경 표시 고정: 조준 시점·선체 레이어 제외·발사관
+  프레임을 임의 심도에서 정지 검수 (게임플레이 조준 판정과 무관, 정식
+  aimModeChanged 수신 시 그 상태 우선)
+- `?econdemo=1` (변형 `?econdemo=savefail`) — 경제·성장 UI QA 데모
+  (`src/ui/econUiQaDemo.ts` — 'QA 데모' 배지 표기, 수치는 공식 가격 아님.
+  실사용 배선은 INT-RENDER-008)
 
 ## 연결 방식 (판정 계산 금지 원칙)
 

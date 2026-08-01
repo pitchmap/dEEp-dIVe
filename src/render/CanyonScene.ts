@@ -54,6 +54,7 @@ import { SubmarineVisual } from './SubmarineVisual';
 import type { TorpedoStateSource } from './TorpedoVisuals';
 import { TorpedoVisuals } from './TorpedoVisuals';
 import { XrayFloodingSpike } from './xray/XrayFloodingSpike';
+import { EconomyUiQaDemo, parseEconDemoFlag } from '../ui/econUiQaDemo';
 
 /** 수중 배경·포그 톤 — 임시 색상. 심도별 그라데이션·아트 색은 D13 이후 (§3.1) */
 const WATER_COLOR = 0x0e3140;
@@ -116,6 +117,8 @@ export class CanyonScene implements ManagedScene {
   // QA 격리 경로 — 기지 화면 미리보기(?base=1)·보스 분절 스파이크(?bossSpike=1)
   private baseView: BaseSceneView | null = null;
   private bossSpike: BossSegmentSpike | null = null;
+  // 경제·성장 UI QA 데모(?econdemo=1) — 실사용 배선 아님 (배지로 구분)
+  private econDemo: EconomyUiQaDemo | null = null;
   private bossShakeIntensity = 0;
   private elapsed = 0;
 
@@ -188,6 +191,7 @@ export class CanyonScene implements ManagedScene {
     this.mountXraySpikeIfRequested();
     this.mountBossSpikeIfRequested();
     this.mountBaseViewIfRequested();
+    this.mountEconDemoIfRequested();
 
     // `?aimdemo=1` — 어뢰 조준경 **표시 고정** QA 플래그: 조준경·조준 카메라·
     // 선체 레이어 제외를 임의 심도에서 정지 검수한다. 게임플레이 조준 판정
@@ -197,6 +201,25 @@ export class CanyonScene implements ManagedScene {
       this.ensurePeriscope().setAiming(true);
       this.setAimCameraActive(true);
       console.info('[CanyonScene] 조준경 표시 고정 (?aimdemo=1 — 렌더 QA 전용).');
+    }
+  }
+
+  /**
+   * 경제·성장 UI QA 데모 — `?econdemo=1` (저장 실패 변형: `?econdemo=savefail`).
+   * 실사용 UI(실제 MetaLoop·EquipmentSystem 배선)는 composition root 소관 —
+   * 이 경로는 배지 표기된 QA 하네스만 마운트한다 (?shipdemo 관례).
+   */
+  private mountEconDemoIfRequested(): void {
+    const flag = parseEconDemoFlag(window.location.search);
+    if (!flag.mount) return;
+    try {
+      const host =
+        this.renderer.webgl.domElement.parentElement ?? document.body;
+      this.econDemo = new EconomyUiQaDemo(host, flag.forceSaveFailure);
+      console.info('[CanyonScene] 경제 UI QA 데모 장착 (?econdemo — 실사용 배선 아님).');
+    } catch (error) {
+      this.econDemo = null;
+      console.warn('[CanyonScene] 경제 UI QA 데모 초기화 실패 — 기본 장면은 계속 작동합니다.', error);
     }
   }
 
@@ -364,6 +387,8 @@ export class CanyonScene implements ManagedScene {
   }
 
   update(deltaSeconds: number): void {
+    // 경제 UI QA 데모 — 장면과 무관한 DOM 갱신 (기지 미리보기와도 병행)
+    this.econDemo?.update();
     // 기지 화면 미리보기(?base=1) — 협곡 장면 대신 기지 장면만 갱신 (QA 경로)
     if (this.baseView) {
       this.baseView.update(deltaSeconds);
@@ -503,6 +528,8 @@ export class CanyonScene implements ManagedScene {
     this.unsubscribeAimMode = null;
     this.baseView?.dispose();
     this.baseView = null;
+    this.econDemo?.dispose();
+    this.econDemo = null;
     this.bossSpike?.dispose();
     this.bossSpike = null;
     this.periscope?.dispose();
