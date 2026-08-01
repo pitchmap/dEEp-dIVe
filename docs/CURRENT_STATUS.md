@@ -6,6 +6,52 @@
 
 ---
 
+## 역할별 작업표 — 다음 스프린트 (작업 관리자 갱신, 근거: docs/NEXT_SPRINT.md)
+
+> S번호는 `docs/NEXT_SPRINT.md` §1의 작업 ID. 각 역할은 작업 착수·완료 시
+> 아래 '브랜치·커밋·테스트 기록표'에 자기 행을 갱신한다.
+
+| 역할 | 이번 스프린트 작업 | 선행 조건 | 상태 |
+|---|---|---|---|
+| 개발 리드 | ① INT-GAME-003(AimSystem 진입점)·INT-RENDER-002(속도 부호) 결정 — **전체 병목** ② 공통 규약 정리 ③ 통합 순서대로 feat→dev 병합·통합 플레이테스트 | 없음 | 대기 |
+| 게임플레이 | 이동·충돌 보완(전후 부호 속도 확정 포함) → 어뢰(우클릭 홀드 조준·좌클릭 발사, `AimSystem.enter/fire` — S1, D+7 내 흡수) | 리드 계약 결정 | 대기 |
+| 그래픽스 | 카메라 수정 / 프로펠러(회전=전후 속도 함수·공회전 하한 8% — S7·S8) / 해수면·화물선 렌더 | 게임플레이 이동·속도 노출 | 대기 |
+| 빌드·툴 | HUD·화면 조준/발사 버튼(반투명·소형·H 숨김·존재감 자동 축소 — S2~S4, 0.5일) / Pointer Lock 진입(S3) / 버튼 사용률 계측(S5) | AimSystem 진입점(게임플레이 어뢰) | 대기 |
+| 기획 | 튜닝표 신규 3행 확인(관리자 대행 반영분 — 프로펠러 공회전·정지 선회 배율·버튼 사용률), '정지 시 선회 배율' params 반영 여부 결정(S10) | 없음 | 대기 (확인 요) |
+| 아트 | 공회전 속도 아트 판정(S8), 버튼 반투명·축소 사양(S4) | 그래픽스 프로펠러 구현 | 대기 |
+
+## 역할별 브랜치·커밋·테스트 기록표
+
+> 각 역할이 스프린트 작업을 커밋·푸시할 때마다 자기 행을 갱신한다.
+> '최근 커밋'은 D+5 통합 시점 기준 초기값.
+
+| 역할 | 담당 브랜치 | 최근 커밋 | dev 반영 | 테스트 결과 (마지막 실행 기준) |
+|---|---|---|---|---|
+| 개발 리드 | `claude/deep-dive-core-lead-uyg77p` (통합: `claude/deep-dive-d5-gray-box-integration-tree5i`) | `22f2d15` (통합 `291c613`) | ✅ PR #1로 dev 병합 | typecheck·build·check:size(0.53MB)·결정적 21/21·브라우저 19/19 |
+| 게임플레이 | `claude/submarine-controls-depth-3wi424` (`feat/gameplay` 역할) | `f5b5c1c` | ✅ | 결정적 검증 21/21 (`node src/systems/__verification__/run.mjs`) |
+| 그래픽스 | `feat/render` | `9fc32f6` | ✅ | X-ray 스파이크 성공 판정, `?xray=1` 브라우저 검증 |
+| 빌드·툴 | `claude/deep-dive-tooling-phase-0-cj6c49` (`feat/tooling` 사본) | `5b33dec` | ✅ | HMR 적용·범위 밖 거부 브라우저 검증, Pages 배포는 관리자 설정 대기 |
+| 기획 | (미생성 — params 커밋 브랜치 규칙 리드와 협의) | — | — | — |
+| 작업 관리자 (문서) | `claude/deep-dive-bootstrap-6wrpuw` | (본 커밋) | dev 병합 대기 (문서만) | typecheck·build·check:size (문서 변경 후 재확인) |
+
+## 작업 의존성과 권장 통합 순서 (dev 병합 순서)
+
+```
+[1] 리드: 공통 규약 (INT-GAME-003·INT-RENDER-002 결정) ← 병목, 최우선
+ └→ [2] 게임플레이: 이동·충돌
+      ├→ [3] 그래픽스: 카메라 수정        ┐ 상호 독립,
+      ├→ [4] 그래픽스: 프로펠러·해수면·화물선 ┘ 병렬 가능
+      └→ [5] 게임플레이: 어뢰 (AimSystem)
+           └→ [6] 빌드·툴: HUD·화면 버튼·Pointer Lock·계측
+                └→ [7] 리드: 통합 플레이테스트 (dev)
+```
+
+- 병합은 계약 커밋 → 계약 소비 커밋 순서 (BRANCHING.md). [6]은 [5]의
+  진입점을 호출하는 껍데기이므로 반드시 [5] 이후.
+- 상세 근거·결의 대조: `docs/NEXT_SPRINT.md`
+
+---
+
 ## 개발 리드
 
 - **완료:**
@@ -40,12 +86,13 @@
   - D3~D5 조작·심도 (D+5 통합 반영) — WASD·관성·심도·`KeyboardInput`·`GameplaySystems`(GameSystem 수명주기)
   - **D+5 리뷰 스프린트 '이동·충돌' (통합 순서 [2])** — ① W 전진 / **S 후진**(상한 = 전진의 50%, `speed`는 부호 있는 전후 속도 — 프로펠러 S7 소비용) ② **Shift/Ctrl 연속 상승·하강**(수직 최고 속력 = 전진의 50%, 키 해제 시 관성 감속) ③ 수면 상한(+12.5)·해저 하한(-5) 이탈 방지 ④ 높이 기반 **심도 3구간 판정**(`LayeredDepthSystem` — 잠망경 ≥8 / 순항 ≥-2 / 심해, `depthChanged` 유지, `requestAscend/Descend` 계약은 프로그래매틱 층 이동으로 존치) ⑤ **정적 충돌**(`src/systems/collision/` — 구·AABB 조합, 선체 = 구 3개 캡슐 근사, 통과 방지·밀어내기만, 피해 없음, 반복 해석으로 끼임·떨림 방지) + 시작 지역 임시 레이아웃(CanyonScene 미러)
   - **어뢰 전투 (통합 순서 [5], INT-CORE-002 계약 소비)** — ① `PeriscopeAimSystem`(계약 `AimSystem` 구현): beginAim(잠망경 심도 전용)/endAim/fireTorpedo **공용 진입점**, `aimModeChanged` 발행(중복 없음), 심도 이탈 시 자동 해제, 자동 락온 없음 ② `StraightRunTorpedoSystem`(계약 `TorpedoSystem` 구현): 선수(-Z, conventions.bowDirectionXZ) 발사 지점 생성, 수평 직선 주행, 최대 사거리 초과 제거, 함선(XZ)·환경(3D, collision 공유 집합) 명중 시 1회만 처리, `torpedoFired` 발행, 재장전·보유량 = combat.json ③ `MouseCombatInput`: 우클릭 홀드 조준·좌클릭 발사(에지 1회=1발), blur·탭 전환 시 해제, 컨텍스트 메뉴 방지 ④ `TargetRegistry`: 표적 위치·속도·hitRadius + `onTorpedoHit`(1회 보장) — 리드샷 보조선 데이터 연결점
-  - **화물선 + 상태 계약 적용 (INT-CORE-003 계약 소비)** — ① `SubmarinePlayerController`가 `SubmarinePoseSource` 계약 구현: `positionY`·부호 있는 `forwardSpeedMetersPerSecond`(+선수/−선미) 제공, 계약 `speed`는 비부호 크기로 정정 — `poseSource`는 계약 타입으로 노출 ② `CargoShipSystem`(계약 `CargoShipStateSource`·`CombatTarget` 구현): 1척, 해수면(12 — 렌더 SEA_SURFACE_Y 정합) 흘수선 유지, 직선 왕복(끝점 반전 잔여 이월 — dt 불변), TargetRegistry 등록, 첫 명중에서 `torpedoHit {targetId,x,z}` 1회 발행 + 표적 즉시 해제(중복 침몰 불가) + hit 고정, sinkProgress 0→1(시간축 게임플레이 소유) 후 removed=true, dispose 시 등록·참조 정리 ③ `TargetRegistry` id를 계약 체계(number)로 정렬 ④ 잠수함 수직 상한 12.5→11 조정(해수면 12 − 선체 반경 — 수면 돌출 방지) ⑤ 결정적 검증 71항목(71/71 — 기존 56 유지 + 포즈 계약·화물선 15)
+  - **화물선 + 상태 계약 적용 (INT-CORE-003 계약 소비)** — ① `SubmarinePlayerController`가 `SubmarinePoseSource` 계약 구현: `positionY`·부호 있는 `forwardSpeedMetersPerSecond`(+선수/−선미) 제공, 계약 `speed`는 비부호 크기로 정정 — `poseSource`는 계약 타입으로 노출 ② `CargoShipSystem`(계약 `CargoShipStateSource`·`CombatTarget` 구현): 1척, 해수면 흘수선 유지, 직선 왕복(끝점 반전 잔여 이월 — dt 불변), TargetRegistry 등록, 첫 명중에서 `torpedoHit {targetId,x,z}` 1회 발행 + 표적 즉시 해제(중복 침몰 불가) + hit 고정, sinkProgress 0→1(시간축 게임플레이 소유) 후 removed=true, dispose 시 등록·참조 정리 ③ `TargetRegistry` id를 계약 체계(number)로 정렬
+  - **공유 CanyonLayout 소비 (INT-CORE-004 적용)** — ① `collision/startingArea.ts` 자체 좌표·높이 수식 미러 **삭제** → 주입받은 `CanyonLayout.blocks` 순회로 충돌체 생성(블록 1개 = AABB 1개, 회전은 외접 근사 — 소비측 규칙 유지), `blockToColliderBounds` 검증 헬퍼 제공 ② `provisionalWorld.ts`의 중복 해수면 값 삭제, 잠수함 수직 상한/하한을 `layout.seaSurfaceY ± 선체 반경`에서 **파생** ③ `CargoShipSystem` 흘수선 = `layout.seaSurfaceY` ④ `GameplaySystems`가 레이아웃 주입 지원(기본 `STARTING_CANYON_LAYOUT`, 스폰 = `layout.submarineSpawn`) + `layout` 읽기 전용 노출 ⑤ 결정적 검증 75항목(75/75 — 기존 71 유지 + 블록↔충돌체 수·경계 정합, 상한 파생, 화물선 흘수선 정합 4)
 - **진행 중:** 없음
-- **다음 작업:** INT-GAME-004·005·006·007 리드 결정 후 provisional 4종 이관·레이아웃 단일 소스화, 격침 보상 어뢰 +1 배선(§5.9 — torpedoHit 구독), 임시 탐지·폭뢰·내구도(D6~D9 잔여)
-- **차단 문제:** 없음. 단 ① 화물선 수치·경로·해수면은 R7 선진행(`provisionalCargo.ts`·`provisionalWorld.ts` — INT-GAME-007) ② 격침 보상(어뢰 +1)은 TorpedoSystem 잔량 증가 경로(계약 메서드) 리드 결정 대기(INT-GAME-007) ③ 렌더의 positionY·CargoShipStateSource 소비는 그래픽스 적용분(INT-CORE-003 적용 요청) 병합 시 연결
-- **변경된 계약:** 없음 (직접 변경 없음 — 리드 반영분 INT-CORE-003의 `SubmarinePoseSource`·`CargoShipStateSource`·`torpedoHit`을 구현·발행·소비. INT-GAME-007 제안 등록)
-- **통합 주의사항:** 좌표 규약 — **잠수함 로컬 -Z가 선수, +Z가 선미** (`src/core/conventions.ts`만 참조). heading은 Y축 요(yaw), heading 0 선수 = 월드 -Z, 렌더는 `mesh.rotation.y = headingRadians` 그대로. 속도 소비 규칙(INT-CORE-003): 프로펠러 등 부호가 필요하면 `poseSource.forwardSpeedMetersPerSecond`(+전진/−후진), 소음 산출 등 크기만 필요하면 계약 `player.speed`(비부호). 렌더 잠수함 Y는 `poseSource.positionY`. **화물선 상태는 `gameplay.cargoShipState`(계약 CargoShipStateSource)** — composition root가 CargoShipVisual에 주입, `hit`/`sinkProgress`(시간축 게임플레이 소유)/`removed`를 매핑만 할 것, 명중 연출·오디오는 `torpedoHit` 구독. 심도 초기 구간은 y=0 → `cruise`(초기 이벤트 없음). **충돌체 집합은 `gameplay.collision.colliders`(읽기 전용) 공유** — 은신 시야 차폐(D10~12)는 이 집합을 재사용할 것(별도 집합 금지). 레벨 교체 시 `collision.clear()` 후 재등록, 렌더 협곡 배치 변경 시 `collision/startingArea.ts` 미러 동시 갱신(단일 소스화 전까지). **전투 입력은 반드시 `gameplay.aim`(계약 AimSystem) 하나로** — HUD 조준·발사 버튼은 composition root에서 `aim.beginAim()/endAim()/fireTorpedo()`를 호출(별도 전투 시스템 금지), UI는 `torpedo.remaining`·`torpedo.reloadRemainingSeconds`·`aim.aiming` 폴링 + `aimModeChanged` 구독. 리드샷 보조선 = `targets.list`(위치·속도) + `torpedo.torpedoSpeedMetersPerSecond` + `player` 포즈로 계산. 렌더 어뢰 항적은 `torpedo.torpedoes`(읽기 전용) 폴링. 화물선 시스템은 `targets.register()`로 표적 등록(콜백 `onTorpedoHit`는 어뢰 1발당 1회 보장)
+- **다음 작업:** INT-GAME-004·006·007 리드 결정 후 provisional 이관(심도 구간 경계·비율·어뢰·화물선 수치), 격침 보상 어뢰 +1 배선(§5.9 — torpedoHit 구독), 임시 탐지·폭뢰·내구도(D6~D9 잔여)
+- **차단 문제:** 없음. 단 ① 화물선 속력·반경·침몰 시간·경로와 심도 구간 경계·비율·어뢰 수치는 R7 선진행(`provisionalCargo/`, `provisionalMovement/`, `provisionalCombat/`, `provisionalWorld` 구간 경계 — INT-GAME-004·006·007) ② 격침 보상(어뢰 +1)은 TorpedoSystem 잔량 증가 경로(계약 메서드) 리드 결정 대기(INT-GAME-007)
+- **변경된 계약:** 없음 (직접 변경 없음 — 리드 반영분 INT-CORE-003·004의 계약·공용 데이터를 구현·소비. INT-GAME-005는 INT-CORE-004로 해소됨)
+- **통합 주의사항:** 좌표 규약 — **잠수함 로컬 -Z가 선수, +Z가 선미** (`src/core/conventions.ts`만 참조). heading은 Y축 요(yaw), heading 0 선수 = 월드 -Z, 렌더는 `mesh.rotation.y = headingRadians` 그대로. 속도 소비 규칙(INT-CORE-003): 프로펠러 등 부호가 필요하면 `poseSource.forwardSpeedMetersPerSecond`(+전진/−후진), 소음 산출 등 크기만 필요하면 계약 `player.speed`(비부호). 렌더 잠수함 Y는 `poseSource.positionY`. **화물선 상태는 `gameplay.cargoShipState`(계약 CargoShipStateSource)** — composition root가 CargoShipVisual에 주입, `hit`/`sinkProgress`(시간축 게임플레이 소유)/`removed`를 매핑만 할 것, 명중 연출·오디오는 `torpedoHit` 구독. 심도 초기 구간은 y=0 → `cruise`(초기 이벤트 없음). **충돌체 집합은 `gameplay.collision.colliders`(읽기 전용) 공유** — 은신 시야 차폐(D10~12)는 이 집합을 재사용할 것(별도 집합 금지). **협곡 배치의 유일 소스는 `src/world/startingCanyonLayout.ts`** — 렌더·충돌 모두 `CanyonLayout.blocks` 소비(미러 소멸), 레벨 교체 = 새 레이아웃을 `GameplaySystems` 생성자에 주입(또는 데이터 모듈 교체), 소비 중 레이아웃은 `gameplay.layout`으로 확인. **전투 입력은 반드시 `gameplay.aim`(계약 AimSystem) 하나로** — HUD 조준·발사 버튼은 composition root에서 `aim.beginAim()/endAim()/fireTorpedo()`를 호출(별도 전투 시스템 금지), UI는 `torpedo.remaining`·`torpedo.reloadRemainingSeconds`·`aim.aiming` 폴링 + `aimModeChanged` 구독. 리드샷 보조선 = `targets.list`(위치·속도) + `torpedo.torpedoSpeedMetersPerSecond` + `player` 포즈로 계산. 렌더 어뢰 항적은 `torpedo.torpedoes`(읽기 전용) 폴링. 화물선 시스템은 `targets.register()`로 표적 등록(콜백 `onTorpedoHit`는 어뢰 1발당 1회 보장)
 - **마지막 업데이트:** 어뢰 전투 커밋 (통합 순서 [5])
 - **담당 브랜치:** `claude/submarine-controls-depth-3wi424` (원격 세션 지정 브랜치 — `feat/gameplay` 역할, origin/dev + 리드 계약 브랜치 병합 기반)
 
@@ -63,12 +110,16 @@
 ## 빌드·툴
 
 - **완료:** D1~D2 — Vite+TS 프로젝트, 성능 오버레이(FPS·평균·최소·로딩·모드·렌더러), LoadingTimer, GateMetricRecorder(JSON 다운로드), check-build-size(15MB 게이트), print-project-status, CI 워크플로, PR·이슈 템플릿 / **단계 0 잔여분** — Node 버전 고정(.nvmrc `22.22.2` + engines `>=22 <23` + .npmrc engine-strict, CI는 node-version-file로 일원화), 잠금 파일 기준 버전 재현 확인(three 0.185.1 · vite 8.2.0 · typescript 7.0.2), GitHub Pages 배포 워크플로(`.github/workflows/deploy.yml` — main 푸시·수동 실행, 배포 전 typecheck·build·check:size 강제, `docs/DEPLOY.md`), JSON 파라미터 핫리로드(Vite HMR — 리로드·재빌드 없이 반영, 범위 밖 값은 기존 validateParams가 거부·이전 값 유지, `loadParams()` 인터페이스 불변 + `onParamsReloaded()` 구독 추가), 게이트 기록에 초당 FPS 시계열(`fpsSamples`)·빌드 모드 추가(G1 구간별 로그 — 개인정보·고유 식별자 없음), Web Audio 최소 배관(`src/audio/WebAudioSystem.ts` — AudioContext unlock·마스터 버스·패너 연결·카메라 기준 리스너까지만, 판정 타이머 없음)
+- **완료(추가):** 조작 HUD — 조작 안내 패널(좌측, `controlsConfig.ts` 단일 소스), H 토글(안내+버튼 동시 숨김·복원), Pointer Lock(캔버스 클릭 진입 → Esc 해제 시 GameLoop 정지로 일시정지 + 재진입 안내 오버레이, 진입 직후 250ms 입력 무시), 우클릭 컨텍스트 메뉴 방지, PC 화면 조준·발사 버튼(우하단 반투명 소형, 마우스 조준 3회 이상 시 존재감 축소), 입력 계측(`InputTelemetry` — 마우스/버튼별 조준·발사 횟수, Pointer Lock 진입·해제, 첫 발사 요청 시각 → 게이트 기록 JSON `input` 구역 합류, 개발 콘솔 `__deepDiveInput()`), HUD 파라미터 `params/ui.json`(툴링 소유 `uiParams.ts`에서 검증·핫리로드)
+- **완료(추가 2):** HUD ↔ 실제 AimSystem 연결 — 게임플레이 브랜치(어뢰 전투 `10ef604`)·리드 계약(INT-CORE-002 `b69890b`)을 이 브랜치에 병합. 임시 `CombatIntentSink` 삭제, 화면 조준·발사 버튼이 composition root에서 주입받은 `gameplay.aim`(계약 `AimSystem`)의 `beginAim()/endAim()/fireTorpedo()`를 직접 호출(마우스 경로 `MouseCombatInput`과 같은 인스턴스·같은 판정). 조준 버튼 활성 표시 = `aimModeChanged` 구독(로컬 상태 아님 — 잠망경 심도 거부·자동 해제 반영). 발사 버튼 = `torpedo.remaining`·`reloadRemainingSeconds` 200ms 폴링 + `torpedoFired` 구독으로 잔량·재장전 표시·비활성화. 캔버스 마우스는 **게이트키퍼**로 재편: 전투 클릭은 window의 MouseCombatInput으로 통과(HUD가 aim 이중 호출 금지), 잠금 진입 클릭·진입 직후 250ms·비잠금·일시정지 클릭은 stopPropagation으로 소비(이중 발사·유령 발사 방지). 잠금 해제 시 `endAim()` 보장 후 일시정지
 - **진행 중:** 없음
-- **다음 작업:** Pages 활성화 후 첫 배포 URL 확인, D3 이후 AudioSystem을 Game에 조립(리드 승인 경유), 이벤트 구독 기반 사운드 동기화·지연 측정(D+10 사운드 세트 수신 후)
+- **다음 작업:** Pages 활성화 후 첫 배포 URL 확인, D13~14 사운드 배관 단계에서 WebAudioSystem 조립(리드 승인 경유) + `depthChargeEnteredWater`/`aimModeChanged` 오디오 연동
 - **차단 문제:** 배포 URL 미확보 — 저장소 관리자가 Settings→Pages에서 Source를 "GitHub Actions"로 1회 설정 후 워크플로 실행 필요 (`docs/DEPLOY.md`). 이 작업 환경에는 해당 권한·인증 정보 없음
-- **변경된 계약:** 없음 (INTEGRATION_NOTES INT-TOOL-001 — package.json engines·ParamLoader 내부 교체, 리드 확인 대기)
-- **통합 주의사항:** 개발 모드에서 params/*.json 저장 시 페이지 리로드 없이 값이 교체된다 — 시스템은 `loadParams()`를 매번 다시 읽거나 `onParamsReloaded()`로 통지받을 것. 프로덕션 빌드는 번들 값 고정(핫리로드 코드 제거됨). D+5 통합에서 게임플레이가 `onParamsReloaded` 주입 구독으로 연결됨(HMR 적용·범위 밖 거부 브라우저 검증 통과). **WebAudioSystem은 D+5에서도 미조립 — 후속 통합 항목**: 사운드 에셋(D+10)·카메라 리스너 연동이 오기 전에는 조립 실익이 없어 D+5 범위에서 제외, D13~14 사운드 배관 단계에서 리드 승인 경유로 조립 (INT-TOOL-001은 승인 완료, vite base './'는 변경 없음)
-- **마지막 업데이트:** D+5 (툴링 산출물 통합 확인 — Node 고정·Pages 워크플로·HMR·게이트 시계열 보존)
+- **변경된 계약:** 없음 — 계약 파일 직접 수정 없음 (INT-CORE-002의 `AimSystem`·`aimModeChanged`를 소비만). INT-TOOL-001 승인 완료(리드 D+5). INT-TOOL-002(HUD 조립 선반영)·INT-TOOL-004(HUD 전투 배선 선반영) 확인 대기, INT-TOOL-003(구 #004 요청 이벤트 3종)은 **폐기**
+- **통합 주의사항:** ① **전투 마우스 입력의 소유자는 게임플레이(MouseCombatInput)** — HUD는 캔버스 mousedown을 계측+게이트키핑만 하고 aim을 호출하지 않는다. 전투로 가면 안 되는 클릭(잠금 진입·진입 직후 250ms·비잠금·일시정지)은 HUD가 stopPropagation으로 소비하므로, MouseCombatInput을 window보다 안쪽(캔버스 자체)에 부착하도록 바꾸면 이 차단이 깨진다 — 부착 지점 변경 시 툴링과 협의 필요 ② 일시정지(잠금 해제)는 GameLoop 정지 방식 — 게임플레이 update가 멈추므로 HUD가 잠금 해제 시 `aim.endAim()`을 보장 호출한다. 일시정지 중 쌓일 수 있는 클릭은 오버레이가 소비 ③ Esc·H는 HUD가 선점(Esc=잠금 해제·일시정지, 조준 취소 키 아님) — 새 키 추가 시 `controlsConfig.ts` 단일 소스에 등록 ④ 개발 모드 params/*.json(ui.json 포함) 저장 시 리로드 없이 반영 ⑤ WebAudioSystem은 미조립 유지(D13~14 조립 — 리드 D+5 결정) ⑥ PC 화면 버튼은 INT-CORE-002로 리드 승인 확인됨(별도 전투 시스템 금지 계약)
+- **완료(추가 3):** 최신 리드(`c4841cf` — CanyonLayout 단일 데이터·카메라 리센터 규약)·게임플레이(`b7faf44` — CargoShipSystem·INT-CORE-003 포즈/화물선 계약) 병합 후 HUD 재검증 — Game.ts 충돌 없음(병합 양측 모두 미수정, 기존 배선 그대로 유효), `torpedoHit` 이벤트 추가에도 EventBus 타입 무영향, `poseSource`의 `SubmarinePoseSource` 계약 전환과 구조 호환 확인. HUD 헤드리스 33/33 + 게임플레이 결정적 검증 71/71 통과(버튼·마우스 실발사, 재장전·잔탄 동등, 중복 발사 없음)
+- **완료(추가 4):** 입력 모드 2원화 + 실브라우저 최종 검증 — 게임플레이 `c46c937`(공유 CanyonLayout 소비, `gameplay.layout` 노출) 병합. **발견 문제**: Esc로 Pointer Lock 해제 시 무조건 일시정지+전체 오버레이여서 '화면 버튼 방식으로 계속' 경로가 없었음(잠금 상태에선 커서가 없어 DOM 버튼 클릭 자체가 불가 — 버튼 모드가 사실상 차단). **수정(최소 변경)**: 일시정지 오버레이에 '마우스 모드로 계속(잠금 재진입)' / '화면 버튼으로 계속(잠금 없음 — resumeWithoutLock)' 선택 버튼 추가. '조준 버튼 = 잠금 진입 겸용' 해석은 모드 선택 목표 우선으로 폐기(INT-TOOL-005, 리드 확인 대기). 검증: HUD 33/33 + 시나리오 A(마우스)/B(화면 버튼)/C(모드 전환·상태 공유·잔탄 0 비활성) 20/20 + 결정적 검증 75/75, 스크린샷 4장
+- **마지막 업데이트:** 입력 모드 2원화·실브라우저 검증 완료. 화물선 Scene 배선(`attachCargoShipSource`)은 렌더 병합 전이라 보류 — 배선 한 줄 예시를 INT-TOOL-004에 기록
 - **담당 브랜치:** `claude/deep-dive-tooling-phase-0-cj6c49` (`feat/tooling`의 세션 사본)
 
 ## 기획
@@ -90,7 +141,7 @@
 |---|---|---|
 | 0. 환경 구축 | D1~D2 | ✅ 저장소·골격·계측·핫리로드·배포 워크플로 완료 / ⚠ 배포 URL 미확보 (관리자 Pages 1회 설정 대기 — docs/DEPLOY.md) |
 | 1. 회색 박스 | D3~D5 | ✅ **D+5 통합 완료** — 조작·심도·카메라·협곡 블록아웃·X-ray 스파이크(성공) 통합, 전 검사 통과. 잔여: 레벨 디자인 정식 블록아웃(엄폐 3곳+) 수신 시 임시 협곡 교체, 팀 전원 조작 테스트·관성 1차 튜닝(§11 판단 기준 1차 적용)은 전사 리뷰에서 |
-| 2. 코어 전투 루프 | D6~D9 | 대기 |
+| 2. 코어 전투 루프 | D6~D9 | 🔄 선행분 브랜치 구현 완료 (어뢰·화물선·조작 개편·공유 레이아웃 — 구 차단 8건 중 6건 해소, NEXT_SPRINT §4) — **dev 병합·배선만 잔여**. 탐지·구축함·폭뢰·내구도는 백로그 |
 | 3. 은신·탐지 | D10~D12 | 대기 |
 | 4. 연출 적용 | D13~D14 | 대기 |
 | 5. 통합·게이트 준비 | D15 | 대기 |
@@ -107,3 +158,44 @@
   - X-ray: `?xray=1`로 스파이크 장착 로그·반투명 선체 내 수위 판독(스크린샷)·수위 순환 데모 작동, 기본·X-ray 장면 모두 콘솔 오류 0건
   - 계측·HMR: FPS·로딩 계측 작동(헤드리스 SW 렌더링 환경으로 FPS 절대값은 참고치), movement.json 유효 변경 → "핫리로드 적용 완료", 범위 밖 값(9.9) → "핫리로드 거부 — 기존 값 유지" 확인 후 원복
 - **미검증(환경 제약):** GitHub Pages 실제 배포 URL(관리자 Pages 설정 대기), 실기기 60fps(내장그래픽 노트북 — 게이트 리뷰 항목)
+
+---
+
+## D+5 리뷰 스프린트 결산 — 역할별 최신 브랜치·커밋 상태 표 (문서 정리 시점 기준)
+
+> 기준 회의: `docs/meetings/07_d5_playtest_review.md`·`08_minor_input_rules.md`.
+> 스프린트 결산·백로그: `docs/NEXT_SPRINT.md`. 계약별 미결·해결:
+> `docs/INTEGRATION_NOTES.md` 총괄표. D+10 통합 절차·검증:
+> `docs/D10_INTEGRATION_CHECKLIST.md`. 각 역할 구역 본문은 해당 브랜치
+> 쪽이 최신이다 — dev 병합 시 이 표와 함께 갱신할 것.
+
+### 역할별 최신 커밋 상태 표
+
+| 역할 | 브랜치 | 최신 커밋 | 구현 완료 | 자동 검증 | 수동 검증 | 통합 대기 사항 |
+|---|---|---|---|---|---|---|
+| 개발 리드 | `claude/deep-dive-core-lead-uyg77p` | `c4841cf` | INT-CORE-002(축 규약 `conventions.ts`·AimSystem·aimModeChanged·공회전 파라미터) / INT-CORE-003(SubmarinePoseSource·CargoShipStateSource·torpedoHit·layout 계약·파라미터 단일 소스) / INT-CORE-004(`src/world/STARTING_CANYON_LAYOUT`·벽 높이 확정·리센터 규약 위치/시선 분리) | typecheck·build·check:size, 게임플레이 검증 21/21 유지 | — (계약·데이터 변경) | dev 병합 실행 + Game.ts 배선 채택(INT-TOOL-002·004, INT-RENDER-005) + INT-GAME-004·006·007 결정 |
+| 게임플레이 | `claude/submarine-controls-depth-3wi424` | `c46c937` | W/S 전진·후진, Shift/Ctrl 연속 상승·하강, 3단계 심도 구간 판정, 정적 충돌·밀어내기, AimSystem 구현(잠망경 전용 조준·좌클릭 발사), 직선 어뢰, CargoShipSystem(직선 왕복·torpedoHit 1회·sinkProgress·removed), 공유 CanyonLayout 전환(미러 삭제) | 결정적 검증 **75/75** (블록↔충돌체 1:1 정합·수직 상한 파생·흘수선 포함) | — (헤드리스 로직 검증 위주) | provisional 잔존분 이관 결정(심도 구간 경계·어뢰·화물선 수치 — INT-GAME-004·006·007), 격침 보상 +1 배선 |
+| 그래픽스 | `feat/render` | `c091f30` | 프로펠러 signed speed 연동(정/역회전·8% 공회전·A/D 무영향), 해수면, 화물선 계약 소비(`applyState` 매핑만)·torpedoHit 폭발(멱등)·sinkProgress 침몰·removed 제거, 공유 STARTING_CANYON_LAYOUT 렌더, positionY 반영, 리센터 신규약 적용 | typecheck·build·check:size(3.7%), 게임플레이 검증 71/71 | **Playwright 실입력 실측** — 리센터·전/후진·A 단독 공회전·Shift/Ctrl 수직·화물선 왕복·폭발·침몰·제거·벽 충돌 정지 (스크린샷 확보) | composition root 배선 2줄(INT-RENDER-005 — cargoShip 상태·EventBus 주입) |
+| 빌드·툴 | `claude/deep-dive-tooling-phase-0-cj6c49` | `a7c3cdf` (입력 모드 2원화 — 최종 검증 커밋) | 조작 안내 패널·H 토글, Pointer Lock(Esc 일시정지·250ms 가드), PC 화면 조준·발사 버튼 ↔ 실제 AimSystem(마우스와 동일 인스턴스·동등 판정), 입력 계측(게이트 JSON 합류), `params/ui.json`, 리드 `c4841cf`·게임플레이 `b7faf44` 병합 재검증 | typecheck·build·check:size(3.7%), HUD 헤드리스 **33/33**, 게임플레이 검증 75/75, **실제 Chromium 입력 모드 테스트 20/20** | 실발사·재장전·잔탄 동등·중복 발사 없음, 입력 모드 2원화(마우스/화면 버튼) 확인 | ✅ D+10 통합에서 채택 완료 (INT-TOOL-002·004) — ui.json 기획 통보만 잔여 |
+
+### 구분: 완료 / 통합 대기 / 백로그
+
+- **완료 (브랜치 구현·검증 통과):** 확정 상태 전체 — 로컬 -Z 선수/+Z 선미, W/S 전진·후진, Shift/Ctrl 연속 상승·하강, 3단계 심도 구간, 공유 `STARTING_CANYON_LAYOUT`(렌더·충돌 동일 데이터), Space 선미 후방 상단 리센터, 환경 충돌·밀어내기, 프로펠러 signed speed·8% 공회전·A/D 무영향, 해수면, 직선 왕복 화물선, AimSystem(우클릭 조준·좌클릭 발사·PC 화면 버튼), 직선 어뢰, torpedoHit, sinkProgress 침몰, removed 렌더 제거, 조작 안내·H 토글, Pointer Lock, 입력 계측
+- **통합 대기 (구현 없음 — dev 병합·배선 작업만):** 4개 브랜치 dev 병합(NEXT_SPRINT §2 순서), composition root 배선(HUD aim·torpedo / cargoShip 상태·EventBus), INT-GAME-004·006·007 리드 결정, DECISIONS·각주 반영, D10 체크리스트 실행
+- **백로그 (차기 스프린트):** aimModeChanged 조준 카메라 고정 / 리드샷 보조선 실제 렌더 / 어뢰 항적·기포 / 방향타·수평타 애니메이션 / 프로펠러 기포 / 어뢰 격침 보상 +1 / 임시 화물선·전투 수치 params 이관 / WebAudioSystem 조립 / 탐지·발사 지점 노출 / 구축함·폭뢰 (상세·담당: NEXT_SPRINT §3)
+
+---
+
+## D+10 통합 검증 결과 (통합 담당 기록)
+
+- **통합 브랜치:** `claude/deep-dive-bootstrap-6wrpuw` (통합 세션 전용 — dev PR 대기)
+- **병합:** 리드 `c4841cf` → 게임플레이 `c46c937` → 그래픽 `c091f30` → 툴링 `a7c3cdf` → 문서 `7186135` (원격 tip merge, cherry-pick 없음)
+- **충돌:** `docs/INTEGRATION_NOTES.md` 3회(항목 ID 기준 전 항목 보존·중복 제거), `docs/NEXT_SPRINT.md`·`docs/meetings/07`·`meetings/README` (문서 브랜치 결산본 채택, 회의록 08은 원문 유지·재구성 중복본 제거). **코드 파일 충돌 0건**
+- **Game.ts 최종 조립:** GameplaySystems(레이아웃 명시 주입)·CameraInputAdapter·ControlsHud(aim·torpedo·bus)·CanyonScene(동일 레이아웃)·attachPoseSource·attachCargoShipSource·attachEventBus — 시스템별 단일 인스턴스
+- **정적 검사:** `npm ci`·typecheck·build·`check:size`(0.55MB/15MB, 3.7%) 전부 통과
+- **게임플레이 결정적 검증:** 75/75 통과
+- **HUD 자동 검증:** 툴링 `a7c3cdf` 기록 33/33 (러너는 툴링 세션 산출물 — 저장소 미포함. 본 통합에서는 아래 Chromium 실입력 27~44번 항목으로 동등 검증)
+- **실제 Chromium 실입력 플레이테스트:** 지시서 50항목 전 항목 PASS (실키·실클릭 — H 토글/이동·선회·수직/A/D 프로펠러 무영향/Space 리센터·선미 카메라/충돌·관통 없음·능선 위 통과/해수면·화물선 왕복/Pointer Lock 마우스 모드 조준·발사/화면 버튼 모드·재장전 비활성·잔탄 공유/모드 전환·잔탄 유지/명중·torpedoHit·sinkProgress 침몰·removed 제거/콘솔 오류 0건). 보조 검사: `?xray=1` 콘솔 0건, 일시정지 시 조준 자동 해제, 우클릭 컨텍스트 메뉴 억제, 입력 계측 카운터 작동
+- **수동 확인 필요 (자동화 환경 한계):** ① 실물 키보드 Esc의 Pointer Lock 해제 (자동화는 `exitPointerLock()` 동일 경로로 검증 — 브라우저 예약 동작이라 실기기에서 사실상 보장) ② 실기기 60fps(G1 — 헤드리스 SW 렌더 FPS는 참고치) ③ GitHub Pages 배포 URL(관리자 설정 대기)
+- **남은 버그:** 발견 0건 (콘솔 오류 0)
+- **백로그:** NEXT_SPRINT §3 유지 + INT-GAME-004·006·007 수치 이관(R7 임시값 표기), 격침 보상 +1 배선, ui.json 기획 통보
