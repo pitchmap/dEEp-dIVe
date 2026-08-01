@@ -24,16 +24,20 @@ const LEFT_BUTTON = 0;
 export class MouseCombatInput {
   private aimToggleClicks = 0;
   private fireClickCount = 0;
+  private moveDeltaX = 0;
+  private moveDeltaY = 0;
   private detachListeners: Array<() => void> = [];
 
   attach(source: KeyEventSource, visibilitySource?: VisibilitySource): void {
     this.detach();
 
     source.addEventListener('mousedown', this.onMouseDown);
+    source.addEventListener('mousemove', this.onMouseMove);
     source.addEventListener('blur', this.onFocusLost);
     source.addEventListener('contextmenu', this.onContextMenu);
     this.detachListeners.push(() => {
       source.removeEventListener('mousedown', this.onMouseDown);
+      source.removeEventListener('mousemove', this.onMouseMove);
       source.removeEventListener('blur', this.onFocusLost);
       source.removeEventListener('contextmenu', this.onContextMenu);
     });
@@ -59,6 +63,19 @@ export class MouseCombatInput {
   reset(): void {
     this.aimToggleClicks = 0;
     this.fireClickCount = 0;
+    this.moveDeltaX = 0;
+    this.moveDeltaY = 0;
+  }
+
+  /**
+   * 마지막 호출 이후 누적된 마우스 이동량(픽셀)을 반환하고 0으로 되돌린다.
+   * 감도·각도 제한은 조준 시스템이 적용한다 — 여기서는 원시 델타만 모은다.
+   */
+  consumeMoveDelta(): { dx: number; dy: number } {
+    const delta = { dx: this.moveDeltaX, dy: this.moveDeltaY };
+    this.moveDeltaX = 0;
+    this.moveDeltaY = 0;
+    return delta;
   }
 
   /** 마지막 호출 이후의 우클릭(조준경 토글 요청) 횟수를 반환하고 0으로 되돌린다 */
@@ -79,6 +96,17 @@ export class MouseCombatInput {
     const button = (event as MouseEvent).button;
     if (button === RIGHT_BUTTON) this.aimToggleClicks += 1;
     else if (button === LEFT_BUTTON) this.fireClickCount += 1;
+  };
+
+  /**
+   * 이동 누적 — Pointer Lock 상태의 movementX/Y를 우선 사용하고, 없으면
+   * 0으로 둔다(비잠금 UI 모드에서는 절대좌표 차분을 쓰지 않는다 — 커서
+   * 점프가 조준각으로 새는 것을 막기 위함).
+   */
+  private readonly onMouseMove = (event: Event): void => {
+    const mouse = event as MouseEvent;
+    this.moveDeltaX += Number.isFinite(mouse.movementX) ? mouse.movementX : 0;
+    this.moveDeltaY += Number.isFinite(mouse.movementY) ? mouse.movementY : 0;
   };
 
   private readonly onFocusLost = (): void => {
