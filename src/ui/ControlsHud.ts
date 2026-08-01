@@ -24,6 +24,7 @@
 import { CONTROL_BINDINGS, hudKeyCode } from './controlsConfig';
 import { loadUiParams, onUiParamsReloaded, type UiParams } from './uiParams';
 import { inputTelemetry } from '../tools/InputTelemetry';
+import { KeyboardLockManager } from '../tools/KeyboardLockManager';
 import type { AimSystem, TorpedoSystem } from '../contracts/systems';
 import type { EventBus, Unsubscribe } from '../core/EventBus';
 
@@ -58,6 +59,8 @@ export class ControlsHud {
   private readonly fireButton: HTMLButtonElement;
   private readonly resumeOverlay: HTMLDivElement;
   private readonly toggleCode = hudKeyCode('H');
+  /** Keyboard Lock 요청·미지원 폴백·1회 안내 (5차 결의 4 — 브라우저 기능·안내만 담당) */
+  private readonly keyboardLock = new KeyboardLockManager();
   private readonly unsubscribeParams: () => void;
   private readonly unsubscribeAimMode: Unsubscribe;
   private readonly unsubscribeTorpedoFired: Unsubscribe;
@@ -119,6 +122,7 @@ export class ControlsHud {
 
   dispose(): void {
     clearInterval(this.firePollTimer);
+    this.keyboardLock.dispose();
     this.unsubscribeParams();
     this.unsubscribeAimMode();
     this.unsubscribeTorpedoFired();
@@ -279,6 +283,12 @@ export class ControlsHud {
       this.guideVisible = !anyVisible;
       this.buttonsVisible = !anyVisible;
       this.applyVisibility();
+    }
+    // 첫 상승 키 입력 → Keyboard Lock·병행 키 1회 안내 (내부에서 중복 억제).
+    // 현재 상승 바인딩은 Shift — 5차 결의(Ctrl 스왑·병행 키 E)의 판정 반영은
+    // 게임플레이 작업 대기, 안내 트리거는 바인딩 교체 시 코드만 바꾼다.
+    if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+      this.keyboardLock.maybeShowNotice();
     }
     // Esc는 여기서 다루지 않는다 — Pointer Lock 해제는 브라우저 기본 동작이고
     // 그 결과(pointerlockchange)에서 일시정지한다. 조준 취소 전용 키 아님.
