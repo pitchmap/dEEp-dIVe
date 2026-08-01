@@ -15,23 +15,28 @@
  * `attachRewardMultipliers`로 주입되며 소비 코드는 바뀌지 않는다
  * (요청: INT-GAME-012).
  *
- * ## 호위 — 결속과 요청까지
+ * ## 호위 — 결속·요청·범용 AI 변환까지
  *
- * A 스택에 구축함 AI 구현이 없으므로(B5 조사 결과) **실제 AI 기반 호위
- * 기동은 불가능하다.** 이 시스템이 하는 일은 계약 범위까지다:
+ * 이 시스템이 하는 일은 계약 범위까지다:
  *  - 수송선 ↔ 호위함 결속(`EscortBinding`) 보관·조회
  *  - 수송선 유효 피격 시 `transportAttacked` 발행
  *  - 이탈 상한 거리(`maximumEscortDistanceMeters`)를 넘지 않는 호위에 대해
  *    교전 요청(`EscortEngagementRequest`) 생성
+ *  - 그 요청을 **경비함과 같은 범용** 구축함 AI 팩토리 입력으로 변환
+ *    (`escortEngagementToAdapterConfig`) — 호위 전용 AI를 만들지 않는다
  *
- * 교전 요청을 **소비해 실제로 움직이는 주체는 없다** — 기존 구축함 AI가
- * 도착해야 연결된다. 호위 전용 신규 AI 코어를 만들지 않는다(금지).
- * 탐지·추적 상태 머신도 만들지 않는다(스프린트 C 범위).
+ * **실기동은 미완료다.** 변환 어댑터는 준비됐지만 월드에 호위함 개체가
+ * 배치돼 있지 않고(공식 배치표 없음), 이탈 상한 거리도 공식 값이 없어
+ * `bindEscortFromOfficial`이 결속을 만들지 않는다 — 임의 배치·거리를
+ * 발명하지 않는다. 탐지·추적 상태 머신도 만들지 않는다(스프린트 C 범위).
  */
 
+import type { FactionId } from '../../contracts/faction';
 import type {
   EscortBinding,
   EscortEngagementRequest,
+  GuardShipAdapterConfig,
+  GuardSpawnLocation,
   HighValueTransportArchetypeId,
   HighValueTransportView,
   IncidentPosition,
@@ -65,6 +70,8 @@ export class HighValueTransportSystem {
   private multipliers: RewardMultiplierTable | null = null;
   private readonly requestedAttacks = new Set<string>();
   private nextRequestSequence = 1;
+  /** 공식 이탈 상한 거리 — 공식 항목 미도착이라 production에서는 null */
+  private escortDistance: number | null = null;
 
   constructor(bus: EventBus) {
     this.bus = bus;
@@ -188,8 +195,70 @@ export class HighValueTransportSystem {
     });
   }
 
+  /* ── 공식 이탈 거리 (없으면 결속 자체를 활성화하지 않는다) ────────── */
+
+  /**
+   * 공식 이탈 상한 거리 주입 (조립부). 공식 항목이 **아직 없으므로**
+   * production에서는 null이며, 그동안 `bindEscortFromOfficial`은 결속을
+   * 만들지 않는다 — 임의 거리를 발명하지 않는다.
+   */
+  attachEscortDistanceMeters(meters: number | null): void {
+    this.escortDistance =
+      typeof meters === 'number' && Number.isFinite(meters) && meters > 0 ? meters : null;
+  }
+
+  get escortDistanceWired(): boolean {
+    return this.escortDistance !== null;
+  }
+
+  /**
+   * 공식 거리로 결속 — 공식 값이 없으면 **false**(결속 없음).
+   * 거리 값을 여기서 만들지 않는다.
+   */
+  bindEscortFromOfficial(escortEntityId: number, escortedTransportId: number): boolean {
+    if (this.escortDistance === null) return false;
+    this.bindEscort({
+      escortEntityId,
+      escortedTransportId,
+      maximumEscortDistanceMeters: this.escortDistance,
+    });
+    return true;
+  }
+
   /** 새 출항 초기화 — 사건 기록만 비운다(결속·등록은 배치가 소유) */
   resetForNewSortie(): void {
     this.requestedAttacks.clear();
   }
+}
+
+/**
+ * 호위 교전 요청 → **범용** 구축함 AI 팩토리 입력 변환 (B6 어댑터).
+ *
+ * 경비함과 **같은** `DestroyerAIFactory`·`SurfaceShipMotionPortFactory`
+ * 경로를 재사용하기 위한 형태 변환일 뿐이다 — 호위 전용 AI를 만들지 않는다.
+ * 공격자가 그대로 초기 표적이 되고, 사건 지점이 마지막 확인 위치가 된다.
+ *
+ * 세력·엔티티 id·스폰 위치·라벨 키는 **호출측(월드에 실재하는 호위함)**이
+ * 준다 — 이 함수가 세력이나 좌표를 만들어 내지 않는다. 월드에 호위함
+ * 개체가 없으면 변환할 대상 자체가 없다(B6 실기동 미완료 사유).
+ */
+export function escortEngagementToAdapterConfig(
+  request: EscortEngagementRequest,
+  escort: {
+    readonly entityId: number;
+    readonly faction: FactionId;
+    readonly spawnPosition: GuardSpawnLocation;
+    readonly displayLabelId: string;
+  },
+): GuardShipAdapterConfig {
+  return {
+    entityId: escort.entityId,
+    faction: escort.faction,
+    // 스폰 사유 어휘는 계약이 고정한 값만 쓴다 — 임의 문자열을 만들지 않는다.
+    spawnReason: 'neutralAttack',
+    initialTargetEntityId: request.targetEntityId,
+    initialTargetPosition: request.incidentPosition,
+    spawnPosition: escort.spawnPosition,
+    displayLabelId: escort.displayLabelId,
+  };
 }
