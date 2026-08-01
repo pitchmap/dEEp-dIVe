@@ -30,6 +30,7 @@ import { defaultSaveStore } from '../meta/save/SaveStore';
 import { loadEconomyParams } from '../tools/economyParams';
 import { loadAimingParams } from '../tools/aimingParams';
 import type { OfficialRuntimeParams } from '../contracts/officialParams';
+import { GuardShipAdapter } from './GuardShipAdapter';
 import { WebAudioSystem } from '../audio/WebAudioSystem';
 import { AudioCueRouter } from '../audio/AudioCueRouter';
 import {
@@ -38,6 +39,10 @@ import {
   DepartureCommand,
   EquipmentJudgeAdapter,
   MetaUiAdapter,
+  GuardIncidentLedger,
+  GuardSpawnBridge,
+  GuardSpawnCoordinator,
+  NeutralIncidentBoundary,
   SaveBridge,
   SortieEconomyBridge,
   SortieSalvageSpawner,
@@ -90,6 +95,12 @@ export class Game {
   private officialParams: OfficialRuntimeParams | null = null;
   /** 출항당 1회 salvage 스포너 — 좌표는 SalvagePlacementSource 전용 */
   private salvageSpawner: SortieSalvageSpawner | null = null;
+  /** 경비 사건 중복 방지 원장 — 요청·스폰 공용 단일 저장소 (INT-CORE-012) */
+  private guardLedger: GuardIncidentLedger | null = null;
+  /** 경비함 어댑터 — 기존 구축함 AI 위임 (신규 AI 코어 없음) */
+  private guardAdapter: GuardShipAdapter | null = null;
+  /** 경비함 생성 포트 — 위치 전략·AI 팩토리 연결 지점 */
+  private guardSpawn: GuardSpawnCoordinator | null = null;
   /** 조립부가 건 EventBus 구독 해제 함수 — stop()에서 전부 해제한다 */
   private readonly unsubscribes: Array<() => void> = [];
 
@@ -187,6 +198,9 @@ export class Game {
         savePort: this.savePort,
         officialParams: this.officialParams,
         salvageSpawner: this.salvageSpawner,
+        guardAdapter: this.guardAdapter,
+        guardSpawn: this.guardSpawn,
+        guardLedger: this.guardLedger,
       };
     }
 
@@ -252,6 +266,9 @@ export class Game {
         // 출항 월드 초기화 — salvage 확정 배치 (INT-CORE-011 production spawn
         // 규칙: 출항당 1회, 보상=economy params·좌표=SalvagePlacementSource.
         // 배치 미연결이면 임시 좌표를 만들지 않고 unwired로 기록만 한다).
+        // 경비 사건 원장은 출항 경계에서 비운다 — 이전 출항의 상관 id가
+        // 새 출항의 같은 표적 사건을 삼키지 않게 한다 (INT-CORE-012).
+        this.guardLedger?.resetForNewSortie();
         const spawnReport = this.salvageSpawner?.beginSortie();
         if (spawnReport) {
           if (spawnReport.status === 'spawned') {
@@ -375,6 +392,25 @@ export class Game {
     //     보상(credits·rareParts)은 economy params에만 있고 배치에는 없다.
     //     spawnId 결합·검증은 composeSalvageSpawnPlan이 수행한다.
     this.salvageSpawner.attachPlacementSource(STARTING_AREA_SALVAGE_PLACEMENTS);
+
+    // ②-a3 중립 사건 → 경비함 스폰 경계 (INT-CORE-012 — 스프린트 B 선행개발).
+    //     중복 방지 저장소는 이 원장 **하나뿐**이다: 경비 요청(상관 id)과
+    //     스폰(요청 id)이 같은 원장을 공유한다. 시스템 내부에 별도 중복
+    //     표를 두지 않는다.
+    //     경비함 AI는 **기존 구축함 AI 재사용**이며 신규 AI 코어는 없다 —
+    //     A 스택에 DestroyerAI 구현체가 아직 없으므로 팩토리·위치 전략
+    //     모두 명시적 미연결 상태다(임의 좌표·대체 AI 생성 금지). 각각
+    //     `attachFactory` / `attachLocationStrategy` 한 줄로 연결된다.
+    const guardLedger = new GuardIncidentLedger();
+    this.guardLedger = guardLedger;
+    const guardAdapter = new GuardShipAdapter(null);
+    this.guardAdapter = guardAdapter;
+    const guardSpawn = new GuardSpawnCoordinator(guardLedger, guardAdapter, null);
+    this.guardSpawn = guardSpawn;
+    this.registry.register(new NeutralIncidentBoundary(guardLedger));
+    this.registry.register(new GuardSpawnBridge(guardSpawn));
+    // ③ AI 그룹 — 스폰된 기존 구축함 AI들의 수명주기 전달만 담당한다.
+    this.registry.register(guardAdapter);
 
     // ①-c 업그레이드 구매 판정 시스템 (게임플레이 소유 — 조립부가 공식
     //     카탈로그와 실지갑 읽기 단면을 주입한다). **단계의 단일 저장소** —
