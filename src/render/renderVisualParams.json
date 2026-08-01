@@ -1,5 +1,5 @@
 {
-  "$comment": "렌더 표현 계층 전용 시각 파라미터 (그래픽스 소유 외부 설정). 게임플레이 밸런스 값이 아니다 — 밸런스는 params/*.json(기획 소유). 공회전 비율(propellerIdleSpinRatio)·최고 속력은 params/movement.json이 유일한 소스이므로 여기 두지 않는다 (INT-CORE-003). 침몰 시간축은 게임플레이 소유 — 여기에는 진행률 매핑용 순수 연출값만 둔다.",
+  "$comment": "렌더 표현 계층 전용 시각 파라미터 (그래픽스 소유 외부 설정). 게임플레이 밸런스 값이 아니다 — 밸런스는 params/*.json(기획 소유). 공회전 비율·최고 속력·어뢰 속력/사거리 등 판정 수치는 여기 두지 않는다 (INT-CORE-003). 침몰·연출 시간축 중 게임플레이 소유분은 진행률 매핑용 순수 연출값만 둔다.",
   "propeller": {
     "maxSpinRadiansPerSecond": 26,
     "spinResponseDamping": 3
@@ -13,5 +13,26 @@
     "explosionMaxScale": 9,
     "sinkDepthMeters": 11,
     "sinkTiltRadians": 0.4
+  },
+  "periscope": {
+    "$comment": "5차 결의 3 — 동일 3D 카메라 + 원형 마스크 + FOV 축소. 순수 연출값",
+    "aimFovDegrees": 28,
+    "fovLerpDamping": 9,
+    "maskDiameterViewportRatio": 0.86,
+    "rangeTickCount": 4
+  },
+  "torpedoTrail": {
+    "$comment": "5차 결의 2 — 기포 궤적(리드샷 학습 피드백). 풀 크기·수명은 연출값",
+    "bubblePoolSize": 96,
+    "bubblesPerMeter": 1.1,
+    "bubbleLifeSeconds": 1.5,
+    "bubbleRiseMetersPerSecond": 1.1,
+    "bubbleStartScale": 0.14
+  },
+  "environment": {
+    "$comment": "5차 결의 5 — 부활 1호(연안 한정, 60fps 위협 시 재컷). 밀도 상한 기록용",
+    "coralClusterTarget": 18,
+    "fishPerSchool": 22,
+    "fishSchoolCount": 2
   }
 }
