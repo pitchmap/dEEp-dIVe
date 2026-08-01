@@ -34,10 +34,18 @@ import { aimForwardVector, clampAimAngles } from '../aimGeometry';
 import { BASE_CAMERA_RADIANS_PER_PIXEL, PROVISIONAL_AIMING_PARAMS } from '../provisionalAiming';
 import { TORPEDO_COLLISION_RADIUS } from '../collision/torpedoTubeSocket';
 import { TorpedoTubeSocketRig } from '../../core/TorpedoTubeSocketRig';
-import { PurchaseTransaction } from '../../meta/PurchaseTransaction';
-import type { CurrencyBundle, PurchaseCost } from '../../contracts/meta';
-import { UpgradePurchaseSystem, type PurchaseWalletPort, type PurchaseSavePort } from '../economy/UpgradePurchaseSystem';
-import { provisionalUpgradeCost } from '../economy/provisionalUpgradeCost';
+import {
+  UpgradePurchaseSystem,
+  type PurchaseWalletPort,
+} from '../economy/UpgradePurchaseSystem';
+import {
+  OFFICIAL_EQUIPMENT_IDS,
+  OFFICIAL_UPGRADE_IDS,
+  readOfficialEquipmentCatalog,
+  readOfficialUpgradeCatalog,
+  upgradeCostAtLevel,
+} from '../economy/officialEconomyCatalog';
+import { PENDING_OFFICIAL_DATA } from '../economy/pendingOfficialData';
 import { StraightRunTorpedoSystem } from '../StraightRunTorpedoSystem';
 import { SubmarinePlayerController } from '../SubmarinePlayerController';
 import { TargetRegistry, type CombatTarget } from '../TargetRegistry';
@@ -61,6 +69,9 @@ export interface RawParamFiles {
   detection: unknown;
   combat: unknown;
   crew: unknown;
+  /** 공식 경제 params — 스프린트 A 마감 어댑터가 소비 */
+  upgrades: unknown;
+  equipment: unknown;
 }
 
 /** 검증에서 조작 시나리오를 서술하기 위한 가변 입력 스텁 */
@@ -1869,266 +1880,353 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     );
   }
 
-  // 38. [ECON] 업그레이드 구매 — 성공·조건 실패·저장 실패 롤백 (A5-T1~T6)
+  // 38. [ECON] 공식 경제 카탈로그 어댑터 — 7종·4종 상한, null 거부, provisional 미사용
   {
-    const catalog = [
-      { id: 'maxSpeed', maxLevel: 5, bonusPerLevel: 0.1 },
-      { id: 'sonarRange', maxLevel: 1, bonusPerLevel: 0.1 },
-    ];
-    const makeWallet = (credits: number, rareParts: number): PurchaseWalletPort => {
-      const state = { credits, rareParts };
-      return {
-        get credits() {
-          return state.credits;
-        },
-        get rareParts() {
-          return state.rareParts;
-        },
-        applyDelta(creditsDelta, rarePartsDelta) {
-          state.credits += creditsDelta;
-          state.rareParts += rarePartsDelta;
-        },
-      };
-    };
-    const makeSave = (behavior: { ok: boolean; throws?: boolean }): PurchaseSavePort => ({
-      save() {
-        if (behavior.throws) throw new Error('quota exceeded (테스트)');
-        return behavior.ok;
-      },
+    const upgrades = readOfficialUpgradeCatalog(rawParams.upgrades);
+    const equipment = readOfficialEquipmentCatalog(rawParams.equipment);
+
+    const upgradeIdsOfficial =
+      upgrades.length === OFFICIAL_UPGRADE_IDS.length &&
+      upgrades.every((entry) => (OFFICIAL_UPGRADE_IDS as readonly string[]).includes(entry.id)) &&
+      new Set(upgrades.map((entry) => entry.id)).size === upgrades.length;
+    check(
+      '[ECON] 공식 업그레이드 catalog 7종 — 공식 params에서만 읽고 8번째 없음',
+      upgradeIdsOfficial,
+      `${upgrades.length}종: ${upgrades.map((entry) => entry.id).join(',')}`,
+    );
+
+    const equipmentIdsOfficial =
+      equipment.items.length === OFFICIAL_EQUIPMENT_IDS.length &&
+      equipment.items.every((entry) =>
+        (OFFICIAL_EQUIPMENT_IDS as readonly string[]).includes(entry.id),
+      );
+    check(
+      '[ECON] 공식 장비 catalog 4종 — 5번째 없음',
+      equipmentIdsOfficial,
+      `${equipment.items.length}종: ${equipment.items.map((entry) => entry.id).join(',')}`,
+    );
+
+    // 공식 파일 밖 id는 런타임에서 거부된다
+    const polluted = readOfficialUpgradeCatalog({
+      items: [
+        { id: 'maxSpeed', maxLevel: 2, costCredits: [10, 20], costRareParts: [0, 0], effectBonus: [0.1, 0.1] },
+        { id: 'eighthUpgrade', maxLevel: 3, costCredits: [1, 1, 1], costRareParts: [0, 0, 0], effectBonus: [1, 1, 1] },
+      ],
     });
+    const pollutedEquipment = readOfficialEquipmentCatalog({
+      slotCapacity: 2,
+      items: [
+        { id: 'decoy', costCredits: 10, costRareParts: 0 },
+        { id: 'fifthWeapon', costCredits: 10, costRareParts: 0 },
+      ],
+    });
+    check(
+      '[ECON] 공식 ID 밖 항목 런타임 거부 (업그레이드 8번째·장비 5번째)',
+      polluted.length === 1 &&
+        polluted[0]?.id === 'maxSpeed' &&
+        pollutedEquipment.items.length === 1 &&
+        pollutedEquipment.items[0]?.id === 'decoy',
+      `upgrades=${polluted.length}, equipment=${pollutedEquipment.items.length}`,
+    );
 
-    /**
-     * 구매 실행 = **리드 정본 트랜잭션**(src/meta/PurchaseTransaction) +
-     * 게임플레이 판정 포트. 스프린트 A 통합에서 게임플레이 자체 트랜잭션이
-     * 제거되어, 이 헬퍼가 실제 프로덕션 배선과 같은 조합을 만든다.
-     * 검증 의도(A5-T1~T6)는 그대로다.
-     */
-    const runPurchase = (
-      purchase: UpgradePurchaseSystem,
-      wallet: ReturnType<typeof makeWallet>,
-      save: PurchaseSavePort,
-      id: string,
-    ) =>
-      new PurchaseTransaction(
-        purchase,
+    // null 경제 데이터 거부 — 가격이 미확정이면 비용을 만들어내지 않는다
+    const nullCostEntry = upgrades.find((entry) => upgradeCostAtLevel(entry, 1) === null);
+    const partialNull = readOfficialUpgradeCatalog({
+      items: [
         {
-          snapshotWallet: () => ({ credits: wallet.credits, rareParts: wallet.rareParts }),
-          spendFromWallet: (cost: PurchaseCost) => {
-            if (wallet.credits < cost.credits || wallet.rareParts < cost.rareParts) return false;
-            wallet.applyDelta(-cost.credits, -cost.rareParts);
-            return true;
-          },
-          restoreWallet: (snapshot: CurrencyBundle) =>
-            wallet.applyDelta(
-              snapshot.credits - wallet.credits,
-              snapshot.rareParts - wallet.rareParts,
-            ),
+          id: 'maxSpeed',
+          maxLevel: 2,
+          costCredits: [100, null],
+          costRareParts: [0, 0],
+          effectBonus: [0.1, 0.1],
         },
-        purchase,
-        save,
-      ).run(id as never);
+      ],
+    })[0];
+    const negative = readOfficialUpgradeCatalog({
+      items: [
+        { id: 'maxSpeed', maxLevel: 1, costCredits: [-5], costRareParts: [0], effectBonus: [0.1] },
+      ],
+    })[0];
+    check(
+      '[ECON] null·음수 비용 거부 — 가격 미확정 단계는 비용을 산출하지 않는다',
+      nullCostEntry !== undefined &&
+        partialNull !== undefined &&
+        upgradeCostAtLevel(partialNull, 1)?.credits === 100 &&
+        upgradeCostAtLevel(partialNull, 2) === null &&
+        negative !== undefined &&
+        upgradeCostAtLevel(negative, 1) === null,
+      `공식 파일 1단계 비용 미확정 항목 존재=${nullCostEntry?.id ?? '없음'}`,
+    );
 
-    // A5-T1 구매·저장 성공
-    {
-      const wallet = makeWallet(1000, 0);
-      const save = makeSave({ ok: true });
-      const purchase = new UpgradePurchaseSystem(catalog, wallet);
-      const cost = provisionalUpgradeCost(1);
-      const result = runPurchase(purchase, wallet, save, 'maxSpeed');
-      check(
-        '[ECON] A5-T1 구매 성공 — 크레딧 차감·단계 증가·보정 반영',
-        result.status === 'success' &&
-          purchase.levelOf('maxSpeed') === 1 &&
-          wallet.credits === 1000 - cost.credits &&
-          purchase.modifiers.maxSpeed === 0.1,
-        `credits=${wallet.credits}, level=${purchase.levelOf('maxSpeed')}`,
-      );
-    }
-
-    // A5-T2 크레딧 부족 — 상태 변경 없이 거부
-    {
-      const wallet = makeWallet(10, 0);
-      const save = makeSave({ ok: true });
-      const purchase = new UpgradePurchaseSystem(catalog, wallet);
-      const result = runPurchase(purchase, wallet, save, 'maxSpeed');
-      check(
-        '[ECON] A5-T2 크레딧 부족 — insufficientCredits, 상태 변경 없음',
-        result.status === 'denied' &&
-          result.reason === 'insufficientCredits' &&
-          wallet.credits === 10 &&
-          purchase.levelOf('maxSpeed') === 0,
-        `status=${result.status}`,
-      );
-    }
-
-    // 희귀 부품 부족 (4단계부터 요구)
-    {
-      const wallet = makeWallet(100000, 0);
-      const save = makeSave({ ok: true });
-      const purchase = new UpgradePurchaseSystem(catalog, wallet);
-      purchase.restoreLevels({ maxSpeed: 3 });
-      const creditsBefore = wallet.credits;
-      const result = runPurchase(purchase, wallet, save, 'maxSpeed');
-      check(
-        '[ECON] 희귀 부품 부족 — insufficientRareParts, 크레딧 차감 없음',
-        result.status === 'denied' &&
-          result.reason === 'insufficientRareParts' &&
-          wallet.credits === creditsBefore &&
-          purchase.levelOf('maxSpeed') === 3,
-        `status=${result.status}`,
-      );
-    }
-
-    // 최대 단계
-    {
-      const wallet = makeWallet(100000, 10);
-      const save = makeSave({ ok: true });
-      const purchase = new UpgradePurchaseSystem(catalog, wallet);
-      purchase.restoreLevels({ sonarRange: 1 });
-      const result = runPurchase(purchase, wallet, save, 'sonarRange');
-      const unknown = runPurchase(purchase, wallet, save, 'eighthUpgrade');
-      check(
-        '[ECON] 최대 단계 도달 — maxLevelReached (+ 8번째 항목 구매 불가)',
-        result.status === 'denied' &&
-          result.reason === 'maxLevelReached' &&
-          unknown.status === 'denied' &&
-          unknown.reason === 'maxLevelReached' &&
-          wallet.credits === 100000,
-        `level=${purchase.levelOf('sonarRange')}/1`,
-      );
-    }
-
-    // A5-T3·T4·T5·T7 저장 실패 롤백 (반환값 false / 예외 둘 다)
-    for (const mode of [{ ok: false }, { ok: false, throws: true }]) {
-      const wallet = makeWallet(1000, 5);
-      const save = makeSave(mode);
-      const purchase = new UpgradePurchaseSystem(catalog, wallet);
-      purchase.restoreLevels({ maxSpeed: 2 });
-      const creditsBefore = wallet.credits;
-      const rareBefore = wallet.rareParts;
-      const levelBefore = purchase.levelOf('maxSpeed');
-
-      const result = runPurchase(purchase, wallet, save, 'maxSpeed');
-      const rolledBack =
-        result.status === 'saveFailedRolledBack' &&
-        wallet.credits === creditsBefore &&
-        wallet.rareParts === rareBefore &&
-        purchase.levelOf('maxSpeed') === levelBefore &&
-        purchase.modifiers.maxSpeed === levelBefore * 0.1;
-      check(
-        `[ECON] A5-T3·T4 저장 실패(${mode.throws ? '예외' : 'false'}) → 크레딧·단계 전부 롤백`,
-        rolledBack,
-        `credits=${wallet.credits}/${creditsBefore}, level=${purchase.levelOf('maxSpeed')}/${levelBefore}`,
-      );
-
-      // A5-T5: 재로드(스냅샷 = 저장된 상태)에서도 구매 전 상태 유지
-      const reloaded = new UpgradePurchaseSystem(catalog, makeWallet(creditsBefore, rareBefore));
-      reloaded.restoreLevels(purchase.levelSnapshot);
-      check(
-        `[ECON] A5-T5 저장 실패 후 재로드 — 구매 전 단계 유지 (${mode.throws ? '예외' : 'false'})`,
-        reloaded.levelOf('maxSpeed') === levelBefore,
-        `level=${reloaded.levelOf('maxSpeed')}`,
-      );
-    }
-
-    // A5-T6: 저장 실패 안내와 일반 불가 안내가 구분됨 + 롤백 후 재구매 가능
-    {
-      const wallet = makeWallet(1000, 0);
-      const failing = { ok: false };
-      const save: PurchaseSavePort = {
-        save() {
-          return failing.ok;
-        },
-      };
-      const purchase = new UpgradePurchaseSystem(catalog, wallet);
-      const failed = runPurchase(purchase, wallet, save, 'maxSpeed');
-      const poorWallet = makeWallet(1, 0);
-      const poorSystem = new UpgradePurchaseSystem(catalog, poorWallet);
-      const poor = runPurchase(poorSystem, poorWallet, save, 'maxSpeed');
-      // 저장 실패는 '불가 사유'가 아니라 별도 결과 상태다 (계약 TransactionResult)
-      const distinct = failed.status === 'saveFailedRolledBack' && poor.status === 'denied';
-
-      failing.ok = true; // 저장 복구 후 재구매
-      const retry = runPurchase(purchase, wallet, save, 'maxSpeed');
-      check(
-        '[ECON] A5-T6 저장 실패·조건 실패 안내 구분 + 롤백 뒤 재구매 성공',
-        distinct && retry.status === 'success' && purchase.levelOf('maxSpeed') === 1,
-        `save=${failed.status}, condition=${poor.status}, retry=${retry.status}`,
-      );
-    }
+    // provisional 비용 경로가 production에 존재하지 않는다
+    const pendingModules = PENDING_OFFICIAL_DATA.map((entry) => entry.module);
+    check(
+      '[ECON] provisional 비용 경로 제거 — 대기 목록에 가격 항목 없음',
+      pendingModules.every((module) => !module.includes('provisionalUpgradeCost')) &&
+        PENDING_OFFICIAL_DATA.every((entry) => !entry.contents.includes('업그레이드 가격')),
+      `남은 대기 소스 ${pendingModules.length}종`,
+    );
   }
 
-  // 39. [ECON] 장비 장착·교체·해제 — 슬롯 제한·중복·저장 실패 롤백
+  // 38b. [ECON] 업그레이드 판정 — 사유·단계·rollback 어댑터 (저장 호출 없음)
+  {
+    const officialCatalog = readOfficialUpgradeCatalog(rawParams.upgrades);
+    const pricedCatalog = readOfficialUpgradeCatalog({
+      items: [
+        {
+          id: 'maxSpeed',
+          label: '최고 속도',
+          maxLevel: 2,
+          costCredits: [100, 300],
+          costRareParts: [0, 2],
+          effectBonus: [0.1, 0.1],
+        },
+      ],
+    });
+    const wallet = { credits: 150, rareParts: 0 };
+    const walletPort: PurchaseWalletPort = {
+      get credits() {
+        return wallet.credits;
+      },
+      get rareParts() {
+        return wallet.rareParts;
+      },
+    };
+
+    // 공식 파일(가격 null) — 구매 불가로 판정되고 가격은 null로 노출된다
+    const officialJudge = new UpgradePurchaseSystem(officialCatalog, walletPort);
+    const officialOffer = officialJudge.listOffers()[0];
+    check(
+      '[ECON] null 가격을 구매 가능으로 해석하지 않음 (공식 params 그대로)',
+      officialOffer !== undefined &&
+        officialOffer.nextCost === null &&
+        officialOffer.denial !== null &&
+        officialJudge.evaluateUpgradePurchase('maxSpeed').denial !== null,
+      `denial=${officialOffer?.denial}, cost=${String(officialOffer?.nextCost)}`,
+    );
+
+    const judge = new UpgradePurchaseSystem(pricedCatalog, walletPort);
+    const affordable = judge.evaluateUpgradePurchase('maxSpeed');
+    check(
+      '[ECON] 구매 가능 판정 + 가격·희귀 부품 요구량 산출 (공식 값)',
+      affordable.denial === null &&
+        affordable.cost.credits === 100 &&
+        affordable.cost.rareParts === 0 &&
+        judge.nextCost('maxSpeed')?.credits === 100,
+      `cost=${affordable.cost.credits}/${affordable.cost.rareParts}`,
+    );
+
+    // 후보 단계 적용 → 스냅샷 → 복원(rollback)
+    const before = judge.snapshotLevels();
+    judge.applyPurchasedLevel('maxSpeed');
+    const afterApply = judge.levelOf('maxSpeed');
+    const modifiersAfter = judge.modifiers.maxSpeed;
+    judge.restoreLevels(before);
+    check(
+      '[ECON] 후보 단계 적용 + rollback 복원 (단계·보정 모두 원복)',
+      afterApply === 1 &&
+        modifiersAfter === 0.1 &&
+        judge.levelOf('maxSpeed') === 0 &&
+        judge.modifiers.maxSpeed === undefined,
+      `apply=${afterApply} → restore=${judge.levelOf('maxSpeed')}`,
+    );
+
+    // 사유 3종: 크레딧 부족 / 희귀 부품 부족 / 최대 단계
+    judge.applyPurchasedLevel('maxSpeed'); // level 1 → 다음은 300cr + 부품 2
+    const poor = judge.evaluateUpgradePurchase('maxSpeed');
+    wallet.credits = 1000;
+    const noParts = judge.evaluateUpgradePurchase('maxSpeed');
+    wallet.rareParts = 5;
+    judge.applyPurchasedLevel('maxSpeed'); // level 2 = maxLevel
+    const maxed = judge.evaluateUpgradePurchase('maxSpeed');
+    const unknown = judge.evaluateUpgradePurchase('eighthUpgrade' as never);
+    check(
+      '[ECON] 업그레이드 판정 사유 — insufficientCredits/RareParts/maxLevelReached/미등록 거부',
+      poor.denial === 'insufficientCredits' &&
+        noParts.denial === 'insufficientRareParts' &&
+        maxed.denial === 'maxLevelReached' &&
+        unknown.denial === 'maxLevelReached',
+      `${poor.denial} / ${noParts.denial} / ${maxed.denial} / ${unknown.denial}`,
+    );
+  }
+
+  // 39. [ECON] 장비 판정·loadout 어댑터 (계약 EquipmentChangeJudgePort)
   {
     const equipment = new EquipmentSystem(['standardTorpedo']);
-    const equipped = equipment.equipItem('fastTorpedo'); // 빈 슬롯 자동 배정
-    const duplicate = equipment.equipItem('fastTorpedo');
-    const full = equipment.equipItem('heavyTorpedo'); // 슬롯 2 소진
+    equipment.applyCatalog(readOfficialEquipmentCatalog(rawParams.equipment));
+
+    const catalogView = equipment.equipmentCatalog;
     check(
-      '[ECON] 장비: 장착 성공 / 이미 장착 중(alreadyEquipped) / 슬롯 부족(slotFull)',
-      equipped.ok &&
-        !duplicate.ok &&
-        duplicate.reason === 'alreadyEquipped' &&
-        !full.ok &&
-        full.reason === 'slotFull' &&
-        equipment.loadout.equipped.length === 2,
-      `loadout=${equipment.loadout.equipped.join('/')}`,
+      '[ECON] 장비 catalog·loadout 읽기 (공식 4종 + 현재 장착 상태)',
+      catalogView !== null &&
+        catalogView.items.length === 4 &&
+        equipment.loadout.equipped[0] === 'standardTorpedo' &&
+        equipment.loadout.slotCapacity === equipment.slotCount,
+      `slotCapacity=${equipment.loadout.slotCapacity}(공식 ${String(catalogView?.slotCapacity)}), equipped=${equipment.loadout.equipped.join('/')}`,
     );
 
-    const replaced = equipment.replaceItem(1, 'heavyTorpedo');
-    const replaceDuplicate = equipment.replaceItem(1, 'standardTorpedo'); // 0번에 이미 있음
-    check(
-      '[ECON] 장비: 교체 성공 / 다른 슬롯 중복 교체 거부',
-      replaced.ok &&
-        equipment.slots[1] === 'heavyTorpedo' &&
-        !replaceDuplicate.ok &&
-        replaceDuplicate.reason === 'alreadyEquipped',
-      `slots=${equipment.slots.join('/')}`,
-    );
-
-    const removed = equipment.unequipItem(1);
-    check(
-      '[ECON] 장비: 해제 성공 (슬롯 비움, 활성 슬롯 자동 보정)',
-      removed.ok && equipment.slots[1] === null && equipment.activeEquipment !== null,
-      `slots=${equipment.slots.join('/')}, active=${equipment.activeEquipment}`,
-    );
-
-    // 저장 실패 → 이전 loadout 복원
-    const failing = { ok: false };
-    equipment.attachSavePort({
-      save() {
-        return failing.ok;
-      },
+    const equipEmpty = equipment.evaluateEquipmentChange({
+      kind: 'equip',
+      slotIndex: 1,
+      equipmentId: 'fastTorpedo',
     });
-    const before = [...equipment.slots];
-    const saveFailed = equipment.equipItem('fastTorpedo');
+    equipment.applyEquipmentChange({ kind: 'equip', slotIndex: 1, equipmentId: 'fastTorpedo' });
+    const duplicate = equipment.evaluateEquipmentChange({
+      kind: 'equip',
+      slotIndex: 1,
+      equipmentId: 'standardTorpedo',
+    });
+    // 계약상 replace = '점유 슬롯 대상 equip' — 점유는 거부 사유가 아니다
+    const occupied = equipment.evaluateEquipmentChange({
+      kind: 'replace',
+      slotIndex: 0,
+      equipmentId: 'heavyTorpedo',
+    });
+    const sameItemAgain = equipment.evaluateEquipmentChange({
+      kind: 'equip',
+      slotIndex: 1,
+      equipmentId: 'fastTorpedo',
+    });
+    const outOfRange = equipment.evaluateEquipmentChange({
+      kind: 'equip',
+      slotIndex: 9,
+      equipmentId: 'heavyTorpedo',
+    });
     check(
-      '[ECON] 장비: 저장 실패 시 이전 loadout으로 롤백 (saveFailed 구분)',
-      !saveFailed.ok &&
-        saveFailed.category === 'save' &&
-        saveFailed.reason === 'saveFailed' &&
-        equipment.slots.join('/') === before.join('/'),
-      `slots=${equipment.slots.join('/')} (기대 ${before.join('/')})`,
+      '[ECON] 장비 판정 사유 — equip/replace 가능 / 중복·동일 슬롯 alreadyEquipped / 범위 밖 noFreeSlot',
+      equipEmpty === null &&
+        duplicate === 'alreadyEquipped' &&
+        occupied === null &&
+        sameItemAgain === 'alreadyEquipped' &&
+        outOfRange === 'noFreeSlot',
+      `equip=${String(equipEmpty)} / 중복=${duplicate} / replace=${String(occupied)} / 동일=${sameItemAgain} / 범위밖=${outOfRange}`,
     );
 
-    failing.ok = true;
-    const retried = equipment.equipItem('fastTorpedo');
-    const profileAfter = (() => {
-      equipment.selectSlot(equipment.slots.indexOf('fastTorpedo'));
-      return equipment.activeTorpedoProfile();
-    })();
-    const standardProfile = (() => {
-      equipment.selectSlot(equipment.slots.indexOf('standardTorpedo'));
-      return equipment.activeTorpedoProfile();
-    })();
+    const unofficial = equipment.evaluateEquipmentChange({
+      kind: 'equip',
+      slotIndex: 1,
+      equipmentId: 'fifthWeapon' as never,
+    });
     check(
-      '[ECON] 장비: 저장 복구 후 장착 성공 + 변경이 전투 유효 파라미터에 반영',
-      retried.ok &&
-        profileAfter !== null &&
-        standardProfile !== null &&
-        profileAfter.speedMetersPerSecond !== standardProfile.speedMetersPerSecond,
-      `fast=${profileAfter?.speedMetersPerSecond}, standard=${standardProfile?.speedMetersPerSecond}`,
+      '[ECON] 공식 장비 4종 밖 장착 런타임 거부 (5번째 금지)',
+      unofficial !== null,
+      `denial=${unofficial}`,
     );
+
+    // replace / unequip + 스냅샷·복원(rollback)
+    const snapshot = equipment.snapshotLoadout();
+    equipment.applyEquipmentChange({ kind: 'replace', slotIndex: 1, equipmentId: 'heavyTorpedo' });
+    const replaced = equipment.slots[1];
+    equipment.applyEquipmentChange({ kind: 'unequip', slotIndex: 1 });
+    const removed = equipment.slots[1];
+    equipment.restoreLoadout(snapshot);
+    check(
+      '[ECON] replace·unequip 적용 + 이전 loadout 복원 (rollback 어댑터)',
+      replaced === 'heavyTorpedo' &&
+        removed === null &&
+        equipment.loadout.equipped.join('/') === snapshot.equipped.join('/') &&
+        equipment.loadout.slotCapacity === snapshot.slotCapacity,
+      `복원 후 ${equipment.loadout.equipped.join('/')}`,
+    );
+
+    // 공식 slotCapacity가 확정되면 그 값이 반영된다 (null이면 구조 기본값 유지)
+    const beforeCapacity = equipment.slotCount;
+    equipment.applyCatalog({
+      slotCapacity: 3,
+      items: readOfficialEquipmentCatalog(rawParams.equipment).items,
+    });
+    const grew = equipment.slotCount === 3;
+    equipment.applyCatalog(readOfficialEquipmentCatalog(rawParams.equipment)); // 공식 null
+    check(
+      '[ECON] 공식 slotCapacity 확정 시 반영 / null이면 임의 값 생성 없이 유지',
+      grew && equipment.slotCount === 3 && beforeCapacity === 2,
+      `기본 ${beforeCapacity} → 공식 3 → null 유지 ${equipment.slotCount}`,
+    );
+  }
+
+  // 40. [LOOP] 출항 중 획득량 read-only source + 출항 준비 판정
+  {
+    const bus = new EventBus();
+    const systems = new GameplaySystems(bus, params);
+
+    const initialZero =
+      systems.sortiePendingCredits === 0 && systems.sortiePendingRareParts === 0;
+    systems.economy.wallet.addCredits(120);
+    systems.economy.wallet.acquireRarePart('rare-core');
+    const reflectsLoot =
+      systems.sortiePendingCredits === 120 && systems.sortiePendingRareParts === 1;
+    const settlement = systems.economy.settleReturn();
+    const afterSettle =
+      systems.sortiePendingCredits === 0 && systems.sortiePendingRareParts === 1;
+    check(
+      '[LOOP] pending 재화 getter — 실제 loot·정산 상태에서만 파생 (임시 숫자 없음)',
+      initialZero && reflectsLoot && afterSettle && settlement.creditsKept === 120,
+      `획득 120 → 정산 후 pending=${systems.sortiePendingCredits}, 희귀=${systems.sortiePendingRareParts}`,
+    );
+
+    const readyInBase = systems.sortieReadiness(true);
+    const notInBase = systems.sortieReadiness(false);
+    check(
+      '[LOOP] 출항 준비 판정 — 기지 상태·loadout·업그레이드 유효성',
+      readyInBase.ready &&
+        readyInBase.loadoutValid &&
+        readyInBase.upgradesValid &&
+        readyInBase.blockers.length === 0 &&
+        !notInBase.ready &&
+        notInBase.blockers.includes('notInBase'),
+      `base=${readyInBase.ready}, 비기지 blockers=${notInBase.blockers.join(',')}`,
+    );
+
+    // 장비를 모두 해제하면 출항 불가 (게임플레이 측 유효성)
+    systems.equipment.applyEquipmentChange({ kind: 'unequip', slotIndex: 0 });
+    const emptyLoadout = systems.sortieReadiness(true);
+    check(
+      '[LOOP] 장착 장비가 없으면 출항 준비 실패 (invalidLoadout)',
+      !emptyLoadout.ready &&
+        !emptyLoadout.loadoutValid &&
+        emptyLoadout.blockers.includes('invalidLoadout'),
+      `blockers=${emptyLoadout.blockers.join(',')}`,
+    );
+    systems.dispose();
+  }
+
+  // 41. 경계 검사 — 게임플레이는 저장·UI를 직접 호출하지 않는다
+  {
+    const bus = new EventBus();
+    const systems = new GameplaySystems(bus, params);
+    const purchase = systems.attachBaseEconomy({
+      upgradesParams: rawParams.upgrades,
+      equipmentParams: rawParams.equipment,
+      wallet: { credits: 0, rareParts: 0 },
+    });
+
+    const wired =
+      systems.upgradePurchase === purchase &&
+      systems.purchaseJudge === purchase &&
+      systems.equipmentJudge === systems.equipment &&
+      purchase.entries.length === OFFICIAL_UPGRADE_IDS.length;
+    check(
+      '[LOOP] 기지 어댑터 배선 — 판정 포트 노출 (지갑은 주입, 저장 포트 없음)',
+      wired,
+      `catalog=${purchase.entries.length}종`,
+    );
+
+    // 어떤 경로에도 save 호출·UI 참조가 없다: 판정 포트 표면에 save가 없음
+    const purchaseSurface = new Set([
+      ...Object.getOwnPropertyNames(Object.getPrototypeOf(purchase) as object),
+    ]);
+    const equipmentSurface = new Set([
+      ...Object.getOwnPropertyNames(Object.getPrototypeOf(systems.equipment) as object),
+    ]);
+    const noSaveApi =
+      ![...purchaseSurface].some((name) => name.toLowerCase().includes('save')) &&
+      ![...equipmentSurface].some((name) => name.toLowerCase().includes('save'));
+    check(
+      '[LOOP] 저장 직접 호출 0회 — 판정·장비 시스템에 save 계열 API 없음',
+      noSaveApi,
+      '저장·롤백 순서는 리드 트랜잭션 소유',
+    );
+    systems.dispose();
   }
 
   // 37. [BOSS] 약점 판정 — 활성/비활성 구분, 포트 계약만 소비 (AI 내부 접근 없음)

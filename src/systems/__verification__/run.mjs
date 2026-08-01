@@ -41,6 +41,8 @@ try {
     detection: readJson('params/detection.json'),
     combat: readJson('params/combat.json'),
     crew: readJson('params/crew.json'),
+    upgrades: readJson('params/upgrades.json'),
+    equipment: readJson('params/equipment.json'),
   });
 } catch (error) {
   console.error('✖ 검증 실행 자체가 실패했습니다:', error);

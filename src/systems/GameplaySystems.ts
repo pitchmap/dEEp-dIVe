@@ -25,6 +25,7 @@
  */
 
 import type { CanyonLayout } from '../contracts/layout';
+import type { EquipmentChangeJudgePort } from '../contracts/meta';
 import type { GameParams } from '../contracts/params';
 import type {
   CargoShipStateSource,
@@ -41,7 +42,15 @@ import { computeShipBoxPush } from './collision/shipHullBox';
 import { computeHullSpheres } from './collision/submarineHull';
 import { registerStartingAreaColliders } from './collision/startingArea';
 import { EconomySystem } from './economy/EconomySystem';
-import type { PurchaseSavePort, UpgradePurchaseSystem } from './economy/UpgradePurchaseSystem';
+import {
+  OFFICIAL_EQUIPMENT_IDS,
+  readOfficialEquipmentCatalog,
+  readOfficialUpgradeCatalog,
+} from './economy/officialEconomyCatalog';
+import {
+  UpgradePurchaseSystem,
+  type PurchaseWalletPort,
+} from './economy/UpgradePurchaseSystem';
 import { EquipmentSystem } from './EquipmentSystem';
 import { KeyboardInput, type KeyEventSource, type VisibilitySource } from './KeyboardInput';
 import { LayeredDepthSystem } from './LayeredDepthSystem';
@@ -50,6 +59,17 @@ import { SubmarineAimSystem } from './SubmarineAimSystem';
 import { StraightRunTorpedoSystem } from './StraightRunTorpedoSystem';
 import { SubmarinePlayerController } from './SubmarinePlayerController';
 import { TargetRegistry } from './TargetRegistry';
+
+/** 출항 준비 상태 — 리드 Departure command가 소비하는 판정 결과 */
+export interface SortieReadiness {
+  /** 기지(BASE) 상태 여부 — 리드가 넘긴 값을 그대로 반영 */
+  readonly inBase: boolean;
+  readonly loadoutValid: boolean;
+  readonly upgradesValid: boolean;
+  /** 전부 충족 시에만 true — 저장·화면 전환은 호출 측(리드) 책임 */
+  readonly ready: boolean;
+  readonly blockers: readonly string[];
+}
 
 /** 승인된 파라미터 로더의 onParamsReloaded 시그니처 (config/ParamLoader.ts) */
 export type ParamsReloadSubscribe = (
@@ -89,7 +109,7 @@ export class GameplaySystems implements GameSystem {
   readonly economy: EconomySystem;
 
   /**
-   * 기지 업그레이드 구매 판정 — 지갑·저장 포트가 조립부(리드)에서 주입되어야
+   * 기지 업그레이드 구매 판정 — 지갑(리드 MetaLoop)이 조립부에서 주입되어야
    * 하므로 여기서 생성하지 않고 연결만 받는다 (미연결 = 기지 밖 맥락).
    */
   private purchaseSystem: UpgradePurchaseSystem | null = null;
@@ -175,18 +195,100 @@ export class GameplaySystems implements GameSystem {
   }
 
   /**
-   * 기지 경제 연결 [조립부 전용] — 업그레이드 구매 판정 시스템과 장착 변경
-   * 저장 포트를 붙인다. 저장 포트가 붙으면 장착 변경도 원자적으로 처리되어
-   * 저장 실패 시 이전 loadout으로 롤백된다 [13차 보완분 결의 7].
+   * 기지 경제 연결 [조립부 전용, INT-CORE-009 배선 스니펫] — 공식 경제
+   * params(raw)와 리드 지갑을 주입하면 구매 판정 시스템을 만들고 장비
+   * 카탈로그(가격·슬롯)를 적용한다.
+   *
+   * **저장은 연결하지 않는다** — 저장·롤백 순서는 리드 트랜잭션 소유이며
+   * 게임플레이는 판정·적용·복원 포트만 제공한다 (저장 직접 호출 0회).
    */
-  attachBaseEconomy(purchase: UpgradePurchaseSystem, savePort: PurchaseSavePort | null): void {
+  attachBaseEconomy(options: {
+    /** params/upgrades.json 내용 (공식) */
+    readonly upgradesParams: unknown;
+    /** params/equipment.json 내용 (공식) */
+    readonly equipmentParams: unknown;
+    /** 리드 MetaLoop 지갑 — 판정에만 쓰인다(차감은 트랜잭션 소유) */
+    readonly wallet: PurchaseWalletPort;
+    /** 저장에서 복원한 업그레이드 단계 (없으면 전부 0) */
+    readonly restoredLevels?: Readonly<Record<string, number>>;
+  }): UpgradePurchaseSystem {
+    const catalog = readOfficialUpgradeCatalog(options.upgradesParams);
+    const purchase = new UpgradePurchaseSystem(catalog, options.wallet);
+    if (options.restoredLevels) purchase.restoreLevels(options.restoredLevels);
     this.purchaseSystem = purchase;
-    this.equipment.attachSavePort(savePort);
+    this.equipment.applyCatalog(readOfficialEquipmentCatalog(options.equipmentParams));
+    return purchase;
   }
 
   /** 구매 판정 시스템 (미연결 시 null) — 기지 UI가 소비 */
   get upgradePurchase(): UpgradePurchaseSystem | null {
     return this.purchaseSystem;
+  }
+
+  /**
+   * 계약 `UpgradePurchaseJudgePort`(+`UpgradeLevelsPort`) 구현체 —
+   * 리드 `PurchaseTransaction` 생성자에 그대로 넘긴다. 미연결 시 null.
+   */
+  get purchaseJudge(): UpgradePurchaseSystem | null {
+    return this.purchaseSystem;
+  }
+
+  /** 계약 `EquipmentChangeJudgePort` 구현체 — 리드 `EquipmentTransaction`에 주입 */
+  get equipmentJudge(): EquipmentChangeJudgePort {
+    return this.equipment;
+  }
+
+  /* ── 출항 중 획득량 (EconomyHud read-only source) ─────────────────────
+   * 값은 실제 loot 회수·정산 상태에서만 파생된다 — 임시 숫자 없음.
+   */
+
+  /** 이번 출항에서 회수했으나 아직 정산되지 않은 일반 크레딧 */
+  get sortiePendingCredits(): number {
+    return this.economy.wallet.sortieCredits;
+  }
+
+  /** 이번 출항에서 확보한 희귀 부품 수 (획득 즉시 확정 — 손실 대상 아님) */
+  get sortiePendingRareParts(): number {
+    return this.economy.wallet.rareParts.length;
+  }
+
+  /**
+   * 출항 준비 상태 — 리드 Departure command가 읽는 **게임플레이 측 판정**.
+   * 저장·화면 전환·메타 상태 전이는 여기서 하지 않는다 (판단 재료만 제공).
+   * `canLaunchSortie`(BASE 여부)는 리드 MetaLoop 소유이므로 인자로 받는다.
+   */
+  sortieReadiness(isBaseState: boolean): SortieReadiness {
+    const blockers: string[] = [];
+    if (!isBaseState) blockers.push('notInBase');
+
+    const loadout = this.equipment.loadout;
+    const loadoutValid =
+      loadout.slotCapacity > 0 &&
+      loadout.equipped.length > 0 &&
+      loadout.equipped.length <= loadout.slotCapacity &&
+      new Set(loadout.equipped).size === loadout.equipped.length &&
+      loadout.equipped.every((id) =>
+        (OFFICIAL_EQUIPMENT_IDS as readonly string[]).includes(id),
+      );
+    if (!loadoutValid) blockers.push('invalidLoadout');
+
+    // 업그레이드 단계가 공식 카탈로그 상한 안에 있는지 (미연결이면 검사 없음)
+    const purchase = this.purchaseSystem;
+    const upgradesValid =
+      purchase === null ||
+      Object.entries(purchase.levelSnapshot).every(([id, level]) => {
+        const entry = purchase.entries.find((candidate) => candidate.id === id);
+        return entry !== undefined && level >= 0 && level <= entry.maxLevel;
+      });
+    if (!upgradesValid) blockers.push('invalidUpgrades');
+
+    return {
+      inBase: isBaseState,
+      loadoutValid,
+      upgradesValid,
+      ready: isBaseState && loadoutValid && upgradesValid,
+      blockers,
+    };
   }
 
   /** 화물선 상태 소스 — 계약 타입으로 노출 (렌더 CargoShipVisual 주입용) */

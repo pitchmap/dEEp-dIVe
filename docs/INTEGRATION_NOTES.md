@@ -90,6 +90,20 @@
 
 ## 제안 목록
 
+### INT-GAME-010 — 스프린트 A 마감: 기지 어댑터 배선 요청 + null 가격 거부 사유 결정
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 (창 2 — 스프린트 A production 배선 마감) |
+| 대상 시스템 | `src/core/Game.ts`(조립 배선), `src/contracts/meta.ts`(`PurchaseDenialReason` — 결정 요청만) |
+| 필요한 변경 | ① **조립 배선** — INT-CORE-009 스니펫의 게임플레이 측 진입점이 준비됐다: `gameplay.attachBaseEconomy({ upgradesParams, equipmentParams, wallet, restoredLevels })` → 공식 카탈로그를 읽어 `UpgradePurchaseSystem`(= `UpgradePurchaseJudgePort` + `UpgradeLevelsPort`)을 만들고 장비 카탈로그(가격·슬롯)를 적용한다. 이후 `new PurchaseTransaction(gameplay.purchaseJudge, metaLoop, gameplay.purchaseJudge, savePort)`·`new EquipmentTransaction(gameplay.equipmentJudge, savePort)`로 배선하면 된다 (단계 포트도 같은 인스턴스가 구현) ② **BaseScreenPort 재료** — `wallet`(리드), `upgradeLevels`=`gameplay.purchaseJudge.levelSnapshot`, `loadout`=`gameplay.equipment.loadout`, `canLaunchSortie`=`metaLoop.metaState === 'BASE' && gameplay.sortieReadiness(true).ready` ③ **EconomyHud 재료** — `gameplay.sortiePendingCredits`·`sortiePendingRareParts`(실제 회수·정산 파생, 임시 숫자 없음) ④ **null 가격 거부 사유 결정 요청** — 공식 params의 가격이 `null`(기획 수치표 미도착)인 항목은 구매 불가로 판정해야 하는데, 계약이 고정한 5종에 '가격 미확정'이 없다. 현재는 `maxLevelReached`('다음 단계가 정의되지 않음')로 거부하고 `nextCost=null`을 함께 노출해 UI가 '가격 미정'으로 표시하게 했다. 전용 사유(예: `priceUnavailable`) 신설 여부는 리드 결정 사항 — **게임플레이는 5종 밖 사유를 임의로 만들지 않았다** |
+| 변경 이유 | 스프린트 A A4·A5·A6·A7 미판정의 원인이 기지 UI ↔ 게임플레이 판정 사이의 배선 부재였음. 게임플레이 측 어댑터를 공식 params 기준으로 완성 |
+| 관련 게이트 | A4(재화 표시)·A5(구매 사유)·A6(장비)·A7(저장 유지)·A8(임시 수치) |
+| 영향을 받는 파일 | `src/systems/economy/{officialEconomyCatalog,UpgradePurchaseSystem,pendingOfficialData}.ts`, `src/systems/EquipmentSystem.ts`, `src/systems/GameplaySystems.ts`, 조립부 `src/core/Game.ts` |
+| 하위 호환 여부 | 계약 파일 무수정. `EquipmentSystem`의 자체 저장 포트(`attachSavePort`)·`economy/purchaseTypes.ts`·`economy/provisionalUpgradeCost.ts`는 **삭제**됐다 — 저장·롤백은 리드 트랜잭션 단일 소유(게임플레이 저장 직접 호출 0회). 기존 `equip/unequip` 단순 경로는 유지 |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
+
 ### INT-TOOL-008 — [LOOP][ECON] 스프린트 A 툴링 산출물 + 이관·문서 회귀 차단 요청
 
 | 필드 | 내용 |
