@@ -44,7 +44,11 @@ export const MAX_EQUIPMENT_ITEMS = OFFICIAL_EQUIPMENT_IDS.length;
 export type OfficialUpgradeId = (typeof OFFICIAL_UPGRADE_IDS)[number];
 export type OfficialEquipmentId = (typeof OFFICIAL_EQUIPMENT_IDS)[number];
 
-/** 미확정 수치는 null — 기획 수치표(D+3 병목) 도착 전 상태를 정직하게 표현 */
+/**
+ * 미확정 수치 표기. 공식 데이터 승인(2026-08-01) 이후 신규 null은 허용하지
+ * 않는다 — `assertNoPendingFields()`가 로드 시점에 0개를 강제한다.
+ * 타입은 이관 이력·회귀 검출을 위해 유지한다.
+ */
 export type PendingNumber = number | null;
 
 export interface UpgradeEntry {
@@ -68,6 +72,16 @@ export interface EquipmentEntry {
   readonly label: string;
   readonly costCredits: PendingNumber;
   readonly costRareParts: PendingNumber;
+  /** 이 장비가 차지하는 슬롯 수 */
+  readonly slotCost: PendingNumber;
+  /** 첫 출항 성립 조건 — 시작 시점부터 보유하는가 */
+  readonly startingItem: boolean;
+  /**
+   * 성능 수치. 어뢰류는 speedMetersPerSecond·damage, 디코이는
+   * stockPerSortie·lifetimeSeconds·cooldownSeconds — 종류마다 키가 다르므로
+   * 숫자 맵으로 받고 필수 키는 종류별로 검사한다.
+   */
+  readonly performance: Readonly<Record<string, number>>;
   readonly note?: string;
 }
 
@@ -76,6 +90,20 @@ export interface EquipmentCatalog {
   readonly slotCapacity: PendingNumber;
   readonly items: readonly EquipmentEntry[];
 }
+
+/** 승인된 슬롯 용량 (6차 결의 5 · 사용자 승인) */
+export const APPROVED_SLOT_CAPACITY = 2;
+
+/** 시작 보유 장비 — 첫 출항이 성립하려면 반드시 하나여야 한다 */
+export const STARTING_EQUIPMENT_ID = 'standardTorpedo';
+
+/** 종류별 필수 성능 키 — 누락 시 거부 */
+const REQUIRED_PERFORMANCE_KEYS: Readonly<Record<string, readonly string[]>> = {
+  standardTorpedo: ['speedMetersPerSecond', 'damage'],
+  fastTorpedo: ['speedMetersPerSecond', 'damage'],
+  heavyTorpedo: ['speedMetersPerSecond', 'damage'],
+  decoy: ['stockPerSortie', 'lifetimeSeconds', 'cooldownSeconds'],
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -93,12 +121,50 @@ function validateCost(file: string, path: string, value: unknown): PendingNumber
   return value;
 }
 
+/** 희귀 부품·슬롯처럼 쪼갤 수 없는 값: null 허용, 숫자면 0 이상 정수만 */
+function validateIntegerCost(file: string, path: string, value: unknown): PendingNumber {
+  const parsed = validateCost(file, path, value);
+  if (parsed !== null && !Number.isInteger(parsed)) {
+    throw new ParamValidationError(file, path, `정수가 필요합니다 (받은 값: ${parsed})`);
+  }
+  return parsed;
+}
+
+/** 성능 맵: 종류별 필수 키가 모두 있고 전부 유한 양수인지 확인 */
+function validatePerformance(
+  file: string,
+  path: string,
+  value: unknown,
+  requiredKeys: readonly string[],
+): Readonly<Record<string, number>> {
+  if (!isRecord(value)) {
+    throw new ParamValidationError(file, path, '성능 수치 객체가 필요합니다 (누락 거부)');
+  }
+  const parsed: Record<string, number> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== 'number' || !Number.isFinite(entry)) {
+      throw new ParamValidationError(file, `${path}.${key}`, '유한한 숫자가 필요합니다');
+    }
+    if (entry <= 0) {
+      throw new ParamValidationError(file, `${path}.${key}`, `0 이하 성능값은 허용되지 않습니다 (받은 값: ${entry})`);
+    }
+    parsed[key] = entry;
+  }
+  for (const key of requiredKeys) {
+    if (!(key in parsed)) {
+      throw new ParamValidationError(file, `${path}.${key}`, '필수 성능 키가 없습니다');
+    }
+  }
+  return parsed;
+}
+
 function validateLevelArray(
   file: string,
   path: string,
   value: unknown,
   maxLevel: number,
   allowNegative = false,
+  requireInteger = false,
 ): readonly PendingNumber[] {
   if (!Array.isArray(value)) {
     throw new ParamValidationError(file, path, `길이 ${maxLevel}의 단계 배열이 필요합니다 (누락 거부)`);
@@ -118,6 +184,9 @@ function validateLevelArray(
     }
     if (!allowNegative && entry < 0) {
       throw new ParamValidationError(file, entryPath, `음수는 허용되지 않습니다 (받은 값: ${entry})`);
+    }
+    if (requireInteger && !Number.isInteger(entry)) {
+      throw new ParamValidationError(file, entryPath, `정수가 필요합니다 (받은 값: ${entry})`);
     }
     return entry;
   });
@@ -196,7 +265,14 @@ export function validateUpgradeCatalog(raw: unknown, paramsRoot?: unknown): Upgr
       label: itemRaw['label'],
       maxLevel,
       costCredits: validateLevelArray(UPGRADES_FILE, `${path}.costCredits`, itemRaw['costCredits'], maxLevel),
-      costRareParts: validateLevelArray(UPGRADES_FILE, `${path}.costRareParts`, itemRaw['costRareParts'], maxLevel),
+      costRareParts: validateLevelArray(
+        UPGRADES_FILE,
+        `${path}.costRareParts`,
+        itemRaw['costRareParts'],
+        maxLevel,
+        false,
+        true,
+      ),
       effectBonus: validateLevelArray(UPGRADES_FILE, `${path}.effectBonus`, itemRaw['effectBonus'], maxLevel),
       ...(typeof paramRef === 'string' ? { paramRef } : {}),
       ...(typeof itemRaw['note'] === 'string' ? { note: itemRaw['note'] } : {}),
@@ -234,20 +310,64 @@ export function validateEquipmentCatalog(raw: unknown): EquipmentCatalog {
     if (typeof itemRaw['label'] !== 'string') {
       throw new ParamValidationError(EQUIPMENT_FILE, `${path}.label`, '문자열이 필요합니다');
     }
+    const startingItem = itemRaw['startingItem'];
+    if (typeof startingItem !== 'boolean') {
+      throw new ParamValidationError(EQUIPMENT_FILE, `${path}.startingItem`, 'true/false가 필요합니다 (누락 거부)');
+    }
     const entry: EquipmentEntry = {
       id: id as OfficialEquipmentId,
       label: itemRaw['label'],
       costCredits: validateCost(EQUIPMENT_FILE, `${path}.costCredits`, itemRaw['costCredits']),
-      costRareParts: validateCost(EQUIPMENT_FILE, `${path}.costRareParts`, itemRaw['costRareParts']),
+      costRareParts: validateIntegerCost(EQUIPMENT_FILE, `${path}.costRareParts`, itemRaw['costRareParts']),
+      slotCost: validateIntegerCost(EQUIPMENT_FILE, `${path}.slotCost`, itemRaw['slotCost']),
+      startingItem,
+      performance: validatePerformance(
+        EQUIPMENT_FILE,
+        `${path}.performance`,
+        itemRaw['performance'],
+        REQUIRED_PERFORMANCE_KEYS[id] ?? [],
+      ),
       ...(typeof itemRaw['note'] === 'string' ? { note: itemRaw['note'] } : {}),
     };
     return entry;
   });
 
-  return {
-    slotCapacity: validateCost(EQUIPMENT_FILE, 'slotCapacity', raw['slotCapacity']),
-    items: parsed,
-  };
+  const slotCapacity = validateIntegerCost(EQUIPMENT_FILE, 'slotCapacity', raw['slotCapacity']);
+  if (slotCapacity !== null && slotCapacity !== APPROVED_SLOT_CAPACITY) {
+    throw new ParamValidationError(
+      EQUIPMENT_FILE,
+      'slotCapacity',
+      `승인된 슬롯 용량은 ${APPROVED_SLOT_CAPACITY}입니다 (받은 값: ${slotCapacity})`,
+    );
+  }
+
+  // 시작 보유 장비는 정확히 하나 — 없으면 첫 출항이 성립하지 않고,
+  // 둘 이상이면 시작 슬롯 규칙이 무너진다.
+  const starting = parsed.filter((entry) => entry.startingItem);
+  if (starting.length !== 1) {
+    throw new ParamValidationError(
+      EQUIPMENT_FILE,
+      'items[].startingItem',
+      `시작 보유 장비는 정확히 1종이어야 합니다 (현재 ${starting.length}종)`,
+    );
+  }
+  const startingEntry = starting[0]!;
+  if (startingEntry.id !== STARTING_EQUIPMENT_ID) {
+    throw new ParamValidationError(
+      EQUIPMENT_FILE,
+      'items[].startingItem',
+      `시작 보유 장비는 ${STARTING_EQUIPMENT_ID}입니다 (받은 값: ${startingEntry.id})`,
+    );
+  }
+  if (startingEntry.costCredits !== 0 || startingEntry.costRareParts !== 0) {
+    throw new ParamValidationError(
+      EQUIPMENT_FILE,
+      `items[].${STARTING_EQUIPMENT_ID}`,
+      '시작 보유 장비는 가격이 0이어야 합니다 (구매 대상이 아님)',
+    );
+  }
+
+  return { slotCapacity, items: parsed };
 }
 
 /**
@@ -313,4 +433,335 @@ export function estimatedSortiesToAfford(
 ): number | null {
   if (totalCredits === null || creditsPerSortie === null || creditsPerSortie <= 0) return null;
   return totalCredits / creditsPerSortie;
+}
+
+
+/* ── 승인 수치 규칙 (사용자 승인 2026-08-01) ─────────────────── */
+
+/** 전 업그레이드 공통 단계별 크레딧 [승인] */
+export const APPROVED_UPGRADE_CREDITS = [100, 160, 240, 340, 460] as const;
+/** 전 업그레이드 공통 단계별 희귀 부품 [승인] */
+export const APPROVED_UPGRADE_RARE_PARTS = [0, 0, 0, 1, 2] as const;
+/** A군 목표 누적 효과 [승인] */
+export const APPROVED_A_GROUP_CUMULATIVE = [0.05, 0.1, 0.16, 0.22, 0.3] as const;
+/** B군 목표 누적 효과 [승인] */
+export const APPROVED_B_GROUP_CUMULATIVE = [0.1, 0.2, 0.32, 0.44, 0.6] as const;
+/** A군 대상 (나머지 3종은 B군) */
+export const A_GROUP_UPGRADE_IDS: readonly OfficialUpgradeId[] = [
+  'maxSpeed',
+  'turnRate',
+  'reloadSpeed',
+  'sonarRange',
+];
+
+const ECONOMY_FILE = 'params/economy.json';
+const CARGO_FILE = 'params/cargo.json';
+const EPSILON = 1e-9;
+
+export interface DropTableEntry {
+  readonly credits: number;
+  readonly rareParts: number;
+}
+
+export interface SalvageSpawn {
+  readonly spawnId: string;
+  readonly kind: string;
+  readonly dropTableId: string;
+  /** 확정 배치 희귀 부품 id (없으면 null) — 확률 아님 */
+  readonly rarePartId: string | null;
+}
+
+export interface EconomyParams {
+  readonly creditLossOnDestroyedRatio: number;
+  readonly pickupRadiusMeters: number;
+  readonly dropTables: Readonly<Record<string, DropTableEntry>>;
+  readonly salvageSpawns: readonly SalvageSpawn[];
+  readonly sortieIncomeReference: {
+    readonly cargoCredits: number;
+    readonly salvageCredits: number;
+    readonly totalCredits: number;
+    readonly rareParts: number;
+  };
+  readonly bossReadinessReference: {
+    readonly upgradeIds: readonly string[];
+    readonly upgradeLevel: number;
+    readonly equipmentIds: readonly string[];
+    readonly expectedSortieRange: readonly [number, number];
+  };
+}
+
+function requireNonNegative(file: string, path: string, value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new ParamValidationError(file, path, `유한한 숫자가 필요합니다 (받은 값: ${JSON.stringify(value)})`);
+  }
+  if (value < 0) throw new ParamValidationError(file, path, `음수는 허용되지 않습니다 (받은 값: ${value})`);
+  return value;
+}
+
+function requireNonNegativeInteger(file: string, path: string, value: unknown): number {
+  const n = requireNonNegative(file, path, value);
+  if (!Number.isInteger(n)) {
+    throw new ParamValidationError(file, path, `정수가 필요합니다 (받은 값: ${n})`);
+  }
+  return n;
+}
+
+export function validateEconomyParams(raw: unknown): EconomyParams {
+  if (!isRecord(raw)) throw new ParamValidationError(ECONOMY_FILE, '(루트)', '객체가 필요합니다');
+
+  const lossRaw = raw['creditLossOnDestroyedRatio'];
+  if (!isRecord(lossRaw)) {
+    throw new ParamValidationError(ECONOMY_FILE, 'creditLossOnDestroyedRatio', '객체({ value, range })가 필요합니다');
+  }
+  const loss = requireNonNegative(ECONOMY_FILE, 'creditLossOnDestroyedRatio.value', lossRaw['value']);
+  if (loss > 1) {
+    throw new ParamValidationError(ECONOMY_FILE, 'creditLossOnDestroyedRatio.value', `0~1 이어야 합니다 (받은 값: ${loss})`);
+  }
+
+  const pickupRaw = raw['pickupRadiusMeters'];
+  if (!isRecord(pickupRaw)) {
+    throw new ParamValidationError(ECONOMY_FILE, 'pickupRadiusMeters', '객체({ value })가 필요합니다');
+  }
+  const pickup = requireNonNegative(ECONOMY_FILE, 'pickupRadiusMeters.value', pickupRaw['value']);
+
+  const tablesRaw = raw['dropTables'];
+  if (!isRecord(tablesRaw)) {
+    throw new ParamValidationError(ECONOMY_FILE, 'dropTables', '객체가 필요합니다');
+  }
+  const dropTables: Record<string, DropTableEntry> = {};
+  for (const [id, entryRaw] of Object.entries(tablesRaw)) {
+    if (!isRecord(entryRaw)) {
+      throw new ParamValidationError(ECONOMY_FILE, `dropTables.${id}`, '객체가 필요합니다');
+    }
+    dropTables[id] = {
+      credits: requireNonNegative(ECONOMY_FILE, `dropTables.${id}.credits`, entryRaw['credits']),
+      rareParts: requireNonNegativeInteger(ECONOMY_FILE, `dropTables.${id}.rareParts`, entryRaw['rareParts']),
+    };
+  }
+
+  const spawnsRaw = raw['salvageSpawns'];
+  if (!Array.isArray(spawnsRaw)) {
+    throw new ParamValidationError(ECONOMY_FILE, 'salvageSpawns', '배열이 필요합니다');
+  }
+  const seenSpawn = new Set<string>();
+  const salvageSpawns = spawnsRaw.map((entryRaw, index) => {
+    const path = `salvageSpawns[${index}]`;
+    if (!isRecord(entryRaw)) throw new ParamValidationError(ECONOMY_FILE, path, '객체가 필요합니다');
+    const spawnId = entryRaw['spawnId'];
+    if (typeof spawnId !== 'string' || spawnId.length === 0) {
+      throw new ParamValidationError(ECONOMY_FILE, `${path}.spawnId`, '비어 있지 않은 문자열이 필요합니다');
+    }
+    if (seenSpawn.has(spawnId)) {
+      throw new ParamValidationError(ECONOMY_FILE, `${path}.spawnId`, `중복 spawnId: ${spawnId}`);
+    }
+    seenSpawn.add(spawnId);
+    const dropTableId = entryRaw['dropTableId'];
+    if (typeof dropTableId !== 'string' || !(dropTableId in dropTables)) {
+      throw new ParamValidationError(
+        ECONOMY_FILE,
+        `${path}.dropTableId`,
+        `dropTables에 없는 참조입니다: ${JSON.stringify(dropTableId)}`,
+      );
+    }
+    const kind = entryRaw['kind'];
+    if (typeof kind !== 'string' || kind.length === 0) {
+      throw new ParamValidationError(ECONOMY_FILE, `${path}.kind`, '문자열이 필요합니다');
+    }
+    const rarePartId = entryRaw['rarePartId'];
+    if (rarePartId !== null && typeof rarePartId !== 'string') {
+      throw new ParamValidationError(ECONOMY_FILE, `${path}.rarePartId`, '문자열 또는 null이 필요합니다');
+    }
+    return { spawnId, kind, dropTableId, rarePartId } as SalvageSpawn;
+  });
+
+  const incomeRaw = raw['sortieIncomeReference'];
+  if (!isRecord(incomeRaw)) {
+    throw new ParamValidationError(ECONOMY_FILE, 'sortieIncomeReference', '객체가 필요합니다');
+  }
+  const income = {
+    cargoCredits: requireNonNegative(ECONOMY_FILE, 'sortieIncomeReference.cargoCredits', incomeRaw['cargoCredits']),
+    salvageCredits: requireNonNegative(ECONOMY_FILE, 'sortieIncomeReference.salvageCredits', incomeRaw['salvageCredits']),
+    totalCredits: requireNonNegative(ECONOMY_FILE, 'sortieIncomeReference.totalCredits', incomeRaw['totalCredits']),
+    rareParts: requireNonNegativeInteger(ECONOMY_FILE, 'sortieIncomeReference.rareParts', incomeRaw['rareParts']),
+  };
+
+  const bossRaw = raw['bossReadinessReference'];
+  if (!isRecord(bossRaw)) {
+    throw new ParamValidationError(ECONOMY_FILE, 'bossReadinessReference', '객체가 필요합니다');
+  }
+  const rangeRaw = bossRaw['expectedSortieRange'];
+  if (!Array.isArray(rangeRaw) || rangeRaw.length !== 2) {
+    throw new ParamValidationError(ECONOMY_FILE, 'bossReadinessReference.expectedSortieRange', '[최소, 최대] 배열이 필요합니다');
+  }
+  const upgradeIds = bossRaw['upgradeIds'];
+  const equipmentIds = bossRaw['equipmentIds'];
+  if (!Array.isArray(upgradeIds) || upgradeIds.some((id) => typeof id !== 'string')) {
+    throw new ParamValidationError(ECONOMY_FILE, 'bossReadinessReference.upgradeIds', '문자열 배열이 필요합니다');
+  }
+  if (!Array.isArray(equipmentIds) || equipmentIds.some((id) => typeof id !== 'string')) {
+    throw new ParamValidationError(ECONOMY_FILE, 'bossReadinessReference.equipmentIds', '문자열 배열이 필요합니다');
+  }
+
+  return {
+    creditLossOnDestroyedRatio: loss,
+    pickupRadiusMeters: pickup,
+    dropTables,
+    salvageSpawns,
+    sortieIncomeReference: income,
+    bossReadinessReference: {
+      upgradeIds: upgradeIds as string[],
+      upgradeLevel: requireNonNegativeInteger(ECONOMY_FILE, 'bossReadinessReference.upgradeLevel', bossRaw['upgradeLevel']),
+      equipmentIds: equipmentIds as string[],
+      expectedSortieRange: [
+        requireNonNegative(ECONOMY_FILE, 'bossReadinessReference.expectedSortieRange[0]', rangeRaw[0]),
+        requireNonNegative(ECONOMY_FILE, 'bossReadinessReference.expectedSortieRange[1]', rangeRaw[1]),
+      ] as const,
+    },
+  };
+}
+
+export interface CargoParams {
+  readonly targetId: number;
+  readonly speedMetersPerSecond: number;
+  readonly hitRadiusMeters: number;
+  readonly sinkDurationSeconds: number;
+  readonly waypointA: { readonly x: number; readonly z: number };
+  readonly waypointB: { readonly x: number; readonly z: number };
+  readonly hullBox: {
+    readonly halfLengthMeters: number;
+    readonly halfBeamMeters: number;
+    readonly judgmentDraftMeters: number;
+    readonly freeboardMeters: number;
+  };
+}
+
+function requireWaypoint(path: string, raw: unknown): { x: number; z: number } {
+  if (!isRecord(raw)) throw new ParamValidationError(CARGO_FILE, path, '{ x, z } 객체가 필요합니다');
+  const x = raw['x'];
+  const z = raw['z'];
+  if (typeof x !== 'number' || !Number.isFinite(x) || typeof z !== 'number' || !Number.isFinite(z)) {
+    throw new ParamValidationError(CARGO_FILE, path, 'x·z는 유한한 숫자여야 합니다');
+  }
+  return { x, z };
+}
+
+export function validateCargoParams(raw: unknown): CargoParams {
+  if (!isRecord(raw)) throw new ParamValidationError(CARGO_FILE, '(루트)', '객체가 필요합니다');
+  const hullRaw = raw['hullBox'];
+  if (!isRecord(hullRaw)) throw new ParamValidationError(CARGO_FILE, 'hullBox', '객체가 필요합니다');
+  return {
+    targetId: requireNonNegativeInteger(CARGO_FILE, 'targetId', raw['targetId']),
+    speedMetersPerSecond: requireNonNegative(CARGO_FILE, 'speedMetersPerSecond', raw['speedMetersPerSecond']),
+    hitRadiusMeters: requireNonNegative(CARGO_FILE, 'hitRadiusMeters', raw['hitRadiusMeters']),
+    sinkDurationSeconds: requireNonNegative(CARGO_FILE, 'sinkDurationSeconds', raw['sinkDurationSeconds']),
+    waypointA: requireWaypoint('waypointA', raw['waypointA']),
+    waypointB: requireWaypoint('waypointB', raw['waypointB']),
+    hullBox: {
+      halfLengthMeters: requireNonNegative(CARGO_FILE, 'hullBox.halfLengthMeters', hullRaw['halfLengthMeters']),
+      halfBeamMeters: requireNonNegative(CARGO_FILE, 'hullBox.halfBeamMeters', hullRaw['halfBeamMeters']),
+      judgmentDraftMeters: requireNonNegative(CARGO_FILE, 'hullBox.judgmentDraftMeters', hullRaw['judgmentDraftMeters']),
+      freeboardMeters: requireNonNegative(CARGO_FILE, 'hullBox.freeboardMeters', hullRaw['freeboardMeters']),
+    },
+  };
+}
+
+/* ── 진행 곡선·승인값 대조 ─────────────────────────────────── */
+
+/** null이 하나라도 있으면 throw — 공식 데이터 확정 이후의 회귀 차단 */
+export function assertNoPendingFields(
+  upgrades: readonly UpgradeEntry[],
+  equipment: EquipmentCatalog,
+): void {
+  const pending = pendingFields(upgrades, equipment);
+  if (pending.length > 0) {
+    throw new ParamValidationError(
+      UPGRADES_FILE,
+      '(미확정)',
+      `공식 승인 이후 null은 허용되지 않습니다 — ${pending.length}개: ${pending.slice(0, 5).join(', ')}${pending.length > 5 ? ' …' : ''}`,
+    );
+  }
+}
+
+/** 단계별 증가량의 누적 합 (level은 1-based) */
+export function cumulativeBonus(entry: UpgradeEntry, level: number): number {
+  let sum = 0;
+  for (let i = 0; i < Math.min(level, entry.effectBonus.length); i += 1) {
+    const value = entry.effectBonus[i];
+    if (value === null || value === undefined) return Number.NaN;
+    sum += value;
+  }
+  return sum;
+}
+
+/** 승인된 누적 목표치와 대조 — 어긋나면 문자열 목록 반환 (비어 있으면 일치) */
+export function checkApprovedProgression(upgrades: readonly UpgradeEntry[]): string[] {
+  const problems: string[] = [];
+  for (const entry of upgrades) {
+    const target = (A_GROUP_UPGRADE_IDS as readonly string[]).includes(entry.id)
+      ? APPROVED_A_GROUP_CUMULATIVE
+      : APPROVED_B_GROUP_CUMULATIVE;
+    for (let level = 1; level <= entry.maxLevel; level += 1) {
+      const actual = cumulativeBonus(entry, level);
+      const expected = target[level - 1];
+      if (expected === undefined || Math.abs(actual - expected) > EPSILON) {
+        problems.push(`${entry.id} ${level}단계 누적 ${actual} ≠ 승인값 ${expected}`);
+      }
+    }
+    for (let level = 0; level < entry.maxLevel; level += 1) {
+      if (entry.costCredits[level] !== APPROVED_UPGRADE_CREDITS[level]) {
+        problems.push(`${entry.id} ${level + 1}단계 크레딧 ${entry.costCredits[level]} ≠ ${APPROVED_UPGRADE_CREDITS[level]}`);
+      }
+      if (entry.costRareParts[level] !== APPROVED_UPGRADE_RARE_PARTS[level]) {
+        problems.push(`${entry.id} ${level + 1}단계 희귀 ${entry.costRareParts[level]} ≠ ${APPROVED_UPGRADE_RARE_PARTS[level]}`);
+      }
+    }
+  }
+  return problems;
+}
+
+/** 출항 1회 최대 수입 — dropTables·salvageSpawns에서 파생 계산 */
+export function sortieMaxIncome(economy: EconomyParams): {
+  cargoCredits: number;
+  salvageCredits: number;
+  totalCredits: number;
+  rareParts: number;
+} {
+  const cargoCredits = economy.dropTables['cargo-standard']?.credits ?? 0;
+  let salvageCredits = 0;
+  let rareParts = 0;
+  for (const spawn of economy.salvageSpawns) {
+    const table = economy.dropTables[spawn.dropTableId];
+    if (table) {
+      salvageCredits += table.credits;
+      rareParts += table.rareParts;
+    }
+    if (spawn.rarePartId !== null) rareParts += 1;
+  }
+  return { cargoCredits, salvageCredits, totalCredits: cargoCredits + salvageCredits, rareParts };
+}
+
+/** 보스 준비 최소 사양 총비용 (economy.bossReadinessReference 기준) */
+export function bossReadinessCost(
+  upgrades: readonly UpgradeEntry[],
+  equipment: EquipmentCatalog,
+  economy: EconomyParams,
+): { credits: number; rareParts: number } {
+  const ref = economy.bossReadinessReference;
+  let credits = 0;
+  let rareParts = 0;
+  for (const id of ref.upgradeIds) {
+    const entry = upgrades.find((u) => u.id === id);
+    if (!entry) continue;
+    for (let level = 0; level < Math.min(ref.upgradeLevel, entry.maxLevel); level += 1) {
+      credits += entry.costCredits[level] ?? 0;
+      rareParts += entry.costRareParts[level] ?? 0;
+    }
+  }
+  for (const id of ref.equipmentIds) {
+    const item = equipment.items.find((e) => e.id === id);
+    if (!item) continue;
+    credits += item.costCredits ?? 0;
+    rareParts += item.costRareParts ?? 0;
+  }
+  return { credits, rareParts };
 }
