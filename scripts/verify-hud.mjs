@@ -68,6 +68,18 @@ page.on('console', (m) => {
 await page.goto(baseUrl, { waitUntil: 'load' });
 await sleep(1500);
 
+// 스프린트 A 마감: 자동 출항 제거 — 게임은 기지(BASE)에서 시작한다.
+// 전투 HUD 검증은 해역(SORTIE) 상태 전제이므로, 기지 화면(SortiePrepScreen)의
+// 출항 버튼(단일 진입점 — BaseScreenPort.launchSortie)으로 먼저 출항한다.
+await page.evaluate(() => {
+  const prep = document.querySelector('[data-ui-sortie-prep]');
+  const depart = [...(prep?.querySelectorAll('button') ?? [])].find(
+    (b) => b.textContent.trim() === '출항',
+  );
+  depart?.click();
+});
+await sleep(800);
+
 const q = (sel) =>
   page.evaluate((s) => {
     const el = document.querySelector(s);

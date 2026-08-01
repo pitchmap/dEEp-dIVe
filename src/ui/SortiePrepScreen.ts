@@ -1,49 +1,44 @@
 /**
- * 출항 준비(기지) 화면 — 재화 현황 + 업그레이드 구매 + 장비 장착 + 출항 확정
- * (과제 §8~§10, 14차 창3).
+ * 출항 준비(기지) 화면 — 재화 현황 + 업그레이드 구매 + 장비 장착 + 출항 확정.
+ * **BaseScreenPort v2 전용 소비판** (INT-CORE-010).
  *
  * 경계:
- *  - 이 화면은 **상태 표시 + command 호출 + 결과 표시**만 한다. 구매 판정·
- *    재화 차감·loadout 변경·저장·rollback은 전부 포트 구현(게임플레이·리드·
- *    툴링) 소유다.
- *  - 표시 값은 매 프레임 소스에서 다시 읽는다 — UI 내부 임시 지갑·임시
- *    loadout 없음.
- *  - 공식 경제 데이터가 없는 항목은 가격을 표시하지 않고 구매 버튼을
- *    '가격 데이터 대기'로 비활성한다 — UI가 가격을 발명하지 않는다 (§8).
- *  - 출항 확정은 DeparturePort 결과가 ok일 때만 성립한다 — 실패(saveFailed)
- *    피드백을 표시할 뿐 화면·해역 전환을 UI가 강행하지 않는다 (§10).
+ *  - 상태·명령 진입점은 포트 하나다: wallet·sortieCreditsEarned·
+ *    sortieRarePartsSecured·upgradeCatalog·upgradeLevels·equipmentCatalog·
+ *    loadout·canLaunchSortie·lastResult / purchaseUpgrade·equipItem·
+ *    replaceItem·unequipItem·confirmDeparture.
+ *  - 지갑·단계·loadout·저장소를 UI가 직접 만지지 않는다. 게임플레이 로컬
+ *    결과 타입도 읽지 않는다 — 결과는 계약 문자열 코드뿐이다.
+ *  - 가격·효과는 포트가 준 공식 카탈로그 값만 표시한다. `nextCostPending`
+ *    (공식 params 미확정)이면 구매 버튼을 비활성하고 미확정으로 표기한다 —
+ *    0원 구매·임의 가격은 만들지 않는다.
+ *  - 출항은 `confirmDeparture()` 하나 — 실패 시 화면 전환 없이 기지를
+ *    유지하고 사유를 표시한다 (UI가 전환을 강행하지 않는다).
  *
- * 접근성 (§11): 구매 가능 여부는 색이 아니라 disabled 속성 + ✓/✕ 아이콘 +
- * 사유 문구로 전달한다. 모든 동작은 실제 <button>(키보드 포커스 가능)이며
- * 마우스·키보드·화면 버튼이 같은 command를 호출한다. 작은 화면에서는 패널이
- * 세로 스크롤된다.
+ * 접근성 (§11): 가능 여부는 색이 아니라 disabled + ✓/✕ 아이콘 + 사유 문구로
+ * 전달한다. 모든 동작은 실제 <button>(키보드 포커스 가능)이며 결과 피드백은
+ * sticky 푸터(role=status)로 스크롤 위치와 무관하게 보인다.
  */
 
-import type { EquipmentId } from '../contracts/meta';
 import type {
-  DeparturePort,
-  EquipmentUiPort,
-  MetaCommandResult,
-  MetaWalletSource,
-  UpgradeOfferView,
-  UpgradePurchasePort,
+  BaseScreenPort,
+  EquipmentId,
+  UpgradeCatalogItem,
+  UpgradeStatId,
+} from '../contracts/meta';
+import {
+  commandOutcomeMessage,
+  departureOutcomeMessage,
+  upgradePriceText,
 } from './metaEconomyPorts';
-import { resultMessage } from './metaEconomyPorts';
 
-/** 장비 4종 표기 — 이름·역할 설명(정성 서술만, 수치 복제 금지) */
-const EQUIPMENT_INFO: Record<EquipmentId, { name: string; role: string }> = {
-  standardTorpedo: { name: '표준 어뢰', role: '균형형 기본 어뢰 — 대부분의 표적에 무난하다.' },
-  fastTorpedo: { name: '고속 어뢰', role: '빠른 주행·낮은 위력 — 리드샷 여유가 없는 표적용.' },
-  heavyTorpedo: { name: '중어뢰', role: '느린 주행·높은 위력 — 대형 표적·보스 상대용.' },
-  decoy: { name: '기만기', role: '음향 기만 — 적의 추적을 다른 곳으로 유인한다.' },
+/** 장비 4종 역할 설명 (정성 서술만 — 수치 복제 금지). 이름은 공식 카탈로그 label */
+const EQUIPMENT_ROLE: Record<EquipmentId, string> = {
+  standardTorpedo: '균형형 기본 어뢰 — 대부분의 표적에 무난하다.',
+  fastTorpedo: '빠른 주행·낮은 위력 — 리드샷 여유가 없는 표적용.',
+  heavyTorpedo: '느린 주행·높은 위력 — 대형 표적·보스 상대용.',
+  decoy: '음향 기만 — 적의 추적을 다른 곳으로 유인한다.',
 };
-
-const EQUIPMENT_IDS: readonly EquipmentId[] = [
-  'standardTorpedo',
-  'fastTorpedo',
-  'heavyTorpedo',
-  'decoy',
-];
 
 const BUTTON_STYLE = [
   'font:0.78rem system-ui,sans-serif',
@@ -55,6 +50,18 @@ const BUTTON_STYLE = [
   'cursor:pointer',
 ].join(';');
 
+/**
+ * 슬롯 위치 읽기 뷰 — v2 `loadout.equipped`는 빈 슬롯이 압축된 목록이라
+ * **실제 슬롯 인덱스를 복원할 수 없다**. 슬롯 지정 명령(equipItem·
+ * replaceItem·unequipItem)은 실제 인덱스를 받으므로, 중간 슬롯 해제 이후
+ * 잘못된 슬롯을 조작하지 않으려면 위치 정보가 필요하다.
+ * 계약 편입(BaseScreenPort에 slotPositions 추가)은 INT-RENDER-010 요청 중 —
+ * 미주입 시에는 좌측 정렬 가정으로 동작한다(빈 구멍이 없는 동안 정확).
+ */
+export interface EquipmentSlotPositionView {
+  readonly slots: readonly (EquipmentId | null)[];
+}
+
 export class SortiePrepScreen {
   private readonly root: HTMLDivElement;
   private readonly walletLine: HTMLDivElement;
@@ -63,10 +70,8 @@ export class SortiePrepScreen {
   private readonly feedback: HTMLDivElement;
   private readonly departButton: HTMLButtonElement;
 
-  private walletSource: MetaWalletSource | null = null;
-  private upgradePort: UpgradePurchasePort | null = null;
-  private equipmentPort: EquipmentUiPort | null = null;
-  private departurePort: DeparturePort | null = null;
+  private port: BaseScreenPort | null = null;
+  private slotView: EquipmentSlotPositionView | null = null;
 
   /** 목록 재구축 판단용 서명 — 상태가 바뀐 프레임에만 DOM을 다시 만든다 */
   private renderedSignature = '';
@@ -82,7 +87,7 @@ export class SortiePrepScreen {
       'height:100%',
       'width:min(92vw, 24rem)',
       'box-sizing:border-box',
-      'z-index:25', // 조준경(30)·재화 HUD(32)와 겹침 없음 — 기지 상태 전용 화면
+      'z-index:25', // 조준경(30)·재화 HUD(32)·HUD 버튼(90)과 겹침 없음 — 기지 전용
       'display:none',
       'flex-direction:column',
       'gap:0.6rem',
@@ -159,161 +164,159 @@ export class SortiePrepScreen {
     return list;
   }
 
-  /* ── 포트 연결 (composition root 1회 주입) ── */
+  /* ── 연결 (composition root 1회 주입) ── */
 
-  attachWalletSource(source: MetaWalletSource): void {
-    this.walletSource = source;
+  /** 유일한 상태·명령 진입점 — BaseScreenPort v2 */
+  attachBaseScreen(port: BaseScreenPort): void {
+    this.port = port;
   }
 
-  attachUpgradePort(port: UpgradePurchasePort): void {
-    this.upgradePort = port;
-  }
-
-  attachEquipmentPort(port: EquipmentUiPort): void {
-    this.equipmentPort = port;
-  }
-
-  attachDeparturePort(port: DeparturePort): void {
-    this.departurePort = port;
+  /** 슬롯 위치 뷰 (v2 계약 편입 요청 중 — INT-RENDER-010) */
+  attachSlotPositions(view: EquipmentSlotPositionView): void {
+    this.slotView = view;
   }
 
   /* ── 프레임 갱신 ── */
 
   update(): void {
-    const state = this.walletSource?.metaState;
-    const shouldShow = state === 'BASE' || state === 'SORTIE_PREP';
+    const port = this.port;
+    const shouldShow = port?.canLaunchSortie === true;
     if (shouldShow !== this.visible) {
       this.visible = shouldShow;
       this.root.style.display = shouldShow ? 'flex' : 'none';
+      if (!shouldShow) this.renderedSignature = '';
     }
-    if (!shouldShow || !this.walletSource) return;
+    if (!shouldShow || !port) return;
 
-    const wallet = this.walletSource.wallet;
+    const wallet = port.wallet;
     const walletText = `보유 — 크레딧 ${Math.floor(wallet.credits)} · 희귀 부품 ${Math.floor(wallet.rareParts)} (확정 자산)`;
     if (this.walletLine.textContent !== walletText) {
       this.walletLine.textContent = walletText;
     }
 
-    const signature = this.buildSignature();
+    const signature = this.buildSignature(port);
     if (signature !== this.renderedSignature) {
       this.renderedSignature = signature;
-      this.rebuildUpgradeList();
-      this.rebuildEquipmentList();
+      this.rebuildUpgradeList(port);
+      this.rebuildEquipmentList(port);
     }
   }
 
-  /** 목록에 영향을 주는 상태만 직렬화 — 값이 바뀐 프레임에만 재구축 */
-  private buildSignature(): string {
-    const wallet = this.walletSource?.wallet;
-    const offers = this.upgradePort?.listOffers() ?? [];
-    const slots = this.equipmentPort?.slots ?? [];
+  /** 목록에 영향을 주는 포트 상태만 직렬화 — 값이 바뀐 프레임에만 재구축 */
+  private buildSignature(port: BaseScreenPort): string {
+    const wallet = port.wallet;
     return [
-      wallet ? `${wallet.credits}/${wallet.rareParts}` : '',
-      offers
-        .map((o) => `${o.statId}:${o.currentLevel}/${o.maxLevel}:${o.cost ? `${o.cost.credits},${o.cost.rareParts}` : 'x'}`)
+      `${wallet.credits}/${wallet.rareParts}`,
+      port.upgradeCatalog
+        .map((item) => {
+          const cost = item.nextCost;
+          return `${item.id}:${port.upgradeLevels[item.id] ?? 0}:${
+            item.nextCostPending ? 'pending' : cost ? `${cost.credits},${cost.rareParts}` : 'max'
+          }`;
+        })
         .join('|'),
-      slots.join(','),
+      this.realSlots(port).join(','),
     ].join('#');
   }
 
-  /* ── 업그레이드 구매 (§8) ── */
+  /**
+   * 실제 슬롯 배열 — 위치 뷰가 있으면 그대로, 없으면 압축된 loadout을
+   * 좌측 정렬로 복원한다 (빈 구멍이 없는 동안 정확).
+   */
+  private realSlots(port: BaseScreenPort): readonly (EquipmentId | null)[] {
+    if (this.slotView) return this.slotView.slots;
+    const loadout = port.loadout;
+    return Array.from({ length: loadout.slotCapacity }, (_, i) => loadout.equipped[i] ?? null);
+  }
 
-  private rebuildUpgradeList(): void {
+  /* ── 업그레이드 구매 (A5) ── */
+
+  private rebuildUpgradeList(port: BaseScreenPort): void {
     this.upgradeList.replaceChildren();
-    const port = this.upgradePort;
-    if (!port) {
-      this.upgradeList.appendChild(this.mutedNote('업그레이드 데이터 배선 대기 (리드 카탈로그 연결 후 표시).'));
+    if (port.upgradeCatalog.length === 0) {
+      this.upgradeList.appendChild(this.mutedNote('업그레이드 카탈로그가 비어 있습니다.'));
       return;
     }
-    for (const offer of port.listOffers()) {
-      this.upgradeList.appendChild(this.buildUpgradeRow(port, offer));
+    for (const item of port.upgradeCatalog) {
+      this.upgradeList.appendChild(this.buildUpgradeRow(port, item));
     }
   }
 
-  private buildUpgradeRow(port: UpgradePurchasePort, offer: UpgradeOfferView): HTMLElement {
+  private buildUpgradeRow(port: BaseScreenPort, item: UpgradeCatalogItem): HTMLElement {
+    const currentLevel = port.upgradeLevels[item.id] ?? 0;
+    const atMaxLevel = currentLevel >= item.maxLevel;
+
     const row = document.createElement('div');
+    row.setAttribute('data-upgrade-row', item.id);
     row.style.cssText =
       'display:flex;flex-direction:column;gap:0.15rem;padding:0.4rem 0.5rem;background:rgba(14,30,40,0.8);border-radius:4px';
 
     const head = document.createElement('div');
-    head.textContent = `${offer.displayName} — 단계 ${offer.currentLevel} / ${offer.maxLevel}`;
+    head.textContent = `${item.label} — 단계 ${currentLevel} / ${item.maxLevel}`;
     row.appendChild(head);
 
-    if (offer.nextEffectText) {
-      const effect = document.createElement('div');
-      effect.textContent = `다음 단계: ${offer.nextEffectText}`;
-      effect.style.cssText = 'color:#9cc4d4;font-size:0.76rem';
-      row.appendChild(effect);
-    }
-
     const actionLine = document.createElement('div');
-    actionLine.style.cssText = 'display:flex;align-items:center;gap:0.5rem;margin-top:0.2rem;flex-wrap:wrap';
+    actionLine.style.cssText =
+      'display:flex;align-items:center;gap:0.5rem;margin-top:0.2rem;flex-wrap:wrap';
 
     const price = document.createElement('span');
     price.style.cssText = 'font-size:0.76rem;color:#ffd9a0';
+    price.textContent = upgradePriceText(item, atMaxLevel);
+
     const button = document.createElement('button');
     button.type = 'button';
     button.style.cssText = BUTTON_STYLE;
 
-    const atMax = offer.currentLevel >= offer.maxLevel;
-    if (atMax) {
-      price.textContent = '최대 단계 도달';
+    if (atMaxLevel) {
       button.textContent = '✕ 최대 단계';
       button.disabled = true;
-    } else if (!offer.cost) {
-      // 공식 경제 데이터 부재 — 가격을 발명하지 않는다 (§8)
-      price.textContent = '가격: 공식 데이터 대기';
-      button.textContent = '구매 (가격 데이터 대기)';
-      button.disabled = true;
-    } else if (!port.purchase) {
-      price.textContent = `가격: 크레딧 ${offer.cost.credits}${offer.cost.rareParts > 0 ? ` · 희귀 부품 ${offer.cost.rareParts}` : ''}`;
-      button.textContent = '구매 (구매 처리 배선 대기)';
+    } else if (item.nextCostPending || !item.nextCost) {
+      // 공식 params 미확정 — 트랜잭션 진입 없이 비활성 (0원 구매 금지)
+      button.textContent = '구매 (경제 데이터 미확정)';
       button.disabled = true;
     } else {
-      price.textContent = `가격: 크레딧 ${offer.cost.credits}${offer.cost.rareParts > 0 ? ` · 희귀 부품 ${offer.cost.rareParts}` : ''}`;
-      const wallet = this.walletSource?.wallet;
-      const lackCredits = !!wallet && wallet.credits < offer.cost.credits;
-      const lackParts = !!wallet && wallet.rareParts < offer.cost.rareParts;
+      const cost = item.nextCost;
+      const wallet = port.wallet;
+      const lackCredits = wallet.credits < cost.credits;
+      const lackParts = wallet.rareParts < cost.rareParts;
       if (lackCredits || lackParts) {
         // 불가 상태를 색이 아니라 비활성 + 아이콘 + 사유로 표기 (§11)
         button.textContent = lackCredits ? '✕ 크레딧 부족' : '✕ 희귀 부품 부족';
         button.disabled = true;
       } else {
-        button.textContent = `구매 — ${offer.displayName}`;
-        const purchase = port.purchase;
+        button.textContent = `구매 — ${item.label}`;
         button.addEventListener('click', () => {
-          this.showResult(purchase(offer.statId), `${offer.displayName} 구매`);
+          this.announce(
+            commandOutcomeMessage(port.purchaseUpgrade(item.id as UpgradeStatId)),
+            `${item.label} 구매`,
+          );
         });
       }
     }
-    if (button.disabled) {
-      button.style.opacity = '0.55';
-      button.style.cursor = 'not-allowed';
-      button.setAttribute('aria-disabled', 'true');
-    }
+    if (button.disabled) this.markDisabled(button);
 
     actionLine.append(price, button);
     row.appendChild(actionLine);
     return row;
   }
 
-  /* ── 장비 장착 (§9) ── */
+  /* ── 장비 장착 (A6) ── */
 
-  private rebuildEquipmentList(): void {
+  private rebuildEquipmentList(port: BaseScreenPort): void {
     this.equipmentList.replaceChildren();
-    const port = this.equipmentPort;
-    if (!port) {
-      this.equipmentList.appendChild(this.mutedNote('장비 시스템 배선 대기.'));
-      return;
-    }
+    const slots = this.realSlots(port);
+    const catalog = port.equipmentCatalog;
+    const labelOf = (id: EquipmentId): string =>
+      catalog.find((item) => item.id === id)?.label ?? id;
 
-    // 슬롯 현황 — 각 슬롯의 현재 장비 + 해제 버튼
-    port.slots.forEach((equipped, slotIndex) => {
+    // 슬롯 현황 — 실제 슬롯 인덱스 기준 (명령의 slotIndex와 동일 축)
+    slots.forEach((equipped, slotIndex) => {
       const row = document.createElement('div');
+      row.setAttribute('data-equipment-slot', String(slotIndex));
       row.style.cssText =
         'display:flex;align-items:center;gap:0.5rem;padding:0.35rem 0.5rem;background:rgba(14,30,40,0.8);border-radius:4px';
       const label = document.createElement('span');
-      label.textContent = `슬롯 ${slotIndex + 1}: ${equipped ? EQUIPMENT_INFO[equipped].name : '(비어 있음)'}`;
+      label.textContent = `슬롯 ${slotIndex + 1}: ${equipped ? labelOf(equipped) : '(비어 있음)'}`;
       label.style.cssText = 'flex:1';
       row.appendChild(label);
       if (equipped) {
@@ -322,30 +325,59 @@ export class SortiePrepScreen {
         unequipButton.textContent = '해제';
         unequipButton.style.cssText = BUTTON_STYLE;
         unequipButton.addEventListener('click', () => {
-          this.showResult(port.unequip(slotIndex), `슬롯 ${slotIndex + 1} 해제`);
+          this.announce(
+            commandOutcomeMessage(port.unequipItem(slotIndex)),
+            `슬롯 ${slotIndex + 1} 해제`,
+          );
         });
         row.appendChild(unequipButton);
       }
       this.equipmentList.appendChild(row);
     });
 
-    // 장비 목록 — 역할 설명 + 장착(빈 슬롯)/교체 안내
-    for (const id of EQUIPMENT_IDS) {
-      this.equipmentList.appendChild(this.buildEquipmentRow(port, id));
+    // 장비 목록 — 공식 카탈로그 4종: 이름·가격·역할 설명 + 장착/교체
+    if (catalog.length === 0) {
+      this.equipmentList.appendChild(this.mutedNote('장비 카탈로그가 비어 있습니다.'));
+      return;
+    }
+    for (const item of catalog) {
+      this.equipmentList.appendChild(
+        this.buildEquipmentRow(port, item.id, item.label, item.cost, slots),
+      );
     }
   }
 
-  private buildEquipmentRow(port: EquipmentUiPort, id: EquipmentId): HTMLElement {
-    const info = EQUIPMENT_INFO[id];
+  private buildEquipmentRow(
+    port: BaseScreenPort,
+    id: EquipmentId,
+    label: string,
+    cost: { readonly credits: number; readonly rareParts: number } | null,
+    slots: readonly (EquipmentId | null)[],
+  ): HTMLElement {
     const row = document.createElement('div');
+    row.setAttribute('data-equipment-row', id);
     row.style.cssText =
       'display:flex;flex-direction:column;gap:0.15rem;padding:0.4rem 0.5rem;background:rgba(10,24,32,0.8);border-radius:4px';
 
     const head = document.createElement('div');
-    head.textContent = info.name;
+    head.textContent = label;
     row.appendChild(head);
+
+    const priceLine = document.createElement('div');
+    priceLine.style.cssText = 'font-size:0.76rem;color:#ffd9a0';
+    if (!cost) {
+      priceLine.textContent = '가격: 경제 데이터 미확정 (수치표 대기)';
+    } else if (cost.credits === 0 && cost.rareParts === 0) {
+      // 공식 가격 0 = 시작 보유 장비 (params의 startingItem — 계약 뷰 편입은
+      // INT-RENDER-010 요청 중. 여기서 수치를 만들지 않고 0을 해석만 한다)
+      priceLine.textContent = '시작 보유 (구매 비용 없음)';
+    } else {
+      priceLine.textContent = `가격: 크레딧 ${cost.credits}${cost.rareParts > 0 ? ` · 희귀 부품 ${cost.rareParts}` : ''}`;
+    }
+    row.appendChild(priceLine);
+
     const role = document.createElement('div');
-    role.textContent = info.role;
+    role.textContent = EQUIPMENT_ROLE[id];
     role.style.cssText = 'color:#9cc4d4;font-size:0.76rem';
     row.appendChild(role);
 
@@ -353,58 +385,52 @@ export class SortiePrepScreen {
     button.type = 'button';
     button.style.cssText = `${BUTTON_STYLE};align-self:flex-start;margin-top:0.2rem`;
 
-    const equippedIndex = port.slots.indexOf(id);
-    const freeSlot = port.slots.indexOf(null);
+    const equippedIndex = slots.indexOf(id);
+    const freeIndex = slots.indexOf(null);
     if (equippedIndex >= 0) {
       button.textContent = `✓ 장착 중 (슬롯 ${equippedIndex + 1})`;
       button.disabled = true;
-    } else if (freeSlot >= 0) {
-      button.textContent = `장착 (슬롯 ${freeSlot + 1})`;
+      this.markDisabled(button);
+    } else if (freeIndex >= 0) {
+      button.textContent = `장착 (슬롯 ${freeIndex + 1})`;
       button.addEventListener('click', () => {
-        this.showResult(port.equip(freeSlot, id), `${info.name} 장착`);
+        this.announce(commandOutcomeMessage(port.equipItem(id, freeIndex)), `${label} 장착`);
       });
     } else {
-      // 빈 슬롯 없음 — 교체는 슬롯 1 기준 command (교체 = 같은 equip 진입점)
+      // 빈 슬롯 없음 — 슬롯 1 대상 교체 (교체도 같은 슬롯 지정 명령)
       button.textContent = '교체 (슬롯 1과 교체)';
       button.addEventListener('click', () => {
-        this.showResult(port.equip(0, id), `${info.name} 교체`);
+        this.announce(commandOutcomeMessage(port.replaceItem(id, 0)), `${label} 교체`);
       });
-    }
-    if (button.disabled) {
-      button.style.opacity = '0.55';
-      button.style.cursor = 'not-allowed';
-      button.setAttribute('aria-disabled', 'true');
     }
     row.appendChild(button);
     return row;
   }
 
-  /* ── 출항 (§10) ── */
+  /* ── 출항 (단일 진입점) ── */
 
   private onDepart(): void {
-    if (!this.departurePort) {
-      this.feedback.textContent = '✕ 출항 처리(확정 직전 저장) 배선 대기.';
-      return;
-    }
-    // 결과가 ok가 아니면 해역 전환은 일어나지 않는다 — 포트 구현이 보장하고
-    // UI는 사유(저장 실패 등)를 표시할 뿐 전환을 강행하지 않는다.
-    this.showResult(this.departurePort.confirmDeparture(), '출항');
+    const port = this.port;
+    if (!port) return;
+    // 성공(departed) 시 메타 상태가 SORTIE로 넘어가 canLaunchSortie=false가
+    // 되고 화면이 스스로 숨는다. 실패 시 상태 전환이 없으므로 기지 화면이
+    // 유지된다 — UI는 전환을 강행하지 않는다.
+    this.announce(departureOutcomeMessage(port.confirmDeparture()), '출항');
   }
 
   /* ── 공통 ── */
 
-  /**
-   * command 결과 통지 — 화면 내 버튼과 외부 포트 콜백(비동기 rollback 통지,
-   * QA 검수 경로)이 같은 표시 규칙을 쓴다. 문구는 resultMessage 단일 소스.
-   */
-  announce(result: MetaCommandResult, actionLabel: string): void {
-    this.showResult(result, actionLabel);
-  }
-
-  private showResult(result: MetaCommandResult, actionLabel: string): void {
-    this.feedback.textContent = `${actionLabel}: ${resultMessage(result)}`;
+  /** 명령 결과 통지 — 화면 버튼과 QA 검수 경로가 같은 표시 규칙을 쓴다 */
+  announce(message: string, actionLabel: string): void {
+    this.feedback.textContent = `${actionLabel}: ${message}`;
     // 상태가 바뀌었을 수 있으므로 다음 프레임 재구축을 강제한다
     this.renderedSignature = '';
+  }
+
+  private markDisabled(button: HTMLButtonElement): void {
+    button.style.opacity = '0.55';
+    button.style.cursor = 'not-allowed';
+    button.setAttribute('aria-disabled', 'true');
   }
 
   private mutedNote(text: string): HTMLElement {

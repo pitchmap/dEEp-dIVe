@@ -144,6 +144,15 @@ export class EconomySystem implements Updatable {
     return drained;
   }
 
+  /**
+   * 드롭 자동 회수 반경 (m, 읽기 전용) — 이 시스템이 실제 판정에 쓰는 값.
+   * 렌더의 회수 범위 피드백이 같은 값을 소비하도록 노출한다 (렌더가 반경을
+   * 정의하지 않는다 — INT-RENDER-010 §5). 판정 경로는 변경 없음.
+   */
+  get pickupRadiusMeters(): number {
+    return PROVISIONAL_PICKUP_RADIUS_METERS;
+  }
+
   /** 배치된 해저 재화 (읽기 전용 — 렌더·레벨 확인용) */
   get salvageObjects(): readonly SalvageObject[] {
     return this.salvages.map((entry) => entry.object);

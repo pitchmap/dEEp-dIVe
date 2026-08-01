@@ -47,14 +47,6 @@ import type {
   SalvageSpawnPlanEntry,
 } from '../contracts/officialParams';
 import type { SalvageKind } from '../systems/economy/SalvageObject';
-import type {
-  DeparturePort,
-  EquipmentUiPort,
-  MetaCommandResult,
-  SortieEarningsSource,
-  UpgradeOfferView,
-  UpgradePurchasePort,
-} from '../ui/metaEconomyPorts';
 import type { WorldDrop } from '../systems/economy/CreditDropField';
 import type { EventBus, Unsubscribe } from './EventBus';
 import type { GameSystem, SystemContext } from './GameSystem';
@@ -688,107 +680,12 @@ export function createBaseScreenPort(deps: BaseScreenDeps): BaseScreenPort & {
 }
 
 /* ─────────────────────────────────────────────────────────────
-   ⑤ production UI 포트 어댑터 (그래픽스 metaEconomyPorts 단면 공급)
-   — UI는 이 포트들만 소비한다. QA 데모(econUiQaDemo)는 여기와 무관하며
-   production composition에 포함되지 않는다 (?econdemo 플래그 전용).
+   ⑤ production UI 수명주기 어댑터
+   — UI(EconomyHud·SortiePrepScreen)는 BaseScreenPort v2를 **직접** 소비한다.
+   구계약 변환 어댑터(createMetaUiPorts·toUiCommandResult)는 UI v2 동기화로
+   불필요해져 제거됐다 (INT-RENDER-010 §2). QA 데모(econUiQaDemo)는 여기와
+   무관하며 production composition에 포함되지 않는다 (?econdemo 플래그 전용).
    ───────────────────────────────────────────────────────────── */
-
-/** 공식 결과 코드 → UI 표시 코드 (그래픽스 metaEconomyPorts.MetaCommandResult) */
-export function toUiCommandResult(
-  outcome: BaseCommandOutcome | DepartureResult,
-): MetaCommandResult {
-  switch (outcome) {
-    case 'success':
-    case 'departed':
-      return 'ok';
-    case 'maxLevelReached':
-      return 'maxLevel';
-    case 'saveFailedRolledBack':
-    case 'saveFailed':
-      return 'saveFailed';
-    default:
-      return outcome; // insufficient*/slotFull/alreadyEquipped/economyDataUnavailable/invalidState — 동일 표기
-  }
-}
-
-/** 공식 UpgradeStatId 여부 — UI 문자열 id의 안전한 좁히기 (any 캐스팅 금지) */
-export function isOfficialUpgradeStatId(id: string): id is UpgradeStatId {
-  return isUpgradeStatId(id);
-}
-
-/**
- * SortiePrepScreen·EconomyHud가 소비하는 포트 일괄 생성 — 전부
- * BaseScreenPort(단일 진입점) 위임이다. UI가 지갑·단계·loadout·저장소를
- * 직접 만지는 경로는 존재하지 않는다.
- */
-export function createMetaUiPorts(deps: {
-  readonly baseScreen: BaseScreenPort;
-  readonly rawCatalog: readonly UpgradeEntry[];
-  readonly slotsOf: () => readonly (EquipmentId | null)[];
-}): {
-  upgradePort: UpgradePurchasePort;
-  equipmentPort: EquipmentUiPort;
-  departurePort: DeparturePort;
-  earningsSource: SortieEarningsSource;
-} {
-  const { baseScreen, rawCatalog, slotsOf } = deps;
-
-  const upgradePort: UpgradePurchasePort = {
-    listOffers(): readonly UpgradeOfferView[] {
-      const levels = baseScreen.upgradeLevels;
-      return baseScreen.upgradeCatalog.map((item) => {
-        const raw = rawCatalog.find((entry) => entry.id === item.id);
-        const currentLevel = levels[item.id] ?? 0;
-        const nextEffect =
-          raw && currentLevel < item.maxLevel ? (raw.effectBonus[currentLevel] ?? null) : null;
-        return {
-          statId: item.id,
-          displayName: item.label,
-          currentLevel,
-          maxLevel: item.maxLevel,
-          // 공식 effectBonus 값의 전달 표기 — UI·조립부가 수치를 발명하지 않는다
-          nextEffectText: nextEffect === null ? null : `보정 합 +${Math.round(nextEffect * 100)}%`,
-          cost: item.nextCost,
-        };
-      });
-    },
-    purchase: (statId: string): MetaCommandResult => {
-      if (!isOfficialUpgradeStatId(statId)) return 'invalidState';
-      return toUiCommandResult(baseScreen.purchaseUpgrade(statId));
-    },
-  };
-
-  const equipmentPort: EquipmentUiPort = {
-    get slots(): readonly (EquipmentId | null)[] {
-      return slotsOf();
-    },
-    equip(slotIndex: number, id: EquipmentId): MetaCommandResult {
-      const occupied = slotsOf()[slotIndex] !== null && slotsOf()[slotIndex] !== undefined;
-      const outcome = occupied
-        ? baseScreen.replaceItem(id, slotIndex)
-        : baseScreen.equipItem(id, slotIndex);
-      return toUiCommandResult(outcome);
-    },
-    unequip(slotIndex: number): MetaCommandResult {
-      return toUiCommandResult(baseScreen.unequipItem(slotIndex));
-    },
-  };
-
-  const departurePort: DeparturePort = {
-    confirmDeparture: (): MetaCommandResult => toUiCommandResult(baseScreen.confirmDeparture()),
-  };
-
-  const earningsSource: SortieEarningsSource = {
-    get creditsEarnedThisSortie(): number {
-      return baseScreen.sortieCreditsEarned;
-    },
-    get rarePartsSecuredThisSortie(): number {
-      return baseScreen.sortieRarePartsSecured;
-    },
-  };
-
-  return { upgradePort, equipmentPort, departurePort, earningsSource };
-}
 
 /**
  * 경제 UI 수명주기 어댑터 — 그래픽스 UI 컴포넌트(EconomyHud·SortiePrepScreen)
