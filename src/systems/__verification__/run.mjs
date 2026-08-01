@@ -114,6 +114,32 @@ results.push({
   detail: saveOffenders.length === 0 ? '저장소 접근 없음' : saveOffenders.join(' | '),
 });
 
+/* ── B5 정적 검사: 신규 Guard AI core 파일 0 ───────────────────────────
+ * 스프린트 B는 **기존 구축함 AI 재사용**이 원칙이다. 게임플레이 production
+ * 소스에 `DestroyerAI` 구현체·경비 전용 추적 상태 머신이 생기면 위반이다
+ * (신규 AI 코어 금지). 검증 픽스처의 최소 더블은 대상이 아니다.
+ */
+const aiCoreOffenders = [];
+for (const file of productionSources) {
+  const source = readFileSync(file, 'utf8');
+  const relative = path.relative(projectRoot, file);
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+  if (/implements\s+[A-Za-z,\s]*DestroyerAI/.test(code)) {
+    aiCoreOffenders.push(`${relative} (DestroyerAI 구현체)`);
+  }
+  if (/notifyLastKnownPosition\s*\(/.test(code)) {
+    aiCoreOffenders.push(`${relative} (구축함 AI 진입점 자체 구현)`);
+  }
+}
+results.push({
+  name: 'B5 신규 Guard AI core 파일 0건 (기존 구축함 AI 재사용 원칙 — 게임플레이 production)',
+  passed: aiCoreOffenders.length === 0,
+  detail:
+    aiCoreOffenders.length === 0
+      ? `src/systems production 파일 ${productionSources.length}개에 AI 코어 없음`
+      : aiCoreOffenders.join(' | '),
+});
+
 let failures = 0;
 for (const { name, passed, detail } of results) {
   if (!passed) failures += 1;

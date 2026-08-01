@@ -26,6 +26,27 @@ import {
   type CargoShipConfig,
 } from '../CargoShipSystem';
 import type { SalvageSpawnPlanEntry } from '../../contracts/officialParams';
+import { PLAYER_ENTITY_ID } from '../../contracts/guard';
+import type {
+  GuardShipRequestPayload,
+  NeutralShipHitPayload,
+  TransportAttackedPayload,
+} from '../../contracts/guard';
+import { rewardDropTableIdFor } from '../../contracts/faction';
+import type { FactionId } from '../../contracts/faction';
+import type { GameParams } from '../../contracts/params';
+import type { SystemContext } from '../../core/GameSystem';
+import { GuardShipAdapter } from '../../core/GuardShipAdapter';
+import {
+  GuardIncidentLedger,
+  GuardSpawnCoordinator,
+  NeutralIncidentBoundary,
+} from '../../core/PveIntegration';
+import { HighValueTransportSystem } from '../faction/HighValueTransportSystem';
+import { shipPlacementsFromOfficialCargo } from '../faction/shipPlacements';
+
+/** 공식 세력 3종 — 계약 정본과 대조하는 검증 상수 */
+const OFFICIAL_FACTIONS: readonly FactionId[] = ['hostile', 'neutral', 'patrol'];
 import { BossWeakPointTarget, provisionalBossWeakPointConfig } from '../BossWeakPointTarget';
 import { EconomySystem } from '../economy/EconomySystem';
 import { EquipmentSystem } from '../EquipmentSystem';
@@ -1653,26 +1674,28 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       faction: 'neutral',
       dropTableId: 'cargo-standard', // 테이블이 있어도 중립은 드롭 금지
     });
-    const economy = new EconomySystem(targets, controller, () => [neutral]);
+    const economy = new EconomySystem(targets, controller, () => [neutral], testEconomyParams);
+    // [B4 이행] 중립 사건의 정본은 유효 피해 지점의 neutralShipHit다.
+    const neutralHits: NeutralShipHitPayload[] = [];
+    bus.on('neutralShipHit', (payload) => neutralHits.push(payload));
 
-    neutral.onTorpedoHit(5, -25, 1);
+    neutral.onTorpedoHit(5, -25, 1, {
+      attackCorrelationId: 'torpedo:1',
+      attackerEntityId: PLAYER_ENTITY_ID,
+    });
     economy.update(1 / 60);
-    const request = economy.guardSpawnRequests[0];
     check(
-      '[ECON] 중립 선박 공격 → 크레딧 없음 + 경비함 출현 요청 발생',
-      economy.wallet.sortieCredits === 0 &&
-        economy.dropField.drops.length === 0 &&
-        economy.guardSpawnRequests.length === 1 &&
-        request?.provokedByTargetId === 930 &&
-        request?.x === 5 &&
-        request?.z === -25,
-      `requests=${economy.guardSpawnRequests.length}`,
+      '[ECON] 중립 선박 공격 → 크레딧 없음·드롭 0 (드롭 테이블이 붙어 있어도 보상 없음)',
+      economy.wallet.sortieCredits === 0 && economy.dropField.drops.length === 0,
+      `credits=${economy.wallet.sortieCredits}, drops=${economy.dropField.drops.length}`,
     );
-    const drained = economy.consumeGuardSpawnRequests();
     check(
-      '[ECON] 경비 요청 소비 API — AI(구축함 재사용, 리드 소유)가 큐를 비운다',
-      drained.length === 1 && economy.guardSpawnRequests.length === 0,
-      `drained=${drained.length}`,
+      '[ECON→B4] 레거시 경비 큐는 비어 있다 — legacy:<targetId> 경로 production 미사용',
+      economy.guardSpawnRequests.length === 0 &&
+        economy.consumeGuardSpawnRequests().length === 0 &&
+        neutralHits.length === 1 &&
+        neutralHits[0]?.attackCorrelationId === 'torpedo:1',
+      `queue=${economy.guardSpawnRequests.length}, neutralShipHit=${neutralHits.length}`,
     );
   }
 
@@ -2844,5 +2867,465 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     systems.dispose();
   }
 
+  /* ═══ 스프린트 B 선행개발 (B 공식 미발효 — INT-CORE-012) ═══════════ */
+
+  // 52. [FACTION] B1 — 적대·중립 선박 동시 배치
+  {
+    const bus = new EventBus();
+    const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
+    const factions = systems.ships.map((ship) => ship.faction);
+    const hostiles = systems.ships.filter((ship) => ship.faction === 'hostile');
+    const neutrals = systems.ships.filter((ship) => ship.faction === 'neutral');
+    check(
+      '[FACTION] B1 적대 ≥1 · 중립 ≥1이 같은 월드에 동시 존재 (공식 FactionId)',
+      hostiles.length >= 1 &&
+        neutrals.length >= 1 &&
+        factions.every((faction) => (OFFICIAL_FACTIONS as readonly string[]).includes(faction)) &&
+        systems.targets.list.length === systems.ships.length,
+      `factions=${factions.join('/')}, targets=${systems.targets.list.length}`,
+    );
+
+    // 세력은 태그로만 구분된다 — 클래스·모델·UI 문자열이 아니다.
+    const sameClass = systems.ships.every(
+      (ship) => Object.getPrototypeOf(ship) === Object.getPrototypeOf(systems.cargoShip),
+    );
+    check(
+      '[FACTION] B1 세력은 태그로만 구분 — 선박 클래스 분화·전용 AI 없음',
+      sameClass && neutrals[0]?.id !== hostiles[0]?.id,
+      `동일 원형=${sameClass}, ids=${systems.ships.map((ship) => ship.id).join('/')}`,
+    );
+
+    // 중립 선박은 먼저 공격하지 않는다: 공격 진입점 자체가 없고, 항행 중
+    // 플레이어 위치를 읽지 않는다(직선 왕복만).
+    const neutral = neutrals[0];
+    const before = { x: neutral?.positionX ?? 0, z: neutral?.positionZ ?? 0 };
+    const playerBefore = systems.player.positionX;
+    for (let i = 0; i < 300; i += 1) systems.update(1 / 60);
+    const attackApi = neutral === undefined ? [] : Object.getOwnPropertyNames(Object.getPrototypeOf(neutral));
+    check(
+      '[FACTION] B1 중립 선박 선제 공격 없음 — 공격 API 부재·플레이어 상태 무변화',
+      !attackApi.some((name) => /attack|fire|pursue|engage/i.test(name)) &&
+        systems.player.positionX === playerBefore &&
+        (neutral?.positionZ ?? 0) === before.z, // 직선 왕복 — Z 레인 유지
+      `api=${attackApi.length}종, 중립 Z ${before.z} → ${neutral?.positionZ}`,
+    );
+    systems.dispose();
+  }
+
+  // 53. [FACTION] B2 — ShipIdentificationSource read model
+  {
+    const bus = new EventBus();
+    const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
+    const identification = systems.shipIdentification;
+
+    // 조준 전 — 전부 미식별, 라벨 없음 (세력 비노출)
+    const unaimed = identification.identifications;
+    check(
+      '[FACTION] B2 미식별 시 identificationState=unidentified · displayLabelId=null',
+      unaimed.length === systems.ships.length &&
+        unaimed.every((view) => view.identificationState === 'unidentified') &&
+        unaimed.every((view) => view.displayLabelId === null),
+      `views=${unaimed.length}, labels=${unaimed.map((view) => String(view.displayLabelId)).join('/')}`,
+    );
+
+    // 조준 진입 + 사거리 이내 → 세력 확정. 잠수함을 중립 선박 옆으로 옮긴다.
+    const neutralShip = systems.ships.find((ship) => ship.faction === 'neutral');
+    systems.player.resetTo({
+      x: neutralShip?.positionX ?? 0,
+      y: 0,
+      z: neutralShip?.positionZ ?? 0,
+      headingRadians: 0,
+    });
+    systems.aim.toggleAim();
+    const aimed = identification.identifications;
+    const neutralView = aimed.find((view) => view.entityId === neutralShip?.id);
+    const hostileView = aimed.find((view) => view.entityId === systems.cargoShip.id);
+    check(
+      '[FACTION] B2 식별 후 identificationState·라벨이 실제 세력과 일치',
+      neutralView?.identificationState === 'neutral' &&
+        neutralView.displayLabelId === 'faction.neutral' &&
+        neutralView.faction === 'neutral' &&
+        hostileView?.identificationState === 'hostile' &&
+        hostileView.displayLabelId === 'faction.hostile',
+      `neutral=${neutralView?.identificationState}/${String(neutralView?.displayLabelId)}, hostile=${hostileView?.identificationState}`,
+    );
+
+    check(
+      '[FACTION] B2 식별 조건은 기존 판정 범위 재사용 — 새 거리 상수 없음 (공식 params 미도착)',
+      !identification.identificationParamsWired &&
+        identification.identificationRangeMeters === systems.torpedo.maxRangeMeters &&
+        identification.tagDisplayRangeMeters === systems.torpedo.maxRangeMeters,
+      `range=${identification.identificationRangeMeters} (어뢰 사거리 ${systems.torpedo.maxRangeMeters})`,
+    );
+
+    // 죽은 표적 — 태그 미표시·비표적
+    neutralShip?.onTorpedoHit(neutralShip.positionX, neutralShip.positionZ, 1, {
+      attackCorrelationId: 'torpedo:99',
+      attackerEntityId: PLAYER_ENTITY_ID,
+    });
+    const afterKill = identification.identifications.find(
+      (view) => view.entityId === neutralShip?.id,
+    );
+    check(
+      '[FACTION] B2 죽은 표적 tagDisplayable=false · isAlive=false · isTargetable=false',
+      afterKill?.tagDisplayable === false &&
+        afterKill.isAlive === false &&
+        afterKill.isTargetable === false &&
+        afterKill.identificationState === 'unidentified',
+      `alive=${afterKill?.isAlive}, tag=${afterKill?.tagDisplayable}`,
+    );
+    systems.dispose();
+  }
+
+  // 54. [ECON] B3 — 세력별 보상 결정
+  {
+    const bus = new EventBus();
+    const targets = new TargetRegistry();
+    const input = new ScriptedInput();
+    const controller = new SubmarinePlayerController(params.movement, input);
+    const ships = (testCargoParams
+      ? shipPlacementsFromOfficialCargo(testCargoParams, STARTING_CANYON_LAYOUT.seaSurfaceY)
+      : []
+    ).map((placement) => new CargoShipSystem(bus, targets, placement.config));
+    const economy = new EconomySystem(targets, controller, () => ships, testEconomyParams);
+    const hostile = ships.find((ship) => ship.faction === 'hostile');
+    const neutral = ships.find((ship) => ship.faction === 'neutral');
+
+    // 중립 파괴 — 지갑·드롭 전후 동일
+    const walletBefore = {
+      sortie: economy.wallet.sortieCredits,
+      confirmed: economy.wallet.confirmedCredits,
+      rare: economy.wallet.rareParts.length,
+    };
+    neutral?.onTorpedoHit(neutral.positionX, neutral.positionZ, 1, {
+      attackCorrelationId: 'torpedo:10',
+      attackerEntityId: PLAYER_ENTITY_ID,
+    });
+    economy.update(1 / 60);
+    check(
+      '[ECON] B3 중립 파괴 — 드롭 엔티티 0 · 크레딧 0 · 희귀 0 · 지갑 전후 동일',
+      economy.dropField.drops.length === 0 &&
+        economy.wallet.sortieCredits === walletBefore.sortie &&
+        economy.wallet.confirmedCredits === walletBefore.confirmed &&
+        economy.wallet.rareParts.length === walletBefore.rare &&
+        rewardDropTableIdFor('neutral') === null,
+      `drops=${economy.dropField.drops.length}, credits=${economy.wallet.sortieCredits}`,
+    );
+
+    // 적대 파괴 — 기존 공식 보상 유지
+    hostile?.onTorpedoHit(hostile.positionX, hostile.positionZ, 1, {
+      attackCorrelationId: 'torpedo:11',
+      attackerEntityId: PLAYER_ENTITY_ID,
+    });
+    economy.update(1 / 60);
+    const expectedCredits = testEconomyParams?.dropTables['cargo-standard']?.credits ?? -1;
+    const drop = economy.dropField.drops[0];
+    check(
+      '[ECON] B3 적대 파괴 — 기존 공식 cargo-standard 보상 유지 (120)',
+      economy.dropField.drops.length === 1 &&
+        drop?.amount === expectedCredits &&
+        expectedCredits === 120 &&
+        rewardDropTableIdFor('hostile') === 'cargo-standard',
+      `drops=${economy.dropField.drops.length}, amount=${drop?.amount}`,
+    );
+
+    check(
+      '[ECON] B3 patrol 보상 — 공식 params 없음 → 드롭 테이블 참조 null (발명 0)',
+      rewardDropTableIdFor('patrol') === null,
+      `patrol dropTableId=${String(rewardDropTableIdFor('patrol'))}`,
+    );
+  }
+
+  // 55. [FACTION] B4 — neutralShipHit 발행 규칙
+  {
+    const bus = new EventBus();
+    const targets = new TargetRegistry();
+    const hits: NeutralShipHitPayload[] = [];
+    bus.on('neutralShipHit', (payload) => hits.push(payload));
+    const neutralConfig = (testCargoParams
+      ? shipPlacementsFromOfficialCargo(testCargoParams, STARTING_CANYON_LAYOUT.seaSurfaceY)
+      : []
+    ).find((placement) => placement.faction === 'neutral')?.config;
+    const neutral = neutralConfig
+      ? new CargoShipSystem(bus, targets, neutralConfig)
+      : null;
+    const hostile = new CargoShipSystem(
+      bus,
+      targets,
+      testCargoParams
+        ? cargoShipConfigFromOfficial(testCargoParams, STARTING_CANYON_LAYOUT.seaSurfaceY)
+        : null,
+    );
+
+    // 피해 0 = 유효 피해 아님 → 발행 0, 상태 무변화
+    neutral?.onTorpedoHit(0, 0, 0, {
+      attackCorrelationId: 'torpedo:20',
+      attackerEntityId: PLAYER_ENTITY_ID,
+    });
+    const afterZeroDamage = hits.length === 0 && neutral?.hit === false;
+
+    // 유효 피해 → 정확히 1회
+    neutral?.onTorpedoHit(1, 2, 1, {
+      attackCorrelationId: 'torpedo:21',
+      attackerEntityId: PLAYER_ENTITY_ID,
+    });
+    const first = hits[0];
+    check(
+      '[FACTION] B4 중립 유효 피해 시 neutralShipHit 1회 — 피해 0·빗나감은 0회',
+      afterZeroDamage &&
+        hits.length === 1 &&
+        first?.targetFaction === 'neutral' &&
+        first.damageAmount === 1 &&
+        first.attackerEntityId === PLAYER_ENTITY_ID &&
+        first.attackCorrelationId === 'torpedo:21' &&
+        first.firstValidNeutralHit === true &&
+        first.attackWorldPosition.x === 1 &&
+        first.attackWorldPosition.z === 2,
+      `hits=${hits.length}, correlation=${first?.attackCorrelationId}, first=${first?.firstValidNeutralHit}`,
+    );
+
+    // 같은 표적 재처리·같은 correlationId 재발행 없음 (파괴 후 추가 발행 금지)
+    neutral?.onTorpedoHit(1, 2, 1, {
+      attackCorrelationId: 'torpedo:21',
+      attackerEntityId: PLAYER_ENTITY_ID,
+    });
+    neutral?.onTorpedoHit(3, 4, 5, {
+      attackCorrelationId: 'torpedo:22',
+      attackerEntityId: PLAYER_ENTITY_ID,
+    });
+    // 적대 피격은 중립 사건이 아니다
+    hostile.onTorpedoHit(0, 0, 1, {
+      attackCorrelationId: 'torpedo:23',
+      attackerEntityId: PLAYER_ENTITY_ID,
+    });
+    check(
+      '[FACTION] B4 파괴 후 추가 발행 0 · 같은 correlationId 중복 0 · 적대 피격 0회',
+      hits.length === 1,
+      `총 발행 ${hits.length}회`,
+    );
+
+    // 조준·발사만으로는 발행되지 않는다 (유효 피해 지점에만 발행 코드가 있다)
+    const rig = makeCombatRig(params);
+    const aimOnlyHits: NeutralShipHitPayload[] = [];
+    rig.bus.on('neutralShipHit', (payload) => aimOnlyHits.push(payload));
+    rig.aim.toggleAim();
+    rig.aim.fireTorpedo();
+    for (let i = 0; i < 120; i += 1) rig.torpedo.update(1 / 60); // 표적 없음 = 빗나감
+    check(
+      '[FACTION] B4 조준·발사·빗나감으로는 발행 0회',
+      aimOnlyHits.length === 0,
+      `발행 ${aimOnlyHits.length}회 (주행 어뢰 ${rig.torpedo.torpedoes.length}발)`,
+    );
+  }
+
+  // 56. [AI] B4·B5 — 중립 유효 피격 → 경비 요청 → 스폰 체인 (리드 경계 결합)
+  {
+    const bus = new EventBus();
+    const requests: GuardShipRequestPayload[] = [];
+    bus.on('guardShipRequested', (payload) => requests.push(payload));
+
+    const ledger = new GuardIncidentLedger();
+    const boundary = new NeutralIncidentBoundary(ledger);
+    boundary.initialize(fakeSystemContext(bus, params));
+
+    const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
+    const neutral = systems.ships.find((ship) => ship.faction === 'neutral');
+    neutral?.onTorpedoHit(neutral.positionX, neutral.positionZ, 1, {
+      attackCorrelationId: 'torpedo:30',
+      attackerEntityId: PLAYER_ENTITY_ID,
+    });
+    const request = requests[0];
+    check(
+      '[AI] B4 중립 유효 피격 → 경비 요청 정확히 1회 (patrol 세력·공격자 전달)',
+      requests.length === 1 &&
+        request?.requestedFaction === 'patrol' &&
+        request.attackerEntityId === PLAYER_ENTITY_ID &&
+        request.sourceNeutralEntityId === neutral?.id &&
+        request.spawnReason === 'neutralAttack' &&
+        request.correlationId === 'torpedo:30',
+      `요청 ${requests.length}건, faction=${request?.requestedFaction}`,
+    );
+
+    // 스폰 위치 전략 — 실제 좌표를 낸다 (원점·플레이어 위치 반환 금지)
+    const location = request ? systems.guardSpawnLocation.resolve(request) : null;
+    const playerDistance = location
+      ? Math.hypot(location.x - systems.player.positionX, location.z - systems.player.positionZ)
+      : -1;
+    const incidentDistance =
+      location && request
+        ? Math.hypot(location.x - request.incidentPosition.x, location.z - request.incidentPosition.z)
+        : -1;
+    check(
+      '[AI] B4 스폰 위치 — 플레이어 선체·사건 지점 회피, 가시 범위 내, 지형 밖',
+      location !== null &&
+        playerDistance > SUBMARINE_HULL_RADIUS &&
+        incidentDistance >= systems.cargoShip.hitRadius &&
+        playerDistance <= systems.guardSpawnLocation.maximumSpawnDistanceMeters &&
+        !systems.collision.intersectsSphere(
+          location.x,
+          STARTING_CANYON_LAYOUT.seaSurfaceY,
+          location.z,
+          systems.cargoShip.hitRadius,
+        ),
+      `위치=(${location?.x.toFixed(1)}, ${location?.z.toFixed(1)}), 플레이어 거리=${playerDistance.toFixed(1)}`,
+    );
+    check(
+      '[AI] B4 스폰 위치는 원점·플레이어 위치를 무조건 반환하지 않는다',
+      location !== null &&
+        !(location.x === 0 && location.z === 0) &&
+        !(location.x === systems.player.positionX && location.z === systems.player.positionZ),
+      `위치=(${location?.x.toFixed(1)}, ${location?.z.toFixed(1)})`,
+    );
+
+    // 스폰 포트 결합 — 위치는 해결되고, AI 팩토리가 없으므로 spawnFailed
+    const adapter = new GuardShipAdapter(null);
+    const coordinator = new GuardSpawnCoordinator(ledger, adapter, systems.guardSpawnLocation);
+    const outcomeWithoutAi = request ? coordinator.spawnGuardShip(request) : null;
+    check(
+      '[AI] B5 blocker — 위치는 해결(noSpawnLocation 아님)되나 구축함 AI 구현 부재로 spawnFailed',
+      outcomeWithoutAi === 'spawnFailed' && !adapter.aiWired && adapter.spawnedShips.length === 0,
+      `결과=${String(outcomeWithoutAi)} (AI 팩토리 연결=${adapter.aiWired})`,
+    );
+
+    // 팩토리가 연결되면 같은 체인이 실제 개체를 만든다 — 어댑터는 주입만 한다.
+    // (검증용 최소 AI 더블 = 기존 DestroyerAI 계약 구현. production 코드 아님)
+    const notified: Array<{ x: number; z: number }> = [];
+    adapter.attachFactory({
+      create: () => ({
+        state: 'alert' as const,
+        notifyLastKnownPosition: (x: number, z: number) => notified.push({ x, z }),
+        update: () => {},
+      }),
+    });
+    const secondLedger = new GuardIncidentLedger();
+    const wiredCoordinator = new GuardSpawnCoordinator(
+      secondLedger,
+      adapter,
+      systems.guardSpawnLocation,
+    );
+    const spawned = request ? wiredCoordinator.spawnGuardShip(request) : null;
+    const duplicate = request ? wiredCoordinator.spawnGuardShip(request) : null;
+    const handle = adapter.spawnedShips[0];
+    check(
+      '[AI] B5 팩토리 연결 시 — 초기 표적=공격자 · 세력=patrol · 중복 요청 추가 생성 0',
+      spawned === 'spawned' &&
+        duplicate === 'duplicateRequest' &&
+        adapter.spawnedShips.length === 1 &&
+        handle?.faction === 'patrol' &&
+        handle.initialTargetEntityId === PLAYER_ENTITY_ID &&
+        handle.displayLabelId === 'faction.patrol' &&
+        notified.length === 1,
+      `결과=${String(spawned)}/${String(duplicate)}, 생성 ${adapter.spawnedShips.length}척`,
+    );
+
+    // 같은 공격(correlationId)에서 요청은 1건뿐이다 — 원장이 유일한 중복 방지 표
+    neutral?.onTorpedoHit(neutral.positionX, neutral.positionZ, 1, {
+      attackCorrelationId: 'torpedo:30',
+      attackerEntityId: PLAYER_ENTITY_ID,
+    });
+    check(
+      '[AI] B4 같은 correlationId 중복 요청 0 — 중복 방지 정본은 GuardIncidentLedger 하나',
+      requests.length === 1 && ledger.requestedCount === 1,
+      `요청 ${requests.length}건, 원장 ${ledger.requestedCount}건`,
+    );
+    boundary.dispose();
+    systems.dispose();
+  }
+
+  // 57. [LOOP] B6 — 고가치 수송선·호위 (B1~B5와 독립)
+  {
+    const bus = new EventBus();
+    const transport = new HighValueTransportSystem(bus);
+    const attacked: TransportAttackedPayload[] = [];
+    bus.on('transportAttacked', (payload) => attacked.push(payload));
+
+    const view = transport.registerTransport(700);
+    check(
+      '[LOOP] B6 고가치 수송선 archetype + 보상 배율 **참조 키** (숫자 아님)',
+      view.archetypeId === 'highValueTransport' &&
+        typeof view.rewardMultiplierRef === 'string' &&
+        transport.rewardMultiplierFor(700) === null &&
+        !transport.rewardMultipliersWired,
+      `ref=${view.rewardMultiplierRef}, 배율=${String(transport.rewardMultiplierFor(700))}`,
+    );
+
+    transport.attachRewardMultipliers({ [view.rewardMultiplierRef]: 2.5 });
+    check(
+      '[LOOP] B6 공식 배율 표가 주입되면 그 값을 그대로 소비 (하드코딩 아님)',
+      transport.rewardMultiplierFor(700) === 2.5 && transport.rewardMultipliersWired,
+      `배율=${String(transport.rewardMultiplierFor(700))}`,
+    );
+
+    transport.bindEscort({
+      escortEntityId: 701,
+      escortedTransportId: 700,
+      maximumEscortDistanceMeters: 40,
+    });
+    const engagements = transport.reportTransportAttacked(700, PLAYER_ENTITY_ID, { x: 5, z: 6 }, 'torpedo:40');
+    const repeat = transport.reportTransportAttacked(700, PLAYER_ENTITY_ID, { x: 5, z: 6 }, 'torpedo:40');
+    check(
+      '[LOOP] B6 transport-escort 결속 + transportAttacked 1회 + 교전 요청 (중복 0)',
+      transport.escortsOf(700).length === 1 &&
+        attacked.length === 1 &&
+        attacked[0]?.attackCorrelationId === 'torpedo:40' &&
+        engagements.length === 1 &&
+        engagements[0]?.escortEntityId === 701 &&
+        engagements[0].targetEntityId === PLAYER_ENTITY_ID &&
+        repeat.length === 0,
+      `결속=${transport.escortsOf(700).length}, 발행=${attacked.length}, 요청=${engagements.length}`,
+    );
+
+    const withinRange = transport.escortsWithinRange(
+      700,
+      { id: 700, positionX: 0, positionZ: 0 },
+      [{ id: 701, positionX: 39, positionZ: 0 }],
+    );
+    const outOfRange = transport.escortsWithinRange(
+      700,
+      { id: 700, positionX: 0, positionZ: 0 },
+      [{ id: 701, positionX: 41, positionZ: 0 }],
+    );
+    check(
+      '[LOOP] B6 maximumEscortDistance 소비 — 상한 안/밖 구분 (거리 값은 결속이 소유)',
+      withinRange.length === 1 && outOfRange.length === 0,
+      `이내=${withinRange.length}, 초과=${outOfRange.length}`,
+    );
+
+    // B6 독립성 — 핵심 게이트 경로(B1~B5)는 이 시스템 없이도 성립한다.
+    const coreBus = new EventBus();
+    const coreSystems = new GameplaySystems(
+      coreBus,
+      params,
+      undefined,
+      STARTING_CANYON_LAYOUT,
+      testOfficialParams(),
+    );
+    const coreHits: NeutralShipHitPayload[] = [];
+    coreBus.on('neutralShipHit', (payload) => coreHits.push(payload));
+    const coreNeutral = coreSystems.ships.find((ship) => ship.faction === 'neutral');
+    coreNeutral?.onTorpedoHit(0, 0, 1, {
+      attackCorrelationId: 'torpedo:41',
+      attackerEntityId: PLAYER_ENTITY_ID,
+    });
+    check(
+      '[LOOP] B6 독립 — 고가치·호위를 쓰지 않아도 B1~B4 경로가 그대로 성립',
+      coreHits.length === 1 && coreSystems.highValueTransport.highValueTransports.length === 0,
+      `중립 사건=${coreHits.length}, 등록 수송선=${coreSystems.highValueTransport.highValueTransports.length}`,
+    );
+    coreSystems.dispose();
+  }
+
   return results;
+}
+
+/**
+ * 검증용 최소 `SystemContext` — 리드 경계 시스템(NeutralIncidentBoundary)이
+ * `context.bus`만 쓰므로 나머지는 사용되지 않는다.
+ */
+function fakeSystemContext(bus: EventBus, params: GameParams): SystemContext {
+  return {
+    bus,
+    params,
+    stateMachine: null as unknown as SystemContext['stateMachine'],
+  };
 }
