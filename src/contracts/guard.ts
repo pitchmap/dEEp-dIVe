@@ -20,12 +20,18 @@
  * 스폰 이유 · 표시용 identity · 기존 AI가 요구하는 초기 설정. 판단 로직은
  * 전부 기존 `DestroyerAI`(contracts/systems.ts) 구현에 있다.
  *
- * ## A 스택 현황 (정직한 상태 기록)
+ * ## B5 규칙 개정 (15차 diff-only 변경 — INT-CORE-013)
  *
- * A 스택에는 `DestroyerAI` **계약만 있고 구현체가 없다**. 따라서 어댑터는
- * `DestroyerAIFactory` 포트를 받아 위임하며, 포트가 미연결이면 스폰은
- * `spawnFailed`로 끝난다 — 어댑터가 대체 AI를 만들지 않는다(계약 위반).
- * 구축함 AI 구현은 리드 소유이며 스프린트 C 탐지·추적과 함께 오는 항목이다.
+ * 조사 결과 **production `DestroyerAI` 구현체가 0개**였다(계약·어댑터·검증
+ * 더블만 존재). 따라서 '기존 구현체 재사용 / 신규 AI 코드 0'은 성립할 수
+ * 없는 전제였고, 다음으로 개정한다:
+ *
+ *  - **범용** production `DestroyerAI` 구현체를 **정확히 1개** 신설한다
+ *    (`core/DestroyerAIController`). 일반 적대 구축함도 같은 구현체를 쓴다.
+ *  - `GuardShipAdapter`는 그 범용 구현체를 재사용한다.
+ *  - 경비함 전용 `GuardAI`·`GuardBehavior`·`GuardStateMachine`은 **계속 금지**.
+ *  - 탐지·폭뢰·내구도·침수는 이 구현에 포함하지 않는다 (스프린트 C 범위).
+ *  - 검증 더블을 production factory로 쓰지 않는다.
  *
  * ## 범위 밖 (여기에 만들지 않는다)
  *
@@ -122,8 +128,40 @@ export interface GuardSpawnLocationStrategy {
   resolve(request: GuardShipRequestPayload): GuardSpawnLocation | null;
 }
 
+/**
+ * 수상함 이동 포트 — **게임플레이가 구현한다** (선박 transform의 주인).
+ *
+ * AI는 판단만 하고 실제 이동은 이 포트에 명령한다. 리드 코드가 게임플레이
+ * 선박의 transform을 직접 조작하지 않기 위한 경계다. 조타·가속 수치와
+ * 월드 경계 판정은 전부 구현측(게임플레이·월드) 소유이며, 계약에는 어떤
+ * 수치도 두지 않는다.
+ */
+export interface SurfaceShipMotionPort {
+  getPosition(): { readonly x: number; readonly y: number; readonly z: number };
+  /** 정규화된 진행 방향 (XZ) */
+  getForward(): { readonly x: number; readonly z: number };
+  /** 지정 지점을 향해 이번 프레임만큼 선회 (선회 속도는 구현 소유) */
+  turnToward(x: number, z: number, deltaSeconds: number): void;
+  /** 현재 방향으로 이번 프레임만큼 전진 (속력은 구현 소유) */
+  moveForward(deltaSeconds: number): void;
+  /** 수상함 고도 유지 — 해수면 기준값은 월드·레이아웃 소유 */
+  maintainSurfaceHeight(): void;
+  /** 월드 경계 안인가 (경계 좌표는 구현 소유 — AI가 수치를 갖지 않는다) */
+  isWithinWorldBounds(x: number, z: number): boolean;
+  isTargetAlive(targetEntityId: number): boolean;
+  /** 표적의 현재 위치 — 관측 불가·소멸 시 null (탐지 판정 아님) */
+  getTargetPosition(targetEntityId: number): { readonly x: number; readonly z: number } | null;
+}
+
+/** 스폰 1건에 대한 이동 포트를 만들어 주는 게임플레이 측 팩토리 */
+export interface SurfaceShipMotionPortFactory {
+  create(config: GuardShipAdapterConfig): SurfaceShipMotionPort | null;
+}
+
 /** 어댑터가 기존 AI에 넣어 줄 초기 설정 — 판단 로직 없음 */
 export interface GuardShipAdapterConfig {
+  /** 스폰되는 개체의 엔티티 id (조립부가 부여) */
+  readonly entityId: number;
   readonly faction: FactionId;
   readonly spawnReason: GuardSpawnReason;
   /** 초기 표적 = 공격자 (플레이어) */
@@ -152,11 +190,16 @@ export interface GuardSpawnPort {
 }
 
 /**
- * 기존 구축함 AI 인스턴스를 만들어 주는 포트 (리드 소유 구현이 도착하면 연결).
- * 어댑터는 이 포트가 준 인스턴스를 **감싸기만** 한다 — AI를 만들지 않는다.
+ * 범용 구축함 AI 인스턴스를 만들어 주는 포트.
+ *
+ * production 구현은 `core/destroyerAiFactory.createProductionDestroyerAIFactory`
+ * 하나이며, 경비함·일반 적대 구축함이 **같은 구현체**를 받는다. 어댑터는
+ * 이 포트가 준 인스턴스를 감싸기만 한다 — AI를 만들지 않는다.
+ * 검증 더블은 테스트 전용이며 production factory로 쓰지 않는다.
  */
 export interface DestroyerAIFactory {
-  create(config: GuardShipAdapterConfig): DestroyerAI;
+  /** 이동 포트를 만들 수 없으면 `null` — 호출측이 spawnFailed로 보고한다 */
+  create(config: GuardShipAdapterConfig): DestroyerAI | null;
 }
 
 /* ── B6 고가치 수송선·호위 (핵심 게이트와 분리) ─────────────── */

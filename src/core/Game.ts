@@ -31,6 +31,8 @@ import { loadEconomyParams } from '../tools/economyParams';
 import { loadAimingParams } from '../tools/aimingParams';
 import type { OfficialRuntimeParams } from '../contracts/officialParams';
 import { GuardShipAdapter } from './GuardShipAdapter';
+import { createProductionDestroyerAIFactory } from './destroyerAiFactory';
+import type { SurfaceShipMotionPortFactory } from '../contracts/guard';
 import { WebAudioSystem } from '../audio/WebAudioSystem';
 import { AudioCueRouter } from '../audio/AudioCueRouter';
 import {
@@ -407,6 +409,16 @@ export class Game {
     this.guardAdapter = guardAdapter;
     const guardSpawn = new GuardSpawnCoordinator(guardLedger, guardAdapter, null);
     this.guardSpawn = guardSpawn;
+    //     범용 구축함 AI 팩토리 (INT-CORE-013 — B5 개정). 판단은 리드 소유
+    //     `DestroyerAIController`(production 유일 구현체), 실제 이동은
+    //     게임플레이 소유 `SurfaceShipMotionPort`다. 이동 포트 팩토리가
+    //     도착하면 아래 상수만 교체하면 되고, 그 전까지 팩토리는 이동 포트를
+    //     만들지 못해 `create()`가 null → 스폰은 `spawnFailed`로 끝난다
+    //     (가짜 이동·대체 AI 생성 금지).
+    const surfaceMotionPorts: SurfaceShipMotionPortFactory = {
+      create: () => null, // 게임플레이 motion adapter 도착 시 교체 (1줄)
+    };
+    guardAdapter.attachFactory(createProductionDestroyerAIFactory(surfaceMotionPorts));
     this.registry.register(new NeutralIncidentBoundary(guardLedger));
     this.registry.register(new GuardSpawnBridge(guardSpawn));
     // ③ AI 그룹 — 스폰된 기존 구축함 AI들의 수명주기 전달만 담당한다.

@@ -90,8 +90,11 @@
 ## 2f. 스프린트 B 세력·식별·경비 계약 (INT-CORE-012 — 선행개발, B 미발효)
 
 > 흐름 정본: 게임플레이 유효 피해 → `neutralShipHit` → **composition 중복
-> 방지 경계(정본 1곳)** → `guardShipRequested` → `GuardSpawnPort` →
-> `GuardShipAdapter` → 기존 `DestroyerAI`. 신규 경비함 AI 코어는 만들지 않는다.
+> 방지 경계(정본 1곳)** → `guardShipRequested` → `GuardSpawnLocationStrategy`
+> → `GuardSpawnPort` → `GuardShipAdapter` → production `DestroyerAIFactory`
+> → **범용 `DestroyerAIController`** → gameplay motion adapter → 월드 등록.
+> [B5 개정 INT-CORE-013] 범용 구축함 AI는 **정확히 1개**만 두고 경비함이
+> 재사용한다 — 경비 전용 AI 코어는 계속 금지.
 
 | 계약 | 내용 | 소유 |
 |---|---|---|
@@ -101,7 +104,9 @@
 | `NeutralShipHitPayload` | 유효 피해 적용 후 1회. 조준·발사·빗나감·중복·파괴 후 금지 | 게임플레이 (발행) |
 | `GuardShipRequestPayload` | requestId·sourceNeutralEntityId·attackerEntityId·incidentPosition·spawnReason·requestedFaction(`patrol`)·correlationId | composition 경계 (발행) |
 | `GuardSpawnPort` | 결과 5종 spawned/duplicateRequest/invalidRequest/noSpawnLocation/spawnFailed. 예외·내부 문자열 비노출 | 게임플레이 또는 composition |
-| `GuardShipAdapter` / `DestroyerAIFactory` | 기존 AI에 세력·초기 표적·스폰 이유·identity 주입만. AI 판단 로직 0 | 리드 |
+| `GuardShipAdapter` / `DestroyerAIFactory` | **범용** AI에 세력·초기 표적·스폰 이유·identity·entityId 주입만. 어댑터 자체의 AI 판단 로직 0. handle은 `entityId`·`spawnPosition`(계약 `GuardSpawnLocation` 재사용)을 노출 | 리드 |
+| `DestroyerAIController` | **production `DestroyerAI` 유일 구현체**(범용 — 경비함·일반 적대 구축함 공용). 표적·마지막 확인 위치·이동 명령·수면 유지·경계 이탈 방지·안전 정지. 탐지·폭뢰·내구도·발사 미포함(C) | 리드 (`src/core`) |
+| `SurfaceShipMotionPort` | AI 판단과 실제 이동의 분리 — getPosition·getForward·turnToward·moveForward·maintainSurfaceHeight·isWithinWorldBounds·isTargetAlive·getTargetPosition. **선회·속력·해수면·경계 수치는 구현측 소유**(계약에 수치 없음) | **게임플레이**(구현) / 리드(계약) |
 | 보상 규칙 `rewardDropTableIdFor` | hostile=공식 적대 테이블 / neutral=null(크레딧 0·지갑 불변) / patrol=null(수치표 전 발명 금지). 평판·도덕성 금지 | 리드(규칙) / 기획·툴링(수치) |
 | B6 호위 계약 | HighValueTransport archetype·배율 **참조 키**·EscortBinding·transportAttacked·EscortEngagementRequest — 핵심 게이트 비의존 | 리드(계약) |
 | B7 로깅 계약 | `IdentificationOpportunityLog` 8항목 + 결과 분류 5종, `IdentificationLogSink`. 집계·판정은 툴링 | 리드(계약) / 툴링(판정) |

@@ -90,6 +90,26 @@
 
 ## 제안 목록
 
+### INT-CORE-013 — B5 규칙 개정 (diff-only): 범용 production DestroyerAI 신설 · 경비함은 그것을 재사용
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (B5 차단 해소 — 게임플레이 INT-GAME-012·툴링 SPRINT_B_ACCEPTANCE의 `B5_BLOCKED_NO_DESTROYER_IMPLEMENTATION` 보고 확인) |
+| 대상 시스템 | `src/contracts/guard.ts`(이동 포트·entityId·factory 반환형), `src/core/DestroyerAIController.ts`(신규), `src/core/destroyerAiFactory.ts`(신규), `src/core/GuardShipAdapter.ts`(handle 보완), `src/core/PveIntegration.ts`(entityId 부여), `src/core/Game.ts`(팩토리 연결), 검증 러너(B5 판정 개정) |
+| 조사 결과 | **production `DestroyerAI` 구현체 0개.** `implements DestroyerAI` 0건이며, 다른 이름의 구축함·순찰 행동 코드도 없다. 존재한 것은 계약(`contracts/systems.ts`)·어댑터·경계·검증 더블뿐. `CargoShipSystem`은 2점 왕복 보간이라 표적·상태 전이 개념이 없어 재사용 대상이 아니다(위장 금지). 게임플레이·툴링 두 창이 독립적으로 같은 결론을 보고했다 |
+| 필요한 변경 | ① 기존 규칙('이미 존재하는 구현체 재사용 / 신규 AI 0')을 **폐기** — 성립 불가한 전제였다 ② **범용 production `DestroyerAI` 구현체 1개 신설**(`core/DestroyerAIController`) — 경비함·일반 적대 구축함 공용 ③ `GuardShipAdapter`는 그 범용 구현체를 재사용(주입·수명주기만) ④ 경비 전용 `GuardAI`·`GuardBehavior`·`GuardStateMachine` **계속 금지** ⑤ AI 판단과 실제 이동 분리 — `SurfaceShipMotionPort`(게임플레이 구현, 리드는 선박 transform 직접 조작 금지) ⑥ production `DestroyerAIFactory` 제공(검증 더블 사용 금지) ⑦ `GuardShipHandle`에 `entityId`·`spawnPosition` 노출(기존 계약 타입 재사용 — 중복 필드 없음) ⑧ B5 판정 기준 개정: 범용 구현 정확히 1개 / Guard 전용 0개 / 어댑터의 범용 factory 사용 / CargoShipSystem 위장 없음 / 검증 더블 production 미사용 |
+| 변경 이유 | B5 차단 해소. C 탐지·폭뢰·내구도는 포함하지 않는다 — 이번 구현은 '표적 방향으로 이동하는 수상함' 최소 책임뿐이다 |
+| 관련 게이트 | B4(실제 스폰)·B5(AI 재사용). 15차 결의 1의 **diff 한정 개정**으로 문서화 |
+| 하위 호환 여부 | 계약 확장만 — `DestroyerAIFactory.create` 반환형이 `DestroyerAI | null`로 넓어졌고(호출측은 리드 1곳), `GuardShipAdapterConfig`에 `entityId`가 추가됐다. 그래픽스가 요청한 `GuardShipHandle.spawnPosition`은 동일 형태로 반영해 병합 충돌이 없다 |
+| 개발 리드 결정 | 승인 — 범용 구현은 리드 소유(`src/core`, FILE_OWNERSHIP '구축함·보스 AI'), 이동 어댑터는 게임플레이 소유. B는 여전히 **미발효 선행개발**이며 A+B 최종 통합 검증 전까지 완료로 보고하지 않는다 |
+| 적용 커밋 | (본 브랜치 B5 개정 5커밋) |
+
+**각 창 적용 지침 (B5 개정):**
+- **게임플레이**: `SurfaceShipMotionPort` 구현 1개 + `SurfaceShipMotionPortFactory` 제공(스폰 1건당 포트 1개). 선회 속도·속력·해수면 높이·월드 경계는 **구현측 소유**이며 공식 params가 없으면 기존 판정 범위에서 파생하되 임의 수치를 발명하지 않는다. 도착하면 조립부가 `Game.composeSystems`의 `surfaceMotionPorts` 1줄을 교체한다 — 그 즉시 스폰이 `spawnFailed`에서 벗어난다. 이미 제출한 `guardSpawnLocation`(위치 전략)도 같은 지점에서 `attachLocationStrategy`로 연결된다
+- **그래픽스**: 요청한 `GuardShipHandle.spawnPosition`을 **승인·반영**했다(+`entityId`). 스폰 방향 마커는 실제 스폰 좌표만 사용하고 추정 좌표를 만들지 않는다. B 오버레이 파일은 AI가 아니므로 B5 검사에서 허용되지만, DestroyerAI 구현·AI 판단 어휘가 들어가면 위반이다(파일명 변경으로 회피 불가)
+- **툴링**: `SPRINT_B_ACCEPTANCE`의 B5 항목을 `B5_BLOCKED_NO_DESTROYER_IMPLEMENTATION`에서 **개정 기준**으로 교체 — '기존 구현 재사용/신규 0'이 아니라 '범용 production 구현 정확히 1개 + Guard 전용 0개 + 위장·더블 금지'. `verify:meta` 88항목에 해당 정적·동작 검사가 있으므로 중복 구현은 불필요하다
+- **통합**: 병합 순서 리드 → 게임플레이 → 그래픽스 → 툴링. 리드 병합 후 게임플레이 motion adapter가 오면 B4·B5가 런타임에서 관측 가능해진다
+
 ### INT-GAME-012 — 스프린트 B 게임플레이 선행개발 결과 + B5 차단 보고 + 배선 요청
 
 | 필드 | 내용 |
