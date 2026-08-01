@@ -17,6 +17,8 @@ import type { AudioSystem } from '../contracts/systems';
 export class WebAudioSystem implements AudioSystem {
   private context: AudioContext | null = null;
   private masterBus: GainNode | null = null;
+  /** 음악 버스 — 보스 침묵 전환(6차 결의 6) 배관용. 전환 판정은 소유하지 않는다 */
+  private musicBus: GainNode | null = null;
   private isUnlocked = false;
 
   /** 사용자 제스처 후 unlock()이 성공했는가 */
@@ -86,11 +88,38 @@ export class WebAudioSystem implements AudioSystem {
     listener.upZ.value = upZ;
   }
 
+  /**
+   * 효과음 버퍼 1회 재생 (마스터 버스 직결 — 패닝 필요 시 createPanner 경유).
+   * unlock 전이면 무음으로 무시한다 (자동재생 정책 — 던지지 않음).
+   */
+  playBuffer(buffer: AudioBuffer): void {
+    if (!this.context || this.context.state !== 'running') return;
+    const source = new AudioBufferSourceNode(this.context, { buffer });
+    source.connect(this.ensureMasterBus());
+    source.start();
+  }
+
+  /**
+   * 음악 버스 침묵 전환 배관 (보스 단계 전환 연출용 — 6차 결의 6).
+   * 언제 침묵할지는 판정 측(보스 상태 머신, 리드 소유)이 결정해 호출한다.
+   */
+  setMusicSilenced(silenced: boolean): void {
+    if (!this.context) return;
+    this.ensureMusicBus().gain.setValueAtTime(silenced ? 0 : 1, this.context.currentTime);
+  }
+
+  /** 음악 소스 연결점 — BGM 스트리밍(D13~14)은 이 버스에 붙는다 */
+  connectMusicSource(node: AudioNode): void {
+    node.connect(this.ensureMusicBus());
+  }
+
   update(_deltaSeconds: number): void {
-    // 단계 0에는 프레임 단위 작업이 없다 — 계약(Updatable)상의 호출 지점만 유지.
+    // 프레임 단위 작업 없음 — 계약(Updatable)상의 호출 지점만 유지.
   }
 
   dispose(): void {
+    this.musicBus?.disconnect();
+    this.musicBus = null;
     this.masterBus?.disconnect();
     this.masterBus = null;
     void this.context?.close();
@@ -112,5 +141,13 @@ export class WebAudioSystem implements AudioSystem {
       this.masterBus.connect(this.ensureContext().destination);
     }
     return this.masterBus;
+  }
+
+  private ensureMusicBus(): GainNode {
+    if (!this.musicBus) {
+      this.musicBus = new GainNode(this.ensureContext(), { gain: 1 });
+      this.musicBus.connect(this.ensureMasterBus());
+    }
+    return this.musicBus;
   }
 }

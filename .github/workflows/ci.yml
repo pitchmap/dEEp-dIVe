@@ -28,3 +28,15 @@ jobs:
 
       - name: 빌드 용량 검사 (15MB 게이트, G2)
         run: npm run check:size
+
+      # 신 스코프 가드 (6차 결의 2 — 업그레이드 7·장비 4·보스 1·해역 1).
+      # --strict = 위반 시 실패. 회의 문언은 '경고'라 완화 여부는 리드 결정
+      # 대기 (INTEGRATION_NOTES INT-TOOL-006) — 완화 시 --strict 제거.
+      - name: 신 스코프 가드 검사 [LOOP]
+        run: npm run check:scope -- --strict
+
+      - name: 툴링 결정적 검증 (세이브·업그레이드·Keyboard Lock 폴백)
+        run: npm run verify:tooling
+
+      - name: 게임플레이 결정적 검증
+        run: npm run verify:gameplay

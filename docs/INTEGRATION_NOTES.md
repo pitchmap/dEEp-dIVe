@@ -56,6 +56,34 @@
 
 ## 제안 목록
 
+### INT-TOOL-007 — [LOOP][ECON] PvE 툴링 배선 요청: 저장 시점·경제/기지 이벤트 계약·병행 키 E·보스 오디오
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 빌드·툴 (PvE 성장 루프 기반 작업 — 회의록 10·11 위임분) |
+| 대상 시스템 | 메타 루프(리드, 신규), `src/contracts/events.ts`(이벤트 제안 — 미수정), 게임플레이 입력, 보스 상태 머신(리드) |
+| 필요한 변경 | ① **저장 시점 배선(리드)**: 기지 귀환 정산 확정 시 + 희귀 부품 획득 즉시 `defaultSaveStore.save()` 호출 (`src/meta/save/` — docs/SAVE_SYSTEM.md). 그 외 자동 저장 금지 [확정] ② **이벤트 계약 제안(승인 대기 — 계약 파일 미수정)**: `creditsGained { amount }` / `rarePartAcquired { partId }` / `baseStateChanged { docked: boolean }` — 발행: 경제·메타 루프, 구독: AudioCueRouter(획득음·기지 전환음)·UI. 승인 시 AudioCueRouter 구독 1줄씩 추가 ③ **병행 키 E(게임플레이)**: 5차 결의 4의 E=상승 병행 키가 코드 미반영 — 입력 안내(1회 토스트)가 이미 E를 안내하므로 **D+9 빌드 전 바인딩 필수** (Ctrl/Shift 스왑 반영과 함께) ④ **보스 오디오(리드→툴링)**: 침묵 전환은 `WebAudioSystem.setMusicSilenced()` 배관 준비 완료 — 호출 시점(단계 전환 판정)은 보스 상태 머신 소유. 단계 이벤트 계약(예: `bossPhaseChanged`)은 보스 구현 착수 시 제안 |
+| 변경 이유 | 저장·오디오 배관은 완성됐으나 호출 지점(메타 루프·경제 판정)이 다른 파트 소유 — 배선 없이는 저장이 실행되지 않음 |
+| 관련 게이트 | [LOOP] 2단계 Exit Criteria (출항→파밍→귀환→강화 저장 포함 완주) |
+| 영향을 받는 파일 | 메타 루프 신규 코드(리드), events.ts(승인 시), src/audio/AudioCueRouter.ts(구독 추가), 게임플레이 KeyboardInput |
+| 하위 호환 여부 | 이벤트 추가만 — 기존 구독자 영향 없음 |
+| 개발 리드 결정 | **대기** |
+| 적용 커밋 | — |
+
+### INT-TOOL-006 — [LOOP] 보호 파일 선반영: package.json 스크립트·playwright-core devDep·CI 스코프 가드 단계
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 빌드·툴 (PvE 툴링 작업 — CI·검증 러너·빌드 설정은 세션 위임 소유) |
+| 대상 시스템 | `package.json`(공통 보호), `.github/workflows/ci.yml`(툴링 소유) |
+| 필요한 변경 | ① scripts 4종 추가: `check:scope`(스코프 가드) / `verify:tooling`(세이브·업그레이드·폴백 26항목) / `verify:gameplay`(기존 러너 별칭) / `verify:hud`(브라우저 33항목 — Chromium 필요, CI 제외) ② devDependency `playwright-core@^1.62.1` (브라우저 다운로드 없음 — verify:hud 전용) ③ CI에 `check:scope --strict`·`verify:tooling`·`verify:gameplay` 단계 추가 |
+| 변경 이유 | 소회의(11) 결의 4 "가드를 도구가 지키게" + 검증 러너 재현성(스크래치패드 스크립트의 저장소 반입) |
+| 관련 게이트 | [LOOP][ECON] 스코프 가드 기계 강제 |
+| 영향을 받는 파일 | package.json, package-lock.json, .github/workflows/ci.yml, scripts/check-scope-guard.mjs·verify-hud.mjs(신규) |
+| 하위 호환 여부 | 기존 스크립트·의존성 무변경 (추가만) |
+| 개발 리드 결정 | **확인 대기 + 정책 선택지 보고** — 스코프 가드 위반 처리: 회의 문언은 '빌드 **경고**'(소회의 결의 4), 이번 작업 지시는 'CI **실패** 가능하면'. 현재 구성 = 로컬 기본 경고 / CI `--strict` 실패. 회의 문언 우선 시 CI에서 `--strict`만 제거하면 됨 |
+| 적용 커밋 | (이 브랜치의 PvE 툴링 커밋) |
+
 ### INT-CORE-005 — D+10 통합 배선·검증 핸들 (통합 담당 기록)
 
 | 필드 | 내용 |
