@@ -46,6 +46,16 @@ import type {
   SalvagePlacementSource,
   SalvageSpawnPlanEntry,
 } from '../contracts/officialParams';
+import { PLAYER_ENTITY_ID } from '../contracts/guard';
+import type {
+  GuardShipRequestPayload,
+  GuardSpawnLocationStrategy,
+  GuardSpawnOutcome,
+  GuardSpawnPort,
+  NeutralShipHitPayload,
+} from '../contracts/guard';
+import { factionRule } from '../contracts/faction';
+import type { GuardShipAdapter, GuardShipHandle } from './GuardShipAdapter';
 import type { SalvageKind } from '../systems/economy/SalvageObject';
 import type { WorldDrop } from '../systems/economy/CreditDropField';
 import type { EventBus, Unsubscribe } from './EventBus';
@@ -72,10 +82,15 @@ export interface SortieEconomyPort {
  *
  *  - 드롭 회수 → `lootDropped { source, credits, rareParts, x, z }`
  *    (메타 루프가 구독해 출항 재화로 집계한다)
- *  - 중립 공격 경비 요청 → `guardShipRequested { x, z }`
+ *  - 중립 공격 경비 요청 → `guardShipRequested`(payload v2 — INT-CORE-012)
  *    공식 이름은 `guardShipRequested`(리드 계약)이며, 게임플레이가 쓰던
- *    `guardSpawnRequested`는 채택하지 않는다. 유발 표적 id는 공식 payload에
- *    없어 전달되지 않는다 — 필요해지면 계약 보완 절차를 따른다.
+ *    `guardSpawnRequested`는 채택하지 않는다. 유발 표적 id는 v2에서
+ *    `sourceNeutralEntityId`로 정식 전달된다.
+ *
+ * 경비 요청 경로는 게임플레이가 `neutralShipHit`(유효 피격 이벤트)로
+ * 이행하기 전까지의 **레거시 큐 경로**다 — 상관 id를 만들 수 없으므로
+ * 표적 id 기반 `legacy:<targetId>` 키를 쓴다. 두 경로 모두 composition의
+ * 단일 중복 방지 경계를 지난다 (INT-CORE-012 §중복 방지 정본).
  */
 export class SortieEconomyBridge implements GameSystem {
   readonly id = 'sortieEconomyBridge';
@@ -107,7 +122,16 @@ export class SortieEconomyBridge implements GameSystem {
     // 않는다 (보스 AI와 함께 후속 단계 — docs/PVE_MVP_ACCEPTANCE.md).
     const requests = this.economy.consumeGuardSpawnRequests();
     for (const request of requests) {
-      this.bus?.emit('guardShipRequested', { x: request.x, z: request.z });
+      const correlationId = `legacy:${request.provokedByTargetId}`;
+      this.bus?.emit('guardShipRequested', {
+        requestId: correlationId,
+        sourceNeutralEntityId: request.provokedByTargetId,
+        attackerEntityId: PLAYER_ENTITY_ID,
+        incidentPosition: { x: request.x, z: request.z },
+        spawnReason: 'neutralAttack',
+        requestedFaction: 'patrol',
+        correlationId,
+      });
     }
   }
 
@@ -875,5 +899,221 @@ export class SortieSalvageSpawner {
     }
     this.spawnedThisSortie = true;
     return { status: 'spawned', count: spawnedCount };
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   ⑥ 중립 피격 → 경비함 스폰 경계 (INT-CORE-012, 스프린트 B 선행개발)
+   — 중복 방지 저장소는 **여기 하나뿐**이다. 게임플레이 시스템 내부와
+   composition이 각자 중복 방지 표를 두지 않는다 (정본 1곳).
+   AI 판단 로직은 이 층에 없다 (GuardShipAdapter → 기존 DestroyerAI).
+   ───────────────────────────────────────────────────────────── */
+
+/**
+ * 사건 원장 — 상관 id·요청 id 중복 처리를 막는 **단일 저장소**.
+ *
+ * 두 지점이 같은 원장을 공유한다:
+ *  ① 중립 유효 피격 → 경비 요청 발행 (attackCorrelationId 기준)
+ *  ② 경비 요청 → 스폰 (requestId 기준)
+ *
+ * 출항 세션 경계에서 `resetForNewSortie()`로 비운다 — 새 출항의 같은
+ * 표적이 이전 출항 기록 때문에 무시되지 않게 한다.
+ */
+export class GuardIncidentLedger {
+  private readonly requestedCorrelations = new Set<string>();
+  private readonly spawnedRequests = new Set<string>();
+
+  /** 이 공격(correlationId)으로 경비 요청을 처음 내는가 */
+  claimRequest(correlationId: string): boolean {
+    if (this.requestedCorrelations.has(correlationId)) return false;
+    this.requestedCorrelations.add(correlationId);
+    return true;
+  }
+
+  /** 이 요청(requestId)으로 처음 스폰하는가 */
+  claimSpawn(requestId: string): boolean {
+    if (this.spawnedRequests.has(requestId)) return false;
+    this.spawnedRequests.add(requestId);
+    return true;
+  }
+
+  get requestedCount(): number {
+    return this.requestedCorrelations.size;
+  }
+
+  get spawnedCount(): number {
+    return this.spawnedRequests.size;
+  }
+
+  resetForNewSortie(): void {
+    this.requestedCorrelations.clear();
+    this.spawnedRequests.clear();
+  }
+}
+
+/**
+ * `neutralShipHit` → `guardShipRequested` 경계.
+ *
+ * 발행 규칙 (INT-CORE-012):
+ *  - 유효 피격 이벤트 1건 = 경비 요청 최대 1건
+ *  - 같은 `attackCorrelationId`의 두 번째 이벤트는 무시 (원장 판정)
+ *  - 중립이 아닌 세력의 피격은 무시 (세력 규칙표 기준 — 문자열 비교 아님)
+ *  - `firstValidNeutralHit === false`(같은 표적 추가 피격)는 요청하지 않는다
+ */
+export class NeutralIncidentBoundary implements GameSystem {
+  readonly id = 'neutralIncidentBoundary';
+
+  private readonly ledger: GuardIncidentLedger;
+  private bus: EventBus | null = null;
+  private unsubscribe: Unsubscribe | null = null;
+
+  constructor(ledger: GuardIncidentLedger) {
+    this.ledger = ledger;
+  }
+
+  initialize(context: SystemContext): void {
+    this.bus = context.bus;
+    this.unsubscribe = context.bus.on('neutralShipHit', (payload) => {
+      this.handle(payload);
+    });
+  }
+
+  private handle(payload: NeutralShipHitPayload): void {
+    if (!factionRule(payload.targetFaction).raisesNeutralIncident) return;
+    if (!payload.firstValidNeutralHit) return;
+    if (!this.ledger.claimRequest(payload.attackCorrelationId)) return;
+
+    this.bus?.emit('guardShipRequested', {
+      requestId: payload.attackCorrelationId,
+      sourceNeutralEntityId: payload.targetEntityId,
+      attackerEntityId: payload.attackerEntityId,
+      incidentPosition: payload.attackWorldPosition,
+      spawnReason: 'neutralAttack',
+      requestedFaction: 'patrol',
+      correlationId: payload.attackCorrelationId,
+    });
+  }
+
+  update(_deltaSeconds: number): void {}
+
+  dispose(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+    this.bus = null;
+  }
+}
+
+/**
+ * 경비함 생성 포트 구현 — 요청 검증 → 위치 결정 → 어댑터 스폰.
+ *
+ * 결과는 계약 5종으로만 보고하며 내부 예외 문자열을 밖으로 내보내지
+ * 않는다. 위치 전략이 없으면 `noSpawnLocation`(임의 좌표 생성 금지),
+ * AI 팩토리가 없으면 `spawnFailed`(대체 AI 생성 금지)다.
+ */
+export class GuardSpawnCoordinator implements GuardSpawnPort {
+  private readonly ledger: GuardIncidentLedger;
+  private readonly adapter: GuardShipAdapter;
+  private locationStrategy: GuardSpawnLocationStrategy | null;
+  private onSpawned: ((handle: GuardShipHandle) => void) | null = null;
+  /** 경비함 엔티티 id 구간 — 화물선(소수)·salvage(9000+)와 겹치지 않는 구조 상수 */
+  private nextEntityId = GUARD_ENTITY_ID_BASE;
+
+  constructor(
+    ledger: GuardIncidentLedger,
+    adapter: GuardShipAdapter,
+    locationStrategy: GuardSpawnLocationStrategy | null = null,
+  ) {
+    this.ledger = ledger;
+    this.adapter = adapter;
+    this.locationStrategy = locationStrategy;
+  }
+
+  /** 월드 지식이 필요한 위치 전략은 게임플레이·월드 소유 — 조립부가 연결 */
+  attachLocationStrategy(strategy: GuardSpawnLocationStrategy | null): void {
+    this.locationStrategy = strategy;
+  }
+
+  /** 스폰된 개체의 월드 등록(표적 등록·렌더 표시)은 조립부가 이 훅으로 잇는다 */
+  attachSpawnListener(listener: ((handle: GuardShipHandle) => void) | null): void {
+    this.onSpawned = listener;
+  }
+
+  spawnGuardShip(request: GuardShipRequestPayload): GuardSpawnOutcome {
+    if (!isValidGuardRequest(request)) return 'invalidRequest';
+    if (!this.ledger.claimSpawn(request.requestId)) return 'duplicateRequest';
+
+    const location = this.locationStrategy?.resolve(request) ?? null;
+    if (!location) return 'noSpawnLocation';
+
+    const entityId = this.nextEntityId;
+    const handle = this.adapter.spawn(request.requestId, {
+      entityId,
+      faction: request.requestedFaction,
+      spawnReason: request.spawnReason,
+      initialTargetEntityId: request.attackerEntityId,
+      initialTargetPosition: request.incidentPosition,
+      spawnPosition: location,
+      displayLabelId: factionRule(request.requestedFaction).displayLabelId,
+    });
+    if (!handle) return 'spawnFailed';
+    // id는 실제 스폰이 성사된 뒤에만 소비한다 (실패한 요청이 id를 태우지 않게).
+    this.nextEntityId += 1;
+
+    try {
+      this.onSpawned?.(handle);
+    } catch (error) {
+      console.error('[GuardSpawn] 월드 등록 실패 — 스폰은 유지된다', error);
+    }
+    return 'spawned';
+  }
+}
+
+/** 경비함 엔티티 id 시작값 — 밸런스가 아니라 id 공간 구획(구조 상수) */
+const GUARD_ENTITY_ID_BASE = 8000;
+
+function isValidGuardRequest(request: GuardShipRequestPayload): boolean {
+  if (!request.requestId || !request.correlationId) return false;
+  if (request.spawnReason !== 'neutralAttack') return false;
+  // 스폰될 개체의 세력은 경비 세력(patrol)이어야 한다 — 별칭·임의 세력 금지.
+  if (request.requestedFaction !== 'patrol') return false;
+  const position = request.incidentPosition;
+  return Number.isFinite(position.x) && Number.isFinite(position.z);
+}
+
+/**
+ * `guardShipRequested` → `GuardSpawnPort` 배선 시스템.
+ * 결과 코드는 개발 로그로만 남긴다 (UI·이벤트로 내부 사유를 흘리지 않는다).
+ */
+export class GuardSpawnBridge implements GameSystem {
+  readonly id = 'guardSpawnBridge';
+
+  private readonly port: GuardSpawnPort;
+  private unsubscribe: Unsubscribe | null = null;
+  private lastOutcomeValue: GuardSpawnOutcome | null = null;
+
+  constructor(port: GuardSpawnPort) {
+    this.port = port;
+  }
+
+  /** 마지막 스폰 결과 (검증·디버깅용 읽기 전용) */
+  get lastOutcome(): GuardSpawnOutcome | null {
+    return this.lastOutcomeValue;
+  }
+
+  initialize(context: SystemContext): void {
+    this.unsubscribe = context.bus.on('guardShipRequested', (payload) => {
+      const outcome = this.port.spawnGuardShip(payload);
+      this.lastOutcomeValue = outcome;
+      if (outcome !== 'spawned') {
+        console.info(`[GuardSpawn] 요청 ${payload.requestId} 결과: ${outcome}`);
+      }
+    });
+  }
+
+  update(_deltaSeconds: number): void {}
+
+  dispose(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = null;
   }
 }

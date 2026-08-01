@@ -198,9 +198,14 @@ B 선행개발          = 가능 (선행개발 상태로만)
   - **공식 경제 연결 (INT-CORE-011 — 툴링 승인 params `2a89400`·loader `60ece41` 소비):**
     - **선행 계약** — `contracts/officialParams.ts` 신규: `OfficialRuntimeParams`(공식 로더 composition root 각 1회 호출 번들 — upgrades·equipment·economy·cargo·aiming, 시스템·UI의 JSON/로더 직접 호출 금지), `SalvagePlacementSource`(보상=economy params 소유 / 좌표=월드·그래픽스 소유, spawnId 결합), production spawn 규칙(출항당 1회·파괴분 재생성 금지·미도착 = unwired·임시 좌표 금지)
     - **구현** — Game.ts: `meta/provisionalEconomy` production import **제거·파일 삭제**(손실률 0.5는 economy.json 정본), `loadEconomyParams`+`loadAimingParams` 각 1회 → MetaLoop(손실률)·UpgradePurchaseSystem/UpgradeState/BaseScreenPort/UI 포트(공식 카탈로그 2종) 주입, 구 `upgradeCalculator` 로더 production 미사용(시뮬레이터 전용 존치). PveIntegration: `composeSalvageSpawnPlan`(누락·중복·미지 spawnId/dropTableId/kind 거부 — 거부 시 부분 생성 없음)·`SortieSalvageSpawner`(출항당 1회 가드, `sessionPort.start()`에서 `beginSortie`). 결정적 검증 **58/58**(결합 5·스포너 4·실파일 60/40/25+희귀 1·Game/UI 정적 검사 3 신규)
+  - **스프린트 B 선행개발 (INT-CORE-012 — B 공식 발효 전, dev/main·통합 병합 금지):**
+    - **선행 계약 (커밋 `afd5c71`)** — `contracts/faction.ts`(FACTION_RULES 규칙표·`patrol` 정본 유지·guard 별칭 미추가·`CombatTargetClass` 승격·`rewardDropTableIdFor`), `contracts/identification.ts`(B2 식별 read model — 미식별 시 라벨 null / B7 로깅 8항목·결과 분류 5종), `contracts/guard.ts`(중립 유효 피격·경비 요청 payload·GuardSpawnPort 결과 5종·GuardShipAdapterConfig·DestroyerAIFactory·B6 호위 계약·PLAYER_ENTITY_ID), `events.ts`(neutralShipHit 신설·guardShipRequested **payload v2**·transportAttacked)
+    - **구현 (커밋 `d1577d5`·`b43c906`)** — `core/GuardShipAdapter`(기존 DestroyerAI 계약에 주입+수명주기 전달만, **신규 경비 AI 코어 0**), PveIntegration `GuardIncidentLedger`(중복 방지 **단일 저장소** — 상관 id·요청 id 공용, 출항 경계 리셋)·`NeutralIncidentBoundary`·`GuardSpawnCoordinator`(GuardSpawnPort)·`GuardSpawnBridge`. Game 조립: 경제 브리지 → 사건 경계 → 스폰 브리지 → 어댑터(③ AI 그룹) 등록. 결정적 검증 **77/77**(B 18항목 신규 — 중복 방지·세력 판정·스폰 결과 5종·어댑터 위임·B6 분리·B2 모델·B7 로깅 + 정적 검사 2: 신규 경비 AI 파일 0개·C 범위 구현 파일 미생성)
+    - **B5 규칙 개정 (INT-CORE-013 — 15차 diff-only 변경)**: 조사 결과 production `DestroyerAI` 구현체가 **0개**여서 '기존 구현체 재사용/신규 AI 0'은 성립 불가한 전제였다(게임플레이·툴링 두 창이 독립 보고). 개정 후: **범용 production 구현 정확히 1개** `core/DestroyerAIController`(경비함·일반 적대 구축함 공용) + `core/destroyerAiFactory`(production factory) + 어댑터가 그것을 재사용. 경비 전용 GuardAI·GuardBehavior·GuardStateMachine은 계속 금지, C 기능(탐지·폭뢰·내구도·침수·발사) 미포함. 이동은 게임플레이 `SurfaceShipMotionPort`(리드는 선박 transform 미조작). `GuardShipHandle`에 `entityId`·`spawnPosition` 추가(그래픽스 INT-RENDER-011 요청 승인). 결정적 검증 **88/88**(B5 개정 11항목 — 구현체 1개·전용 AI 0개·위장/더블 금지·C 참조 0건 정적 + 이동·경계·표적 무효·체인 동작)
+    - **남은 미연결 1개**: 게임플레이 motion adapter(`SurfaceShipMotionPortFactory`) — `Game.composeSystems`의 1줄 교체로 연결되며, 그 전까지 스폰은 `spawnFailed`(가짜 이동 생성 금지). B1(적대·중립 동시 배치)은 게임플레이 브랜치에 이미 구현됐고 병합 대기다
   - **업그레이드 7항목 production 소비 현황 조사 (INT-CORE-011):** maxSpeed·turnRate·reloadSpeed = `deriveEffectiveParams` 연결됨 / **torpedoDamage** = `equipment.setUpgradeModifiers` 경유 어뢰 피해 연결됨 / **hullIntegrity·maxDepth** = 소비 시스템 자체가 아직 없음(내구도·침수는 B/C 범위, 심도 한계 파라미터화 미도입) — 현재는 외형 단계(visualTiers 선체 합산)에만 기여 / **sonarRange** = 소비 시스템 없음(탐지는 범위 밖) — 기준값 발명 없이 구매·저장·외형만 유효
 - **진행 중:** 없음
-- **다음 작업:** ① dev 통합 빌드에서 A1~A8 재판정(특히 A4·A5·A6·A8 — 공식 params 소비 완료분) ② 그래픽스 `SalvagePlacementSource` 구현체 도착 시 `attachPlacementSource` 연결(1줄) ③ 보스 AI는 스프린트 C(C1~C9) 통과 후 본개발 — 스프린트 B·C·어뢰 캠은 착수 금지 상태(14차 결의 1)
+- **다음 작업:** ① **A 브라우저 인수 검증·A 통합 PR·dev 병합**(B 범위표 발효 조건 — 15차 결의 1) ② A+B 최종 통합 브랜치에서 전체 검증 — 그 전까지 B 완료·발효 보고 금지 ③ 게임플레이 중립 선박 배치·neutralShipHit 발행·위치 전략, 리드 구축함 AI 구현 도착 시 `attachFactory` 배선 ② 그래픽스 `SalvagePlacementSource` 구현체 도착 시 `attachPlacementSource` 연결(1줄) ③ 보스 AI는 스프린트 C(C1~C9) 통과 후 본개발 — 스프린트 B·C·어뢰 캠은 착수 금지 상태(14차 결의 1)
 - **차단 문제:** 없음 (그래픽스 salvage 배치 3좌표 도착 — `world/salvagePlacements.ts` 연결 완료, 출항 시 3개 생성 실측. INT-RENDER-010)
 - **변경된 계약:** INT-CORE-011(OfficialRuntimeParams·SalvagePlacementSource·production spawn 규칙). 이전: INT-CORE-010, INT-CORE-008·009, INT-CORE-006·007, INT-CORE-004·003·002, INT-GAME-001
 - **통합 주의사항:**
@@ -222,9 +227,12 @@ B 선행개발          = 가능 (선행개발 상태로만)
   - **[INT-CORE-011 적용 요청 — 게임플레이]** `EconomySystem`의 `PROVISIONAL_DROP_TABLES`·`PROVISIONAL_PICKUP_RADIUS_METERS`·`PROVISIONAL_DEFEAT_CREDIT_LOSS_RATIO` 직접 import를 주입 경로로 교체(조립부가 `official.economy` 전달) 후 `systems/economy/provisionalEconomy.ts` 삭제. `spawnSalvage` 시그니처는 그대로(조립부가 결합 plan으로 호출 중). 조준·화물선의 `provisionalAiming`·`provisionalCargo`도 공식 aiming·cargo 주입으로 교체
   - **[INT-CORE-011 적용 요청 — 그래픽스]** `SalvagePlacementSource` 구현체 1개 제공(spawnId `salvage-1/2/3` 각 1좌표 — 협곡 내 도달 가능 위치, 시각은 `kind`로 분기). credits·rareParts 값 정의 금지. 연결점: 조립부 `SortieSalvageSpawner.attachPlacementSource`(리드가 1줄 배선)
   - **[INT-CORE-011 적용 요청 — 빌드·툴]** economyParams 번들이 production 유일 공급원 — `upgradeCalculator` 로더는 시뮬레이터 전용 유지. verify:meta 정적 검사(로더 1회·UI 직접 호출 금지)가 회귀를 차단한다
+  - **[INT-CORE-012 적용 요청 — 게임플레이]** ① **중립 선박 배치**(현재 화물선 1척 hostile 고정 — B1 미성립) ② 유효 피해 적용 지점에서 `neutralShipHit` 발행(어뢰 1발 = attackCorrelationId 1개, 첫 유효 피격만 true). 기존 `consumeGuardSpawnRequests` 큐는 이행 후 제거(그때까지 병존 — 중복은 조립부 원장이 흡수) ③ `ShipIdentificationSource` 구현(거리·식별 성립 조건은 판정측) ④ `GuardSpawnLocationStrategy` 구현 — 없으면 스폰은 noSpawnLocation ⑤ 중립 격침 드롭 0 유지
+  - **[INT-CORE-012 적용 요청 — 그래픽스]** 조준경 태그는 `ShipIdentificationView`만 소비 — 엔티티 이름·모델 종류로 세력 추측 금지, 미식별이면 라벨 없음(세력 비노출). 색·실루엣·항해등은 그래픽스 소유(계약에 문구·색 없음). 경비함 등장 방향 연출은 `guardShipRequested.incidentPosition` 구독
+  - **[INT-CORE-012 적용 요청 — 빌드·툴]** economy.json 세력별 드롭 테이블·고가치 배율 확장(**patrol 보상은 수치표 도착 전까지 null 유지**), B7 `IdentificationLogSink` 구현·집계·판정(오인율 계산식·최소 표본), B1~B5 자동 검증 스크립트 신설 — 리드는 없는 script를 실행하지 않는다
   - **계층 경계 [확정]:** 상위(src/meta)가 하위 세션 내부 상태를 읽는 코드, 하위가 메타 상태를 참조하는 코드는 리뷰 반려 대상 — 통신은 SortieSessionPort + 이벤트 3종뿐
-- **마지막 업데이트:** 공식 경제 연결 (INT-CORE-011 — 계약 `a3dd257`, provisional 제거·salvage 결합·spawn 가드)
-- **담당 브랜치:** `claude/deep-dive-core-lead-uyg77p` (리드 세션 — 툴링 loader `60ece41` 머지 완료)
+- **마지막 업데이트:** B5 규칙 개정·범용 구축함 AI 신설 (INT-CORE-013 — `b8ade9e`·`c4026f1`·`4750804`·`8c3bf37`. B 공식 미발효)
+- **담당 브랜치:** `claude/deep-dive-core-lead-uyg77p` (리드 세션 — A_STACK 기준 `85ec32b` / 통합 tip `8f40117` 머지 완료)
 
 ## 게임플레이
 
