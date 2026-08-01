@@ -7,12 +7,15 @@
  *  - 월드 **픽업**: CreditDropField (접근 자동 회수 — '줍는다')
  *  - 획득 **반영**: RunEconomy (크레딧·희귀 부품·정산)
  *
- * 세력 반응 (Faction 태그 — 클래스 복제 없음):
- *  - hostile 파괴 → dropTableId의 크레딧 드롭 생성
- *  - neutral 공격 → 크레딧 없음 + **경비함 출현 요청** 생성 — 경비함 AI는
- *    기존 구축함 AI 재사용(리드 소유), 이 시스템은 요청 데이터만 쌓는다
- *  - patrol(경비) 파괴 → 드롭 없음
+ * 세력별 보상 (Faction 태그 — 클래스 복제 없음. 판단 근거는 계약 규칙표
+ * `rewardDropTableIdFor` 하나뿐이며 시스템 내부 세력 분기가 없다 — B3):
+ *  - hostile 파괴 → 공식 적대 드롭 테이블의 크레딧 드롭 생성
+ *  - neutral 파괴 → **보상 0** (드롭 엔티티 0·크레딧 0·희귀 0, 지갑 불변)
+ *  - patrol(경비) 파괴 → 공식 params가 없으므로 보상 0 (수치 발명 금지)
  *  - object(해저 재화) 파괴 → 드롭 테이블 크레딧 + (배치된 경우) 희귀 부품
+ *
+ * 중립 사건(경비함 요청)은 이 시스템의 책임이 아니다 — 유효 피해 지점에서
+ * 발행되는 `neutralShipHit`가 정본이다 (B4). 레거시 큐는 비어 있다.
  *
  * 통지 계약: guardSpawnRequested·creditsChanged·rarePartAcquired 정식 이벤트는
  * INT-GAME-008 제안 중 — 그 전까지 읽기 전용 상태·consume API·콜백이 연결점.
@@ -26,6 +29,7 @@
  *    으로 동작하며 `economyParamsWired`가 false로 드러난다.
  */
 
+import { rewardDropTableIdFor } from '../../contracts/faction';
 import type { SalvageSpawnPlanEntry } from '../../contracts/officialParams';
 import type { Updatable } from '../../contracts/systems';
 import { CreditDropField } from './CreditDropField';
@@ -137,12 +141,24 @@ export class EconomySystem implements Updatable {
     return this.params?.creditLossOnDestroyedRatio ?? 0;
   }
 
-  /** 대기 중 경비함 출현 요청 (읽기 전용) — AI 파트가 폴링·소비 */
+  /**
+   * 대기 중 경비함 출현 요청 (읽기 전용). B4 이행 후 **항상 빈 배열**이다 —
+   * 아래 `consumeGuardSpawnRequests` 주석 참조.
+   */
   get guardSpawnRequests(): readonly GuardSpawnRequest[] {
     return this.guardRequests;
   }
 
-  /** 경비함 출현 요청 소비 (AI 파트 전용) — 반환 후 큐가 비워진다 */
+  /**
+   * 경비함 출현 요청 소비 (레거시 큐 — **B4 이행 후 항상 비어 있다**).
+   *
+   * 중립 사건의 정본 경로는 유효 피해 지점의 `neutralShipHit` → composition
+   * 중복 방지 경계(`GuardIncidentLedger`) → `guardShipRequested`다. 이
+   * 큐에 요청을 넣는 코드는 제거됐으므로 `legacy:<targetId>` 상관 id는
+   * production에서 만들어지지 않는다 — 같은 사건이 두 경로로 처리되는 일이
+   * 없다. 메서드 자체는 리드 `SortieEconomyPort` 계약이 요구하므로 남긴다
+   * (제거 요청: INTEGRATION_NOTES INT-GAME-012).
+   */
   consumeGuardSpawnRequests(): readonly GuardSpawnRequest[] {
     const drained = this.guardRequests;
     this.guardRequests = [];
@@ -267,33 +283,40 @@ export class EconomySystem implements Updatable {
     this.dropField.disposeListeners();
   }
 
-  /** 함선 피격 상태 전이 감시 — 세력별 반응 (1표적 1회) */
+  /**
+   * 함선 피격 상태 전이 감시 — **세력별 보상 결정** (1표적 1회, B3).
+   *
+   * 보상 여부의 판단 근거는 계약 규칙표 `rewardDropTableIdFor` 하나다
+   * (문자열 세력 비교·시스템 내부 분기 없음):
+   *  - hostile → 공식 적대 드롭 테이블 → 주입된 dropTables에서 크레딧 조회
+   *  - neutral → `null` → **드롭 엔티티 0·크레딧 0·희귀 0** (지갑 불변)
+   *  - patrol  → `null` → 공식 params가 없으므로 보상 없음 (발명 금지)
+   *
+   * 지갑은 여기서 직접 건드리지 않는다 — 드롭을 만들고, 회수(픽업)만이
+   * 지갑을 바꾼다. 중립 파괴는 드롭 자체가 생기지 않으므로 회수도 없다.
+   * 평판·도덕성·벌금은 스프린트 B 범위 밖이며 도입하지 않는다.
+   *
+   * 중립 사건(경비함 요청)은 **여기서 만들지 않는다** — 유효 피해 지점에서
+   * 발행되는 `neutralShipHit`가 정본 경로다 (B4 이행 완료). 이 시스템은
+   * 파괴 상태만 보므로 '유효 피해'를 판정할 수 없다.
+   */
   private reactToShipHits(): void {
     for (const ship of this.ships()) {
       if (!ship.hit || this.processedTargetIds.has(ship.id)) continue;
       this.processedTargetIds.add(ship.id);
 
-      if (ship.faction === 'hostile') {
-        const table =
-          ship.dropTableId && this.params ? this.params.dropTables[ship.dropTableId] : undefined;
-        if (table) {
-          this.dropField.spawnCredits(
-            ship.positionX,
-            ship.positionY,
-            ship.positionZ,
-            table.credits,
-            'cargoShip',
-          );
-        }
-      } else if (ship.faction === 'neutral') {
-        // 중립 공격 — 크레딧 없음, 경비함 출현 요청 (구축함 AI 재사용은 리드 소유)
-        this.guardRequests.push({
-          provokedByTargetId: ship.id,
-          x: ship.positionX,
-          z: ship.positionZ,
-        });
-      }
-      // guard 파괴 — 드롭·반응 없음
+      const rewardTableId = rewardDropTableIdFor(ship.faction);
+      if (rewardTableId === null) continue; // 중립·경비 — 보상 없음
+      const table = this.params?.dropTables[rewardTableId];
+      if (!table) continue; // 공식 표에 없는 참조 — 수치를 만들지 않는다
+
+      this.dropField.spawnCredits(
+        ship.positionX,
+        ship.positionY,
+        ship.positionZ,
+        table.credits,
+        'cargoShip',
+      );
     }
   }
 
