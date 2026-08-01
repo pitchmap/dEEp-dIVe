@@ -26,7 +26,7 @@ import { effectiveDurationSeconds, effectiveValue, modifierSumFor } from '../met
 import type { SaveData } from '../meta/save/saveSchema';
 import { createDefaultSave } from '../meta/save/saveSchema';
 import type { SaveStore } from '../meta/save/SaveStore';
-import type { UpgradeDefinition } from '../tools/upgradeMath';
+import type { UpgradeEntry } from '../tools/economyMath';
 import type { WorldDrop } from '../systems/economy/CreditDropField';
 import type { EventBus, Unsubscribe } from './EventBus';
 import type { GameSystem, SystemContext } from './GameSystem';
@@ -255,10 +255,10 @@ function isUpgradeStatId(id: string): id is UpgradeStatId {
  * `params/*.json` 원본은 절대 수정하지 않는다 — 유효값은 파생 복사본이다.
  */
 export class UpgradeState implements UpgradeLevelsPort {
-  private readonly catalog: readonly UpgradeDefinition[];
+  private readonly catalog: readonly UpgradeEntry[];
   private levels: Record<string, number> = {};
 
-  constructor(catalog: readonly UpgradeDefinition[], levels: Readonly<Record<string, number>> = {}) {
+  constructor(catalog: readonly UpgradeEntry[], levels: Readonly<Record<string, number>> = {}) {
     this.catalog = catalog;
     this.setLevels(levels);
   }
@@ -308,7 +308,11 @@ export class UpgradeState implements UpgradeLevelsPort {
     for (const def of this.catalog) {
       if (!isUpgradeStatId(def.id)) continue; // 계약 외 id는 무시 (상한 밖 실험 항목)
       const level = this.levels[def.id] ?? 0;
-      if (level > 0) modifiers[def.id] = level * def.bonusPerLevel;
+      // 공식 카탈로그는 단계별 누적 배율(effectBonus[level-1])을 갖는다.
+      // **미확정(null)이면 보정을 만들지 않는다** — 임의 숫자로 채우지 않으며
+      // 해당 항목은 가격도 null이라 구매 자체가 불가하다 (A8 미완 상태).
+      const bonus = level > 0 ? def.effectBonus[level - 1] : null;
+      if (typeof bonus === 'number') modifiers[def.id] = bonus;
     }
     return modifiers as UpgradeModifiers;
   }
