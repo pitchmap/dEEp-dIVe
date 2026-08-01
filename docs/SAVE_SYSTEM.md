@@ -23,11 +23,17 @@
 
 ## 저장 시점 5종 [확정 — 6차 결의 7 + 소회의(13) 결의 4 개정]
 
+> **저장 책임 단일화 [INT-CORE-010, 리드 결정]:** 한 사용자 명령 = SavePort
+> 최대 1회. 이벤트(`saveRequested`) 경로는 1·2뿐이며 3~5는 트랜잭션·command가
+> SavePort를 **직접** 호출한다(결과 동기 확인·실패 롤백). UI는 저장하지 않고
+> saveRequested도 발행하지 않는다. 구 `sortieLaunch` cause는 폐기.
+> 상세: INTERFACES §2d 저장 책임 표.
+
 1. **기지 귀환 정산 확정 시** — 메타 루프(리드)가 `saveRequested('settlement')` 발행
 2. **희귀 부품 획득 즉시** — `saveRequested('rarePart')` (귀환길 파괴로도 잃지 않음)
-3. **업그레이드 구매 성공 직후** *(소회의 13 결의 4 신설)*
-4. **장비 장착·교체·해제 직후** *(신설)*
-5. **출항 확정 직전** *(신설 — 출항 시점의 최종 상태 봉인)*
+3. **업그레이드 구매 성공 직후** — `meta/PurchaseTransaction`이 SavePort 직접 호출 *(소회의 13 결의 4)*
+4. **장비 장착·교체·해제 직후** — `meta/EquipmentTransaction`이 SavePort 직접 호출 (EquipmentSystem 내부 저장 경로는 production 미연결)
+5. **출항 확정 직전** — Departure command(조립부)가 SavePort 직접 호출, **저장 실패 시 해역 전환 없음** *(출항 시점의 최종 상태 봉인)*
 
 3~5는 A7('저장 후 재접속 시 구매·장착 상태 유지')이 통과 가능하려면 필수다 —
 기지에서 사고 출항하지 않은 채 새로고침하면 구 규격(2종)에서는 구매가 증발한다.

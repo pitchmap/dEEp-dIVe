@@ -1,0 +1,16 @@
+{
+  "$comment": "화물선 공식 params — 항행·명중·침몰 (비경제 수치이나 A8 이관 대상, [ECON] 커밋). 기존 런타임 값(src/systems/provisionalCargo.ts)을 **그대로** 이관한 것이며 새 밸런스 변경이 아니다. 경로 끝점(waypointA/B)은 레벨 블록아웃 성격이라 정식 레벨 산출물 수신 시 world/layout으로 재이관될 수 있다 — 현재는 기존 값 보존이 우선이다. 선체 박스 치수는 5차 결의 1의 '어뢰 명중·잠수함 충돌 공유 데이터'.",
+  "targetId": 1,
+  "speedMetersPerSecond": 4,
+  "hitRadiusMeters": 9,
+  "sinkDurationSeconds": 6,
+  "waypointA": { "x": -30, "z": -40 },
+  "waypointB": { "x": 30, "z": -40 },
+  "hullBox": {
+    "halfLengthMeters": 10,
+    "halfBeamMeters": 2.5,
+    "judgmentDraftMeters": 4,
+    "freeboardMeters": 3,
+    "note": "렌더 임시 모델(길이 20 × 폭 5)을 감싸는 구조 치수 — 밸런스 수치 아님"
+  }
+}

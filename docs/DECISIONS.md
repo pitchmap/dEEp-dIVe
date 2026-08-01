@@ -58,6 +58,9 @@
 | A-9 | 스프린트 순차 게이트 A→B→C (착수도 순차 — 병렬 기각), 5작업 창 체제·범위 고정, 병합 순서 리드→게임플레이→그래픽스→툴링, 판정은 dev 통합 빌드 A1~A8. **A 통합 PR 병합 전 B 병합 금지** | [확정 — 14차 결의 1~3] |
 | A-10 | 어뢰 캠: F 홀드+화면 버튼(동일 진입점), 복귀 조건 3종(피격/탐지 alert/어뢰 종료), 최후 발사 어뢰 추적·자동 승계 없음. **착수는 A~C 완료 후 잔여 시간** — 스프린트 A 범위 아님 | [확정 — 7차 결의 2·13차 결의 6] |
 | A-11 | 코드-문서 동시 갱신 원칙: 결의로 사양 변경 시 코드·상태 문서를 같은 작업 단위에서 갱신. 문서 미갱신 = 작업 미완료 | [확정 — 7차 결의 1-⑦, 회의체 운영 원칙 승격] |
+| A-12 | **저장 책임 단일화**: 한 사용자 명령 = SavePort 최대 1회. 구매=PurchaseTransaction / 장비=EquipmentTransaction / 출항 확정 직전=Departure command(실패 시 전환 없음) / 정산·희귀=saveRequested 이벤트 유지. UI의 저장·saveRequested 발행 금지, 구 sortieLaunch cause 폐기 | [확정 — INT-CORE-010, INTERFACES §2d] |
+| A-13 | 경제 데이터 미확정(공식 params null) = `economyDataUnavailable`: 구매 버튼 비활성·상태/저장 변경 0·null→0 변환 금지·provisional 비용 금지. 불가 사유는 확정 5종 + 이 코드(`slotFull`로 통일 — 구 noFreeSlot 폐기) | [확정 — INT-CORE-010, 7차 결의 4 데이터→UI 순서] |
+| A-14 | **공식 런타임 params 소비**: 공식 로더(`loadEconomyParams`+`loadAimingParams`)는 composition root에서 각 1회 — 시스템·UI의 JSON·로더 직접 호출 금지. salvage는 소유 분리(보상=economy params / 좌표=SalvagePlacementSource·월드·그래픽스)로 spawnId 결합, 누락·중복·미지 spawnId 거부(무시 금지), 출항당 1회 생성·파괴분 재생성 금지, 배치 미도착 = 명시적 unwired(임시 좌표 금지) | [확정 — INT-CORE-011, contracts/officialParams.ts] |
 
 ## 버티컬 슬라이스 트랙 유효 결정 (구현 기준 — PvE에서 이월·재편)
 

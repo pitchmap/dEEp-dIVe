@@ -16,7 +16,22 @@
  */
 
 import type {
+  BaseCommandOutcome,
+  BaseScreenLastResult,
+  BaseScreenPort,
   CurrencyBundle,
+  DepartureResult,
+  EquipmentCatalogItem,
+  EquipmentChangeJudgePort,
+  EquipmentChangeRequest,
+  EquipmentId,
+  EquipmentLoadout,
+  MetaStateId,
+  PurchaseCost,
+  PurchaseDenialReason,
+  SavePort,
+  TransactionResult,
+  UpgradeCatalogItem,
   UpgradeLevelsPort,
   UpgradeModifiers,
   UpgradeStatId,
@@ -26,7 +41,12 @@ import { effectiveDurationSeconds, effectiveValue, modifierSumFor } from '../met
 import type { SaveData } from '../meta/save/saveSchema';
 import { createDefaultSave } from '../meta/save/saveSchema';
 import type { SaveStore } from '../meta/save/SaveStore';
-import type { UpgradeEntry } from '../tools/economyMath';
+import type { EconomyParams, EquipmentCatalog, UpgradeEntry } from '../tools/economyMath';
+import type {
+  SalvagePlacementSource,
+  SalvageSpawnPlanEntry,
+} from '../contracts/officialParams';
+import type { SalvageKind } from '../systems/economy/SalvageObject';
 import type { WorldDrop } from '../systems/economy/CreditDropField';
 import type { EventBus, Unsubscribe } from './EventBus';
 import type { GameSystem, SystemContext } from './GameSystem';
@@ -371,4 +391,480 @@ export function deriveEffectiveParams(
       },
     },
   };
+}
+
+/* ─────────────────────────────────────────────────────────────
+   ④ 스프린트 A production 기지 경제 조립 (INT-CORE-010)
+   — 저장 책임 단일화·경제 미확정 처리·BaseScreenPort v2 구현.
+   여기에는 판정·가격·UI DOM이 없다: 게임플레이 판정과 그래픽스 UI를
+   공식 계약으로 잇는 얇은 어댑터와 명령 순서만 있다.
+   ───────────────────────────────────────────────────────────── */
+
+/**
+ * 계측 가능한 SavePort — 명령당 저장 호출 횟수를 검증·디버깅에서 셀 수
+ * 있게 한다 (저장 책임 표: 한 사용자 명령 = SavePort 최대 1회).
+ * production 기본 경로에도 그대로 쓰인다 (계측 오버헤드 = 카운터 1개).
+ */
+export class CountingSavePort implements SavePort {
+  private readonly inner: SavePort;
+  private count = 0;
+
+  constructor(inner: SavePort) {
+    this.inner = inner;
+  }
+
+  get callCount(): number {
+    return this.count;
+  }
+
+  save(): boolean {
+    this.count += 1;
+    return this.inner.save();
+  }
+}
+
+/** 장비 판정 어댑터가 소비하는 게임플레이 EquipmentSystem의 구조 단면 */
+export interface EquipmentSystemFacade {
+  readonly slots: readonly (EquipmentId | null)[];
+  replaceItem(slotIndex: number, id: EquipmentId): GameplayTransactionResult;
+  unequipItem(slotIndex: number): GameplayTransactionResult;
+}
+
+/** 게임플레이 purchaseTypes.TransactionResult의 구조 단면 (직접 import 대신) */
+export type GameplayTransactionResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly category: 'condition' | 'save'; readonly reason: string };
+
+/**
+ * `EquipmentChangeJudgePort` 구현 — 게임플레이 EquipmentSystem 위임.
+ * 판정 로직을 복제하지 않는다: equip/replace는 replaceItem(범위·중복 검사
+ * 포함), unequip은 unequipItem 그대로. **이 어댑터·시스템은 저장하지
+ * 않는다** — production에서는 EquipmentSystem.attachSavePort를 연결하지
+ * 않아(내부 저장 경로 비활성) 저장은 리드 EquipmentTransaction 한 곳뿐이다.
+ */
+export class EquipmentJudgeAdapter implements EquipmentChangeJudgePort {
+  private readonly system: EquipmentSystemFacade;
+
+  constructor(system: EquipmentSystemFacade) {
+    this.system = system;
+  }
+
+  applyEquipmentChange(request: EquipmentChangeRequest): PurchaseDenialReason | null {
+    const result =
+      request.kind === 'unequip'
+        ? this.system.unequipItem(request.slotIndex)
+        : this.system.replaceItem(request.slotIndex, request.equipmentId);
+    if (result.ok) return null;
+    if (result.category === 'save') {
+      // 계약 위반 방어 — production에서는 시스템에 저장 포트가 없어야 한다.
+      // 트랜잭션 catch 경로로 넘겨 안전 결과(saveFailedRolledBack)로 수렴시킨다.
+      throw new Error('[EquipmentJudgeAdapter] 판정 포트에서 저장이 발생했습니다 (이중 저장 금지 위반)');
+    }
+    return toDenialReason(result.reason);
+  }
+
+  snapshotSlots(): readonly (EquipmentId | null)[] {
+    return [...this.system.slots];
+  }
+
+  restoreSlots(slots: readonly (EquipmentId | null)[]): void {
+    // 중복 검사와 충돌하지 않도록 전부 비운 뒤 원래 슬롯 위치로 되돌린다
+    for (let i = 0; i < this.system.slots.length; i += 1) {
+      this.system.unequipItem(i);
+    }
+    slots.forEach((id, index) => {
+      if (id !== null) this.system.replaceItem(index, id);
+    });
+  }
+}
+
+/** 게임플레이 사유 문자열 → 공식 계약 사유 (동일 표기 — 방어적 매핑) */
+function toDenialReason(reason: string): PurchaseDenialReason {
+  switch (reason) {
+    case 'insufficientCredits':
+    case 'insufficientRareParts':
+    case 'maxLevelReached':
+    case 'slotFull':
+    case 'alreadyEquipped':
+      return reason;
+    default:
+      console.error(`[PveIntegration] 알 수 없는 판정 사유: ${reason} — slotFull로 표기`);
+      return 'slotFull';
+  }
+}
+
+/**
+ * 출항 확정 command — 출항 확정 직전 저장의 **유일한** 소유자 (저장 책임 표).
+ * 저장 성공 시에만 메타 루프 전환(해역 진입)을 진행한다. 실패 시 전환 없음 —
+ * 기지 상태 유지, 재시도 가능. 예외를 밖으로 던지지 않는다.
+ */
+export class DepartureCommand {
+  private readonly meta: {
+    readonly metaState: MetaStateId;
+    beginSortiePrep(): void;
+    launchSortie(): void;
+  };
+  private readonly savePort: SavePort;
+
+  constructor(
+    meta: { readonly metaState: MetaStateId; beginSortiePrep(): void; launchSortie(): void },
+    savePort: SavePort,
+  ) {
+    this.meta = meta;
+    this.savePort = savePort;
+  }
+
+  confirmDeparture(): DepartureResult {
+    if (this.meta.metaState !== 'BASE') return 'invalidState';
+    let saved = false;
+    try {
+      saved = this.savePort.save();
+    } catch (error) {
+      console.error('[DepartureCommand] 출항 저장 중 예외:', error);
+      saved = false;
+    }
+    if (!saved) return 'saveFailed'; // 해역 전환 없음 — 기지 유지
+    try {
+      this.meta.beginSortiePrep();
+      this.meta.launchSortie();
+      return 'departed';
+    } catch (error) {
+      // 저장은 성공했으나 전환 실패(허용표 위반 등) — 부팅·루프를 깨지 않는다
+      console.error('[DepartureCommand] 출항 전환 중 예외:', error);
+      return 'invalidState';
+    }
+  }
+}
+
+/** 공식 카탈로그에서 다음 단계 비용·미확정 여부 산출 (null → 발명 금지) */
+export function officialNextCost(
+  entry: UpgradeEntry,
+  currentLevel: number,
+): { cost: PurchaseCost | null; pending: boolean } {
+  const nextLevel = currentLevel + 1;
+  if (nextLevel > entry.maxLevel) return { cost: null, pending: false }; // 최대 단계
+  const credits = entry.costCredits[nextLevel - 1] ?? null;
+  const rareParts = entry.costRareParts[nextLevel - 1] ?? null;
+  const effect = entry.effectBonus[nextLevel - 1] ?? null;
+  if (credits === null || rareParts === null || effect === null) {
+    return { cost: null, pending: true }; // 공식 수치 미확정 — economyDataUnavailable
+  }
+  return { cost: { credits, rareParts }, pending: false };
+}
+
+/** BaseScreenPort v2 production 구현이 조립부에서 받는 의존성 묶음 */
+export interface BaseScreenDeps {
+  readonly meta: {
+    readonly metaState: MetaStateId;
+    readonly wallet: CurrencyBundle;
+    readonly sortieCreditsEarned: number;
+    readonly sortieRarePartsSecured: number;
+  };
+  readonly upgradeCatalog: readonly UpgradeEntry[];
+  readonly equipmentCatalog: EquipmentCatalog;
+  /** 확정 단계 스냅샷 (단일 저장소 = 게임플레이 판정 시스템) */
+  readonly levelsOf: () => Readonly<Record<string, number>>;
+  readonly loadoutOf: () => EquipmentLoadout;
+  readonly purchaseTx: { run(id: UpgradeStatId): TransactionResult };
+  readonly equipmentTx: { run(request: EquipmentChangeRequest): TransactionResult };
+  readonly departure: DepartureCommand;
+  /** 구매 확정 후 파생 상태(유효 파라미터·외형 단계·장비 배율) 갱신 훅 */
+  readonly onPurchaseCommitted: () => void;
+}
+
+function toOutcome(result: TransactionResult): BaseCommandOutcome {
+  if (result.status === 'success') return 'success';
+  if (result.status === 'denied') return result.reason;
+  return 'saveFailedRolledBack';
+}
+
+/**
+ * production BaseScreenPort — UI가 소비하는 유일한 진입점 구현.
+ * 실제 지갑·단계·loadout을 매 접근마다 소스에서 읽는다(사본 없음).
+ * 경제 데이터 미확정(null) 항목의 구매는 **트랜잭션 진입 전에** 차단한다:
+ * 상태·저장 호출 0회, provisional 대입 없음.
+ */
+export function createBaseScreenPort(deps: BaseScreenDeps): BaseScreenPort & {
+  readonly lastResult: BaseScreenLastResult | null;
+} {
+  let lastResult: BaseScreenLastResult | null = null;
+
+  const record = (
+    command: BaseScreenLastResult['command'],
+    outcome: BaseScreenLastResult['outcome'],
+  ): typeof outcome => {
+    lastResult = { command, outcome };
+    return outcome;
+  };
+
+  const runEquipment = (
+    command: 'equipItem' | 'replaceItem' | 'unequipItem',
+    request: EquipmentChangeRequest,
+  ): BaseCommandOutcome =>
+    record(command, toOutcome(deps.equipmentTx.run(request))) as BaseCommandOutcome;
+
+  return {
+    get wallet(): CurrencyBundle {
+      return deps.meta.wallet;
+    },
+    get sortieCreditsEarned(): number {
+      return deps.meta.sortieCreditsEarned;
+    },
+    get sortieRarePartsSecured(): number {
+      return deps.meta.sortieRarePartsSecured;
+    },
+    get upgradeCatalog(): readonly UpgradeCatalogItem[] {
+      const levels = deps.levelsOf();
+      return deps.upgradeCatalog.map((entry) => {
+        const { cost, pending } = officialNextCost(entry, levels[entry.id] ?? 0);
+        return {
+          id: entry.id,
+          label: entry.label,
+          maxLevel: entry.maxLevel,
+          nextCost: cost,
+          nextCostPending: pending,
+        };
+      });
+    },
+    get upgradeLevels(): Readonly<Record<string, number>> {
+      return deps.levelsOf();
+    },
+    get equipmentCatalog(): readonly EquipmentCatalogItem[] {
+      return deps.equipmentCatalog.items.map((item) => {
+        const credits = item.costCredits;
+        const rareParts = item.costRareParts;
+        return {
+          id: item.id,
+          label: item.label,
+          cost: credits === null || rareParts === null ? null : { credits, rareParts },
+        };
+      });
+    },
+    get loadout(): EquipmentLoadout {
+      return deps.loadoutOf();
+    },
+    get canLaunchSortie(): boolean {
+      return deps.meta.metaState === 'BASE';
+    },
+    get lastResult(): BaseScreenLastResult | null {
+      return lastResult;
+    },
+
+    purchaseUpgrade(upgradeId: UpgradeStatId): BaseCommandOutcome {
+      const entry = deps.upgradeCatalog.find((candidate) => candidate.id === upgradeId);
+      if (entry) {
+        const level = deps.levelsOf()[upgradeId] ?? 0;
+        const { pending } = officialNextCost(entry, level);
+        if (pending) {
+          // 공식 경제 params 미확정 — 트랜잭션 진입 전 차단 (상태·저장 0회)
+          return record('purchaseUpgrade', 'economyDataUnavailable') as BaseCommandOutcome;
+        }
+      }
+      const outcome = toOutcome(deps.purchaseTx.run(upgradeId));
+      if (outcome === 'success') deps.onPurchaseCommitted();
+      return record('purchaseUpgrade', outcome) as BaseCommandOutcome;
+    },
+    equipItem(equipmentId: EquipmentId, slotIndex: number): BaseCommandOutcome {
+      return runEquipment('equipItem', { kind: 'equip', slotIndex, equipmentId });
+    },
+    replaceItem(equipmentId: EquipmentId, slotIndex: number): BaseCommandOutcome {
+      return runEquipment('replaceItem', { kind: 'replace', slotIndex, equipmentId });
+    },
+    unequipItem(slotIndex: number): BaseCommandOutcome {
+      return runEquipment('unequipItem', { kind: 'unequip', slotIndex });
+    },
+    confirmDeparture(): DepartureResult {
+      return record('confirmDeparture', this.canLaunchSortie ? deps.departure.confirmDeparture() : 'invalidState') as DepartureResult;
+    },
+  };
+}
+
+/* ─────────────────────────────────────────────────────────────
+   ⑤ production UI 수명주기 어댑터
+   — UI(EconomyHud·SortiePrepScreen)는 BaseScreenPort v2를 **직접** 소비한다.
+   구계약 변환 어댑터(createMetaUiPorts·toUiCommandResult)는 UI v2 동기화로
+   불필요해져 제거됐다 (INT-RENDER-010 §2). QA 데모(econUiQaDemo)는 여기와
+   무관하며 production composition에 포함되지 않는다 (?econdemo 플래그 전용).
+   ───────────────────────────────────────────────────────────── */
+
+/**
+ * 경제 UI 수명주기 어댑터 — 그래픽스 UI 컴포넌트(EconomyHud·SortiePrepScreen)
+ * 는 GameSystem이 아니므로 여기서 프레임 갱신·정리만 입힌다.
+ * 표시 값은 각 컴포넌트가 매 프레임 소스에서 다시 읽는다.
+ */
+export class MetaUiAdapter implements GameSystem {
+  readonly id = 'metaBaseUi';
+
+  private readonly parts: readonly { update(): void; dispose(): void }[];
+
+  constructor(parts: readonly { update(): void; dispose(): void }[]) {
+    this.parts = parts;
+  }
+
+  initialize(_context: SystemContext): void {}
+
+  update(_deltaSeconds: number): void {}
+
+  /** DOM 표시 갱신은 render 단계 (3D 장면 렌더 후) */
+  render(): void {
+    for (const part of this.parts) part.update();
+  }
+
+  dispose(): void {
+    for (const part of this.parts) part.dispose();
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   ⑤ 해저 재화(salvage) 결합·스폰 (INT-CORE-011)
+   — 보상은 economy params에서, 좌표는 SalvagePlacementSource에서만
+   파생한다. 여기에는 드롭·회수 런타임이 없다 (게임플레이 소유).
+   ───────────────────────────────────────────────────────────── */
+
+/** 게임플레이 SalvageKind와의 정합 검증용 — 값 발명이 아니라 타입 가드다 */
+const SALVAGE_KINDS: readonly SalvageKind[] = ['chest', 'container', 'mineral'];
+
+function isSalvageKind(value: string): value is SalvageKind {
+  return (SALVAGE_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * 경제 params의 salvageSpawns와 월드·그래픽스의 배치를 spawnId로 결합한다.
+ *
+ * 거부(예외) 조건 — 존재하지 않는 spawnId를 무시하지 않는다:
+ *  - 경제 spawnId·배치 spawnId 중복
+ *  - 경제에만 있는 spawnId (배치 누락) / 배치에만 있는 spawnId (경제 미지)
+ *  - economy.dropTables에 없는 dropTableId
+ *  - 게임플레이 SalvageKind 밖의 kind
+ */
+export function composeSalvageSpawnPlan(
+  economy: Pick<EconomyParams, 'dropTables' | 'salvageSpawns'>,
+  placements: SalvagePlacementSource,
+): SalvageSpawnPlanEntry[] {
+  const placementById = new Map<string, SalvagePlacementSource['placements'][number]>();
+  for (const placement of placements.placements) {
+    if (placementById.has(placement.spawnId)) {
+      throw new Error(`[salvage] 배치 spawnId 중복: ${placement.spawnId}`);
+    }
+    placementById.set(placement.spawnId, placement);
+  }
+
+  const seenEconomyIds = new Set<string>();
+  const plan: SalvageSpawnPlanEntry[] = [];
+  for (const spawn of economy.salvageSpawns) {
+    if (seenEconomyIds.has(spawn.spawnId)) {
+      throw new Error(`[salvage] 경제 spawnId 중복: ${spawn.spawnId}`);
+    }
+    seenEconomyIds.add(spawn.spawnId);
+
+    const placement = placementById.get(spawn.spawnId);
+    if (!placement) {
+      throw new Error(`[salvage] 배치 누락 spawnId: ${spawn.spawnId} (경제에만 존재 — 무시 금지)`);
+    }
+    placementById.delete(spawn.spawnId);
+
+    if (!isSalvageKind(spawn.kind)) {
+      throw new Error(`[salvage] 미지 kind: ${spawn.kind} (spawnId ${spawn.spawnId})`);
+    }
+    const table = economy.dropTables[spawn.dropTableId];
+    if (!table) {
+      throw new Error(`[salvage] 미지 dropTableId: ${spawn.dropTableId} (spawnId ${spawn.spawnId})`);
+    }
+
+    plan.push({
+      spawnId: spawn.spawnId,
+      kind: spawn.kind,
+      dropTableId: spawn.dropTableId,
+      credits: table.credits,
+      rarePartId: spawn.rarePartId,
+      rarePartCount: spawn.rarePartId === null ? 0 : 1,
+      worldPosition: placement.worldPosition,
+      ...(placement.orientationYawRadians !== undefined
+        ? { orientationYawRadians: placement.orientationYawRadians }
+        : {}),
+    });
+  }
+
+  if (placementById.size > 0) {
+    const unknown = [...placementById.keys()].join(', ');
+    throw new Error(`[salvage] 경제에 없는 배치 spawnId: ${unknown} (무시 금지)`);
+  }
+  return plan;
+}
+
+/** 게임플레이 스폰 진입점의 최소 단면 — EconomySystem.spawnSalvage가 충족 */
+export interface SalvageSpawnAdapter {
+  spawnSalvage(kind: SalvageKind, x: number, y: number, z: number, rarePartId: string | null): unknown;
+}
+
+export type SalvageSpawnReport =
+  | { readonly status: 'spawned'; readonly count: number }
+  | { readonly status: 'alreadySpawned' }
+  | { readonly status: 'unwired' }
+  | { readonly status: 'rejected'; readonly message: string };
+
+/**
+ * 출항당 1회 salvage 스포너 (production spawn 규칙).
+ *
+ *  - `beginSortie()` — 세션 시작(월드 초기화 직후, `resetSortieSession` 다음)
+ *    에 조립부가 호출한다. 새 출항 가드를 리셋한 뒤 전체 plan을 1회 생성.
+ *  - `spawnForSortie()` — 같은 출항에서 두 번째 호출은 `alreadySpawned`
+ *    (파괴·회수된 salvage도 같은 출항 중 재생성하지 않는다 — 월드 잔존
+ *    개수가 아니라 출항당 플래그로 가드).
+ *  - 배치 소스 미연결이면 `unwired` — **임시 좌표를 만들지 않는다.**
+ *  - 결합 거부(누락·중복·미지 spawnId 등)는 `rejected` — 아무것도 생성하지
+ *    않는다 (부분 생성 없음: plan 결합이 생성보다 먼저 전부 수행된다).
+ */
+export class SortieSalvageSpawner {
+  private readonly economy: Pick<EconomyParams, 'dropTables' | 'salvageSpawns'>;
+  private readonly adapter: SalvageSpawnAdapter;
+  private placements: SalvagePlacementSource | null = null;
+  private spawnedThisSortie = false;
+
+  constructor(
+    economy: Pick<EconomyParams, 'dropTables' | 'salvageSpawns'>,
+    adapter: SalvageSpawnAdapter,
+  ) {
+    this.economy = economy;
+    this.adapter = adapter;
+  }
+
+  /** 월드·그래픽스 배치 도착 시 조립부가 연결한다 (null = 명시적 미연결) */
+  attachPlacementSource(source: SalvagePlacementSource | null): void {
+    this.placements = source;
+  }
+
+  get placementWired(): boolean {
+    return this.placements !== null;
+  }
+
+  /** 새 출항 시작 — 가드 리셋 후 1회 생성 */
+  beginSortie(): SalvageSpawnReport {
+    this.spawnedThisSortie = false;
+    return this.spawnForSortie();
+  }
+
+  spawnForSortie(): SalvageSpawnReport {
+    if (this.spawnedThisSortie) return { status: 'alreadySpawned' };
+    if (!this.placements) return { status: 'unwired' };
+
+    let plan: SalvageSpawnPlanEntry[];
+    try {
+      plan = composeSalvageSpawnPlan(this.economy, this.placements);
+    } catch (error) {
+      return { status: 'rejected', message: error instanceof Error ? error.message : String(error) };
+    }
+
+    for (const entry of plan) {
+      this.adapter.spawnSalvage(
+        entry.kind,
+        entry.worldPosition.x,
+        entry.worldPosition.y,
+        entry.worldPosition.z,
+        entry.rarePartId,
+      );
+    }
+    this.spawnedThisSortie = true;
+    return { status: 'spawned', count: plan.length };
+  }
 }

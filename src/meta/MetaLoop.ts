@@ -76,15 +76,14 @@ export class MetaLoop implements GameSystem, WalletTransactionPort {
     return { credits: this.walletCredits, rareParts: this.walletRareParts };
   }
 
-  /**
-   * 이번 출항 집계 스냅숏 (읽기 전용 — 해역 재화 HUD 소비용).
-   * 정산 전 미확정 값이다: 크레딧은 파괴 시 일부 손실 대상, 희귀 부품은
-   * 이미 지갑에 즉시 확정 반영된 획득량 표시다. wallet getter와 같은
-   * 복사본 반환 관례 — 내부 집계 필드는 노출·수정 경로가 없다.
-   * (그래픽스 production 배선 선반영 — INT-RENDER-009, 리드 확인 대기)
-   */
-  get sortieEarnings(): CurrencyBundle {
-    return { credits: this.tallyCredits, rareParts: this.tallyRareParts };
+  /** 이번 출항에서 획득했지만 아직 정산되지 않은 크레딧 (파괴 시 손실 대상 — UI 표시용) */
+  get sortieCreditsEarned(): number {
+    return this.tallyCredits;
+  }
+
+  /** 이번 출항에서 획득한 희귀 부품 수 (획득 즉시 지갑 확정 — 표시 구분용) */
+  get sortieRarePartsSecured(): number {
+    return this.tallyRareParts;
   }
 
   initialize(_context: SystemContext): void {
@@ -170,11 +169,9 @@ export class MetaLoop implements GameSystem, WalletTransactionPort {
    * 기지에서 출항하면 기존 전투 세션이 초기화되는 규칙의 진입점.
    */
   launchSortie(): void {
-    // 출항 확정 직전 저장 [13차 결의 4 — 저장 시점 5종] — 아직 SORTIE_PREP
-    // 상태에서 발행한다 (허용표 밖 상태면 발행 없이 아래 transition이 던진다)
-    if (this.state === 'SORTIE_PREP') {
-      this.bus.emit('saveRequested', { cause: 'sortieLaunch' });
-    }
+    // 출항 확정 직전 저장은 여기서 하지 않는다 [INT-CORE-010 저장 책임
+    // 단일화] — Departure command(조립부)가 SavePort를 직접 호출해 저장
+    // 성공을 확인한 뒤에만 이 메서드를 부른다. 저장 실패 시 전환 없음.
     this.transition('SORTIE');
     this.sortieCount += 1;
     this.tallyCredits = 0;
