@@ -164,13 +164,14 @@
   - **[LOOP] PvE 성장 루프 시각** — 기지 화면(`BaseSceneView` — 경량 3D 독, 메타 상태 소비 전용) + 외형 단계 어댑터(`SubmarineVisual` — 선체·주무장 각 3단계, visualTier 주입만, 최종 에셋 교체 지점 격리)
   - **[BOSS] 분절 애니 스파이크 판정: 성공(조건부)** — 강체 5분절 계층 트랜스폼+사인파 위상차, 스켈레탈·스키닝·관절 물리 0, 충돌 단일 캡슐 전제 유지. 위협감 실측 충족, 최종 모션 리뷰(리드·아트) 1건 잔여. B안(`BossMotionFallback` — 대시·관성·카메라 흔들림 훅) 경계 준비, 기본 비활성. `docs/RENDER_SPIKE_BOSS.md`
   - 약점·단계 연출 연결점 — `setWeakpointActive`(발광·점멸·턱 개방)·`setPhase`(체색 전환)·`onPhaseTransition` 시임. 활성·단계 판정은 게임플레이 소유
+  - **[LOOP][ECON] Sprint A 조준 시각·성장 UI (13·14차 창3)** — ① **선수 발사관 조준 카메라**: `SubmarineVisual.aimCameraSocket`(어뢰관 앵커 정위치·전방축 동일 — 13차 결의 2, 모델 소유 단일 지점) + `CanyonScene.updateAimCamera`(소켓 월드 위치·방향 그대로, 독자 오프셋 0, 전 심도 동일·심도 카메라 전환 없음, 발사 후 유지), 미세 조준각은 `attachAimAngleSource` 게임플레이 소스 소비(부재 시 0), 해제 시 `CameraRig.beginReturnFrom`으로 3인칭 자연 복귀 ② **자기 선체 레이어 제외**: 선체 서브트리를 layer 1에 두고 조준 중 조준 카메라 마스크에서만 disable — visible·material 전역 변경 없음(블롭 섀도·수면·타 카메라 보존), 해제·dispose 시 복원 ③ **2D 발사관 프레임**: `PeriscopeView` 하단 관 내부 어둠+관구 림 호+좌우 관벽(DOM, 마스크 overflow 일체화, 십자선·눈금·보조선 뒤 레이어) ④ **재화 HUD**(`EconomyHud` — 기지·해역, MetaLoop 실지갑 소비·내부 지갑 없음, 확정 vs 이번 출항(미확정) 구분, 집계 getter 부재 시 '배선 대기' 표기) ⑤ **출항 준비 화면**(`SortiePrepScreen` — 업그레이드 이름/단계/효과/가격/구매, 장비 4종 역할·장착/해제/교체, 출항 버튼, sticky 결과 피드백) — 전부 포트(`metaEconomyPorts`) 소비·command 호출·결과 코드 표시만, 불가 5종+저장 실패 지정 문구, 공식 가격 부재 시 '가격 데이터 대기' 비활성(가격 발명 금지) ⑥ Playwright 실측: 실경로 조준(잠망경 심도 화면 버튼)·발사 후 유지·해제 복귀·심도별 조준 시점·실지갑/실카탈로그/실장비 TEMP-WIRING 왕복(원복 완료) — 스크린샷 docs/screenshots/sprintA_*
 - **진행 중:** 없음
-- **다음 작업:** INT-RENDER-006(어뢰 배선 1줄)·007(기지·visualTier 메타 배선) 리드 반영 후 실기 확인 / 보스 모션 리뷰(실기 60fps) / 보스 본통합 시 AI 포즈 소비 교체·전장 엄폐 예산 재배분 / 단계 전환 파티클·카메라(D17~20)
-- **차단 문제:** 없음. 단 ① 어뢰·항적은 INT-RENDER-006 배선 전 미표시 ② 기지·외형 단계는 메타 루프(리드 신규) 대기 — QA 플래그로 검수 가능 ③ 키 스왑(Ctrl 상승)·조준 토글은 게임플레이·툴링 구현 대기 — 렌더는 aimModeChanged 소비라 어느 쪽이든 무변경
-- **변경된 계약:** 없음 (`src/contracts/*` 미수정 — INT-RENDER-006·007 배선 제안만)
-- **통합 주의사항:** 조준경은 `aimModeChanged`만 소비(홀드→토글 개편에도 렌더 무변경). 어뢰 소비 인터페이스(`TorpedoStateSource`)는 StraightRunTorpedoSystem이 구조적 충족. 환경 밀도는 renderVisualParams.environment가 상한 — 보스 전장 데코는 '추가'가 아니라 '이동'(11차 결의 1). 반투명 renderOrder 서열: 블롭1<X-ray2<수면3=기포3<폭발4<보조선5. 신규 모듈 전부 dispose 일괄 관리(geometry·material·InstancedMesh). QA 플래그: `?xray` `?shipdemo` `?lookup` `?bossSpike=1(&bossMotion=b)` `?base=1` `?tiers=h,w`
-- **마지막 업데이트:** PvE 준비 스프린트 (5차 시각 이행 + 성장 루프 렌더 + 보스 스파이크, feat/render)
-- **담당 브랜치:** `feat/render` (D+10 통합 `89de73f` 병합 기반)
+- **다음 작업:** INT-RENDER-008 리드 결정 후 실배선(UI 마운트·구매 트랜잭션 포트 교체·출항 저장) / 게임플레이 전 심도 조준·미세 조준각 소스 합류 시 `attachAimAngleSource` 배선 확인 / 보스 모션 리뷰(실기 60fps)
+- **차단 문제:** 없음. 단 ① 경제·성장 UI 실사용 마운트는 INT-RENDER-008 리드 배선 대기(QA `?econdemo`로 검수 가능) ② 공식 경제 params·구매 트랜잭션 부재 — production 가격 미표시 상태 유지 ③ 이번 출항 획득 집계 getter 부재 — '집계 배선 대기' 표기 ④ 전 심도 조준은 게임플레이 잠망경 게이트 제거 대기(렌더는 심도 무관 완료)
+- **변경된 계약:** 없음 (`src/contracts/*` 미수정 — INT-RENDER-008 제안만. UI 포트는 `src/ui/metaEconomyPorts.ts` 구조적 인터페이스)
+- **통합 주의사항:** 조준경은 `aimModeChanged`만 소비(홀드→토글 개편에도 렌더 무변경). 어뢰 소비 인터페이스(`TorpedoStateSource`)는 StraightRunTorpedoSystem이 구조적 충족. 환경 밀도는 renderVisualParams.environment가 상한 — 보스 전장 데코는 '추가'가 아니라 '이동'(11차 결의 1). 반투명 renderOrder 서열: 블롭1<X-ray2<수면3=기포3<폭발4<보조선5. 신규 모듈 전부 dispose 일괄 관리(geometry·material·InstancedMesh). **자기 선체 layer 1은 조준 카메라 전용 규약 — 다른 시스템이 layer 1을 쓰면 조준 중 함께 사라진다.** 기지 화면 UI 배선 시 자동 출항 2줄과 ControlsHud `launchSortie` 중복 진입점 정리 필요(INT-RENDER-008 ①). z-index 서열: 준비 화면 25 < 조준경 30 < 재화 HUD 32 < HUD 버튼 90. QA 플래그: `?xray` `?shipdemo` `?lookup` `?bossSpike=1(&bossMotion=b)` `?base=1` `?tiers=h,w` `?aimdemo=1` `?econdemo=1|savefail`
+- **마지막 업데이트:** Sprint A — 조준 시각과 성장 UI (feat/render)
+- **담당 브랜치:** `feat/render` (dev `c5987a2` PvE MVP 1차 통합 병합 기반)
 
 ## 빌드·툴
 

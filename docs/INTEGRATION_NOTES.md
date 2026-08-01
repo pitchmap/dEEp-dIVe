@@ -90,6 +90,84 @@
 
 ## 제안 목록
 
+### INT-RENDER-008 — [LOOP][ECON] Sprint A 조준 시각·성장 UI 배선·상태 요청 (검증 완료 코드 예시 포함)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스 (Sprint A 창3 — 회의록 13·14) |
+| 대상 시스템 | core/Game(조립 배선), 게임플레이(미세 조준각·전 심도 조준·출항 집계), 리드(구매·장착·출항 저장 트랜잭션), contracts(소켓·포트 이관 여부) |
+| 필요한 변경 | 아래 ①~④ |
+| 변경 이유 | 렌더·UI 구현은 완료 — 실상태·command 배선 지점이 보호 파일(core/Game)과 타 파트 소유라 배선 없이는 실사용 경로가 열리지 않음 |
+| 관련 게이트 | [LOOP] 조준 시각 · [ECON] 구매 트랜잭션 UX |
+| 영향을 받는 파일 | src/core/Game.ts(배선), src/meta/MetaLoop.ts(집계 getter), 게임플레이 조준 시스템, src/ui/* (수신 측 — 구현 완료) |
+| 하위 호환 여부 | 전부 추가 — 기존 구독·시스템 영향 없음 |
+| 개발 리드 결정 | **대기** |
+| 적용 커밋 | — |
+
+**① 리드 배선 요청 (core/Game — 아래 코드는 TEMP-WIRING으로 실측 검증 후 원복한 예시다).**
+`composeSystems()` 말미(메타 루프·업그레이드 생성 이후)에:
+
+```ts
+import { EconomyHud } from '../ui/EconomyHud';
+import { SortiePrepScreen } from '../ui/SortiePrepScreen';
+import { createEquipmentUiPort } from '../ui/metaEconomyPorts';
+
+const metaLoop = this.metaLoop; const upgrades = this.upgrades;
+const walletSource = {
+  get metaState() { return metaLoop.metaState; },
+  get wallet() { return metaLoop.wallet; },
+};
+const hud = new EconomyHud(this.container);
+hud.attachWalletSource(walletSource);
+const screen = new SortiePrepScreen(this.container);
+screen.attachWalletSource(walletSource);
+screen.attachUpgradePort({
+  listOffers: () => catalog.map((def) => ({
+    statId: def.id, displayName: def.label,
+    currentLevel: upgrades.currentLevels[def.id] ?? 0,
+    maxLevel: def.maxLevel,
+    nextEffectText: `${def.label} +${Math.round(def.bonusPerLevel * 100)}%`,
+    cost: null, // 공식 경제 params 부재 — 가격 미표시 (UI 가격 발명 금지)
+  })),
+  purchase: null, // ③ 구매 트랜잭션 배선 시 교체
+});
+screen.attachEquipmentPort(createEquipmentUiPort(gameplay.equipment));
+screen.attachDeparturePort({ confirmDeparture: () => { /* ④ 참조 */ } });
+// 매 프레임: hud.update(); screen.update(); — Game.update() 또는 registry 시스템로
+```
+
+기지 화면 UI가 배선되면 `render()`의 자동 출항 2줄과 ControlsHud의
+`launchSortie` 옵션은 이 화면의 출항 버튼으로 대체된다(중복 진입점 금지 —
+Game.ts 주석의 예정 사항 그대로). 검증 결과: 실지갑(세이브 로드 0/0) 표시,
+실카탈로그(params/upgrades.json label·maxLevel) 표시, 실 EquipmentSystem
+장착/해제/교체 command 왕복, 출항 버튼 → SORTIE 전환·화면 자동 숨김 확인.
+
+**② 게임플레이 상태 요청.**
+- **미세 조준각 소스**: `CanyonScene.attachAimAngleSource({ yawRadians, pitchRadians })`
+  (구조적 인터페이스 `AimAngleSource`, CanyonScene 수출). aiming.json 한계각·
+  감도·복귀(13차 결의 4)는 게임플레이가 판정하고 렌더는 결과 각만 소켓
+  로컬축(yaw=로컬 Y·양수 좌, pitch=로컬 X·양수 위)에 더한다. 미주입 시 0(정면).
+- **전 심도 조준**: 현 PeriscopeAimSystem은 잠망경 심도 게이트가 남아 있다.
+  렌더 측은 심도 분기가 없어(소켓 추종) 게이트 제거 즉시 전 심도 동작한다.
+- **출항 중 획득 집계 getter**: MetaLoop 내부 집계(tally)의 읽기 전용 공개
+  (예: `creditsEarnedThisSortie`/`rarePartsSecuredThisSortie`). UI는 임시
+  지갑 금지 원칙으로 lootDropped 합산을 하지 않는다 — getter 배선 전까지
+  '집계 배선 대기'로 표기 중. `EconomyHud.attachSortieEarningsSource()` 수신.
+
+**③ 리드 구매 트랜잭션 요청.** `UpgradePurchasePort.purchase(statId)`가
+결과 코드(`'ok' | 'insufficientCredits' | 'insufficientRareParts' | 'maxLevel'
+| 'slotFull' | 'alreadyEquipped' | 'saveFailed'`)를 돌려주는 구현. 판정·차감·
+단계 반영·**구매 직후 저장, 실패 시 rollback**(13차 저장 시점 개정)은 전부
+트랜잭션 소유 — UI는 결과 코드를 문구로 표시만 한다(저장 실패 문구는
+`SAVE_FAILED_MESSAGE` 지정 문구, 내부 예외 문자열 비노출). 장착 변경 직후
+저장도 동일 — 배선 시 `createEquipmentUiPort` 어댑터를 트랜잭션 포트로 교체.
+
+**④ 툴링·리드 출항 확정 직전 저장.** `DeparturePort.confirmDeparture()` 구현
+예시: `beginSortiePrep()` → `SaveBridge.writeSnapshot()`(툴링 저장 구조) →
+실패 시 `cancelSortiePrep()` + `'saveFailed'` 반환(**해역 전환 없음**, §10)
+→ 성공 시 `launchSortie()` + `'ok'`. `saveRequested` cause에 구매·장착·출항
+3종 추가는 리드 계약 개정 사안(13차 결의 5).
+
 ### INT-GAME-009 — 스프린트 A 계약 요청: 앵커·2소켓 / 구매 트랜잭션 / 지갑·저장 포트 / 조준 params
 
 | 필드 | 내용 |
