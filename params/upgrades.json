@@ -1,70 +1,196 @@
 {
-  "$comment": "영구 업그레이드 1층 7항목 — 공식 파일 (6차 결의 5 / 7차 결의 4 '데이터 → UI' 순서). id는 계약 src/contracts/meta.ts UpgradeStatId와 1:1. 단계별 배열 길이 = maxLevel. **null = 기획 경제 수치표(PvE D+3 절대 마감, 스프린트 A 병목) 미도착** — 임의의 확정 숫자를 넣지 않는다. 적용 공식은 합연산(src/meta/upgradeMath.ts): 최종값 = 기준값 × (1 + 보정 합), 시간형(turnRate·reloadSpeed)은 단축 적용. params 원본 불변. 검증: src/tools/economyMath.ts (7항목 초과·미지 id·음수 가격·단계 배열 누락·미존재 paramRef 거부). [ECON]",
+  "$comment": "영구 업그레이드 1층 7항목 — 공식 확정값 (사용자 승인, [ECON]). id는 계약 src/contracts/meta.ts UpgradeStatId와 1:1, maxLevel 5 고정. costCredits 100/160/240/340/460 · costRareParts 0/0/0/1/2 (전 항목 공통). effectBonus는 **단계별 증가량**이며 누적은 앞 단계까지의 합이다 — A군(maxSpeed·turnRate·reloadSpeed·sonarRange) 누적 5/10/16/22/30%, B군(hullIntegrity·maxDepth·torpedoDamage) 누적 10/20/32/44/60%. 적용 공식은 합연산(src/meta/upgradeMath.ts): 최종값 = 기준값 × (1 + 보정 합), 시간형(turnRate·reloadSpeed)은 effectiveDurationSeconds로 단축 적용. params 원본 불변 — 코드에서 역기록 금지. 검증: src/tools/economyMath.ts (7항목·미지 id·음수·배열 길이·누적 목표치).",
   "items": [
     {
       "id": "hullIntegrity",
       "label": "선체 체력",
       "maxLevel": 5,
-      "costCredits": [null, null, null, null, null],
-      "costRareParts": [null, null, null, null, null],
-      "effectBonus": [null, null, null, null, null],
-      "note": "기준값 파라미터 미존재 — 내구도 시스템 params 도입(C9, [COMBAT]) 시 paramRef 연결"
+      "costCredits": [
+        100,
+        160,
+        240,
+        340,
+        460
+      ],
+      "costRareParts": [
+        0,
+        0,
+        0,
+        1,
+        2
+      ],
+      "effectBonus": [
+        0.1,
+        0.1,
+        0.12,
+        0.12,
+        0.16
+      ],
+      "note": "기준값 파라미터·소비자 미존재 — 내구도 시스템(C9 [COMBAT]) 도입 시 paramRef 연결 필요. 승인 배율만 확정"
     },
     {
       "id": "maxSpeed",
       "label": "최고 속도",
       "paramRef": "movement.maxSpeedMetersPerSecond",
       "maxLevel": 5,
-      "costCredits": [null, null, null, null, null],
-      "costRareParts": [null, null, null, null, null],
-      "effectBonus": [null, null, null, null, null]
+      "costCredits": [
+        100,
+        160,
+        240,
+        340,
+        460
+      ],
+      "costRareParts": [
+        0,
+        0,
+        0,
+        1,
+        2
+      ],
+      "effectBonus": [
+        0.05,
+        0.05,
+        0.06,
+        0.06,
+        0.08
+      ]
     },
     {
       "id": "turnRate",
       "label": "선회 속도",
       "paramRef": "movement.turn90Seconds",
       "maxLevel": 5,
-      "costCredits": [null, null, null, null, null],
-      "costRareParts": [null, null, null, null, null],
-      "effectBonus": [null, null, null, null, null],
+      "costCredits": [
+        100,
+        160,
+        240,
+        340,
+        460
+      ],
+      "costRareParts": [
+        0,
+        0,
+        0,
+        1,
+        2
+      ],
+      "effectBonus": [
+        0.05,
+        0.05,
+        0.06,
+        0.06,
+        0.08
+      ],
       "note": "시간형 기준값(90도 소요 시간) — effectiveDurationSeconds로 단축 적용"
     },
     {
       "id": "maxDepth",
       "label": "잠항 수심",
       "maxLevel": 5,
-      "costCredits": [null, null, null, null, null],
-      "costRareParts": [null, null, null, null, null],
-      "effectBonus": [null, null, null, null, null],
-      "note": "기준값은 레이아웃 수직 한계 파생 — 레벨 데이터 이관(INT-GAME-004) 후 연결. id는 공식 계약 UpgradeStatId 'maxDepth' (구 'diveDepth'에서 통일)"
+      "costCredits": [
+        100,
+        160,
+        240,
+        340,
+        460
+      ],
+      "costRareParts": [
+        0,
+        0,
+        0,
+        1,
+        2
+      ],
+      "effectBonus": [
+        0.1,
+        0.1,
+        0.12,
+        0.12,
+        0.16
+      ],
+      "note": "기준값 파라미터·소비자 미존재 — 레이아웃 수직 한계 이관(INT-GAME-004) 후 연결 필요. 승인 배율만 확정"
     },
     {
       "id": "torpedoDamage",
       "label": "어뢰 피해",
       "maxLevel": 5,
-      "costCredits": [null, null, null, null, null],
-      "costRareParts": [null, null, null, null, null],
-      "effectBonus": [null, null, null, null, null],
-      "note": "기준값 파라미터 미존재 — 어뢰 피해 params 도입(INT-GAME-006/008) 시 연결"
+      "costCredits": [
+        100,
+        160,
+        240,
+        340,
+        460
+      ],
+      "costRareParts": [
+        0,
+        0,
+        0,
+        1,
+        2
+      ],
+      "effectBonus": [
+        0.1,
+        0.1,
+        0.12,
+        0.12,
+        0.16
+      ],
+      "note": "기준값은 장비 damage(params/equipment.json performance.damage) — 소비자 EquipmentSystem.setUpgradeModifiers가 production에 미배선. 승인 배율만 확정"
     },
     {
       "id": "reloadSpeed",
       "label": "재장전 속도",
       "paramRef": "combat.torpedoReloadSeconds",
       "maxLevel": 5,
-      "costCredits": [null, null, null, null, null],
-      "costRareParts": [null, null, null, null, null],
-      "effectBonus": [null, null, null, null, null],
+      "costCredits": [
+        100,
+        160,
+        240,
+        340,
+        460
+      ],
+      "costRareParts": [
+        0,
+        0,
+        0,
+        1,
+        2
+      ],
+      "effectBonus": [
+        0.05,
+        0.05,
+        0.06,
+        0.06,
+        0.08
+      ],
       "note": "시간형 기준값(재장전 시간) — effectiveDurationSeconds로 단축 적용"
     },
     {
       "id": "sonarRange",
       "label": "소나 거리",
       "maxLevel": 5,
-      "costCredits": [null, null, null, null, null],
-      "costRareParts": [null, null, null, null, null],
-      "effectBonus": [null, null, null, null, null],
-      "note": "기준값 파라미터 미존재 — 탐지 시스템 params 도입(C9, [COMBAT]) 시 연결"
+      "costCredits": [
+        100,
+        160,
+        240,
+        340,
+        460
+      ],
+      "costRareParts": [
+        0,
+        0,
+        0,
+        1,
+        2
+      ],
+      "effectBonus": [
+        0.05,
+        0.05,
+        0.06,
+        0.06,
+        0.08
+      ],
+      "note": "기준값 파라미터·소비자 미존재 — 탐지 시스템(C9 [COMBAT]) 도입 시 paramRef 연결 필요. 승인 배율만 확정"
     }
   ]
 }
