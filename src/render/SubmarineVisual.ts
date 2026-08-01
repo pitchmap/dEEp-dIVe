@@ -17,6 +17,7 @@
  */
 
 import * as THREE from 'three';
+import { TORPEDO_TUBE_ANCHOR } from '../world/torpedoTubeAnchor';
 
 const HULL_COLOR = 0x8a949b;
 const TIER_ACCENT_COLOR = 0x6d7a82;
@@ -28,7 +29,18 @@ const SUBMARINE_HALF_LENGTH = 2.8;
  * 파생 소켓은 앵커에서만 파생). 로컬 -Z = 선수 규약(core/conventions).
  * 선수 하부 어뢰관 군의 중앙 — 최종 에셋 교체 시 이 값만 갱신한다.
  */
-const TORPEDO_TUBE_ANCHOR_LOCAL = Object.freeze({ x: 0, y: -0.5, z: -2.6 });
+/**
+ * 발사관 앵커(로컬) — **공식 정본 `src/world/torpedoTubeAnchor.ts`에서 파생**한다.
+ * 렌더가 위치 숫자를 따로 소유하지 않는다 (스프린트 A 정규화: 구 렌더 값
+ * {0, -0.5, -2.6}은 정본 {0, 0, -2.8}과 달라 조준 시점과 탄도가 어긋났다).
+ * 이 값은 **시각적 부모**(모델 부착점)로만 쓰이며, 조준 카메라의 실제 위치·
+ * 방향은 composition root가 주입하는 소켓 rig가 결정한다.
+ */
+const TORPEDO_TUBE_ANCHOR_LOCAL = Object.freeze({
+  x: TORPEDO_TUBE_ANCHOR.localX,
+  y: TORPEDO_TUBE_ANCHOR.localY,
+  z: TORPEDO_TUBE_ANCHOR.localZ,
+});
 
 export type VisualTier = 1 | 2 | 3;
 

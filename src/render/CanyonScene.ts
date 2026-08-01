@@ -31,6 +31,7 @@ import type { MovementParams } from '../contracts/params';
 import type {
   CargoShipStateSource,
   SubmarinePoseSource,
+  TorpedoTubeSocketSource,
 } from '../contracts/systems';
 import { meshYawRadians } from '../core/conventions';
 import type { EventBus, Unsubscribe } from '../core/EventBus';
@@ -73,6 +74,9 @@ const WALL_COLOR = 0x59646c;
 /** 포즈 미주입 시 기본 수직 위치 — 스폰 관례(y=0, 순항 구간)와 동일 */
 const DEFAULT_SUBMARINE_Y = 0;
 
+/** 조준 카메라 lookAt 재사용 벡터 (프레임당 할당 방지) */
+const AIM_LOOK_TARGET = new THREE.Vector3();
+
 /**
  * 자기 선체 전용 렌더 레이어 (13차 결의 3) — 조준 카메라에서 **레이어
  * 마스크로만** 자기 선체를 제외한다. 객체 visible·material 전역 변경 금지:
@@ -110,7 +114,18 @@ export class CanyonScene implements ManagedScene {
   private poseSource: SubmarinePoseSource | null = null;
   private cargoShipSource: CargoShipStateSource | null = null;
   private torpedoSource: TorpedoStateSource | null = null;
+  /**
+   * ⚠ 미세각 소스는 더 이상 조준 카메라 계산에 쓰이지 않는다 — 각도는 공식
+   * 소켓 rig가 이미 반영한다(스프린트 A 정규화: 렌더 자체 각도 계산 금지).
+   * 주입은 QA 호환을 위해 받아만 두고 소비하지 않는다.
+   */
   private aimAngleSource: AimAngleSource | null = null;
+  /**
+   * 공식 발사관 소켓 rig (리드 `TorpedoTubeSocketSource`) — composition root가
+   * 게임플레이·렌더에 **같은 인스턴스**를 주입한다. 조준 카메라는 이
+   * 소켓의 월드 포즈만 소비하며 자체 앵커·오프셋·각도를 계산하지 않는다.
+   */
+  private torpedoTubeSocketSource: TorpedoTubeSocketSource | null = null;
   private cargoShip: CargoShipVisual | null = null;
   private xraySpike: XrayFloodingSpike | null = null;
 
@@ -298,8 +313,14 @@ export class CanyonScene implements ManagedScene {
    * 계산한 결과 각을 렌더가 소비만 한다 (렌더 독자 한계각·감도 금지).
    * 미주입 시 조준 카메라는 소켓 정면(미세각 0)을 본다.
    */
+  /** 공식 소켓 rig 주입 — composition root 1회 (조준 카메라 = 어뢰와 동일 출처) */
+  attachTorpedoTubeSocket(source: TorpedoTubeSocketSource): void {
+    this.torpedoTubeSocketSource = source;
+  }
+
   attachAimAngleSource(source: AimAngleSource): void {
     this.aimAngleSource = source;
+    void this.aimAngleSource;
   }
 
   /**
@@ -450,13 +471,27 @@ export class CanyonScene implements ManagedScene {
    */
   private updateAimCamera(): void {
     const camera = this.renderer.camera;
-    const socket = this.submarine.aimCameraSocket;
+    // 공식 소켓 rig(리드 TorpedoTubeSocketRig) — 위치·전방축을 그대로 쓴다.
+    // 미세각은 이미 rig가 반영한 값이며, 렌더는 각도를 계산하지 않는다
+    // (스프린트 A 정규화: 어뢰 spawn 소켓과 동일 rig = 십자선 = 탄도).
+    const socket = this.torpedoTubeSocketSource;
+    if (socket) {
+      const pose = socket.aimCameraSocket;
+      camera.position.set(pose.positionX, pose.positionY, pose.positionZ);
+      AIM_LOOK_TARGET.set(
+        pose.positionX + pose.forwardX,
+        pose.positionY + pose.forwardY,
+        pose.positionZ + pose.forwardZ,
+      );
+      camera.up.set(0, 1, 0);
+      camera.lookAt(AIM_LOOK_TARGET);
+      return;
+    }
+    // 소켓 미주입(QA 플래그 단독 검수) — 시각 부모만으로 근사 표시
+    const visualSocket = this.submarine.aimCameraSocket;
     this.submarine.root.updateMatrixWorld(true);
-    socket.getWorldPosition(camera.position);
-    socket.getWorldQuaternion(camera.quaternion);
-    // 소켓 로컬축 기준 미세각: yaw(로컬 Y, 양수=좌) → pitch(로컬 X, 양수=위)
-    camera.rotateY(this.aimAngleSource?.yawRadians ?? 0);
-    camera.rotateX(this.aimAngleSource?.pitchRadians ?? 0);
+    visualSocket.getWorldPosition(camera.position);
+    visualSocket.getWorldQuaternion(camera.quaternion);
   }
 
   /**
