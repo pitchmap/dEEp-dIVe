@@ -3,9 +3,12 @@
  *
  * 책임: 키 상태 추적뿐이다. 이동·심도 규칙은 각 시스템이 소유한다.
  *
- * 키 배치 (D+5 리뷰 스프린트 — 이동·충돌 개편):
+ * 키 배치 (5차 대회의 결의 4 — 키 스왑):
  *  - W/S: 전진·후진, A/D: 선회 (잠수함 방향 기준)
- *  - Shift/Ctrl: **누르는 동안 연속** 상승·하강 (유지 입력 — 층 단위 에지 아님)
+ *  - **Ctrl = 상승 / Shift = 하강** (누르는 동안 연속 — 근거: '긴급 동작
+ *    (잠항)에 최편의 키' 원리). **E = 상승 병행 키** — 창 모드에서 Ctrl+W
+ *    탭 닫힘 회피용. Keyboard Lock·안내 UI는 툴링 소유, 이 어댑터는
+ *    E를 Ctrl과 동일한 상승 명령으로만 처리한다.
  *
  * 안전 규칙 (조작 신뢰성):
  *  - OS 키 반복(repeat) 이벤트는 무시한다 — 유지 상태는 최초 keydown/keyup으로만
@@ -24,9 +27,9 @@ export interface MovementInput {
   readonly turnLeft: boolean;
   /** D — 우선회 (잠수함 방향 기준) */
   readonly turnRight: boolean;
-  /** Shift — 누르는 동안 연속 상승 */
+  /** Ctrl 또는 E — 누르는 동안 연속 상승 (결의 4: 키 스왑 + 병행 키) */
   readonly ascend: boolean;
-  /** Ctrl — 누르는 동안 연속 하강 */
+  /** Shift — 누르는 동안 연속 하강 (결의 4: 긴급 잠항 = 최편의 키) */
   readonly descend: boolean;
 }
 
@@ -44,6 +47,7 @@ const TRACKED_CODES = new Set([
   'KeyS',
   'KeyA',
   'KeyD',
+  'KeyE',
   'ShiftLeft',
   'ShiftRight',
   'ControlLeft',
@@ -109,11 +113,15 @@ export class KeyboardInput implements MovementInput {
   }
 
   get ascend(): boolean {
-    return this.heldCodes.has('ShiftLeft') || this.heldCodes.has('ShiftRight');
+    return (
+      this.heldCodes.has('ControlLeft') ||
+      this.heldCodes.has('ControlRight') ||
+      this.heldCodes.has('KeyE')
+    );
   }
 
   get descend(): boolean {
-    return this.heldCodes.has('ControlLeft') || this.heldCodes.has('ControlRight');
+    return this.heldCodes.has('ShiftLeft') || this.heldCodes.has('ShiftRight');
   }
 
   private readonly onKeyDown = (event: Event): void => {

@@ -27,7 +27,6 @@
 import type { CanyonLayout } from '../contracts/layout';
 import type { GameParams } from '../contracts/params';
 import type {
-  AimSystem,
   CargoShipStateSource,
   DepthSystem,
   SubmarinePoseSource,
@@ -37,8 +36,11 @@ import type { GameSystem, SystemContext } from '../core/GameSystem';
 import { STARTING_CANYON_LAYOUT } from '../world/startingCanyonLayout';
 import { CargoShipSystem, defaultCargoShipConfig } from './CargoShipSystem';
 import { CollisionWorld } from './collision/CollisionWorld';
+import { computeShipBoxPush } from './collision/shipHullBox';
 import { computeHullSpheres } from './collision/submarineHull';
 import { registerStartingAreaColliders } from './collision/startingArea';
+import { EconomySystem } from './economy/EconomySystem';
+import { EquipmentSystem } from './EquipmentSystem';
 import { KeyboardInput, type KeyEventSource, type VisibilitySource } from './KeyboardInput';
 import { LayeredDepthSystem } from './LayeredDepthSystem';
 import { MouseCombatInput } from './MouseCombatInput';
@@ -65,11 +67,17 @@ export class GameplaySystems implements GameSystem {
   readonly depth: DepthSystem;
   /**
    * 조준 공용 진입점 [INT-CORE-002 확정] — 마우스와 PC HUD 버튼이 모두
-   * 이 인스턴스의 beginAim/endAim/fireTorpedo를 호출한다 (배선은 composition root).
+   * 이 인스턴스를 호출한다 (배선은 composition root). 5차 결의 3에 따라
+   * **토글** 방식: 우클릭·HUD 조준 버튼 = toggleAim(), 비조준 발사 시도는
+   * aimRequiredCount로 안내 신호를 남긴다.
    */
-  readonly aim: AimSystem;
+  readonly aim: PeriscopeAimSystem;
   /** 어뢰 상태 — remaining·reloadRemainingSeconds(UI), torpedoes(렌더 항적) */
   readonly torpedo: StraightRunTorpedoSystem;
+  /** 장비 4종 (기본/고속/중어뢰/디코이) — 슬롯·업그레이드 배율 주입점 */
+  readonly equipment: EquipmentSystem;
+  /** 경제 — 드롭·픽업·크레딧·희귀 부품·경비 요청·출항 정산 */
+  readonly economy: EconomySystem;
   /** 전투 표적 등록소 — 명중 판정·리드샷 보조선이 같은 목록을 읽는다 */
   readonly targets: TargetRegistry;
   /**
@@ -88,8 +96,6 @@ export class GameplaySystems implements GameSystem {
 
   private readonly subscribeToParamsReload: ParamsReloadSubscribe | null;
   private unsubscribeParamsReload: (() => void) | null = null;
-  /** 우클릭 홀드의 에지 검출용 직전 상태 */
-  private previousAimHeld = false;
 
   constructor(
     bus: EventBus,
@@ -115,15 +121,23 @@ export class GameplaySystems implements GameSystem {
       ...defaultCargoShipConfig(),
       surfaceY: layout.seaSurfaceY, // 해수면은 공유 레이아웃 값 하나만 사용
     });
+    this.equipment = new EquipmentSystem();
     this.torpedo = new StraightRunTorpedoSystem(
       bus,
       params.combat,
       this.player,
       this.collision,
       this.targets,
+      this.equipment,
     );
     this.aim = new PeriscopeAimSystem(bus, this.depth, this.torpedo);
+    this.economy = new EconomySystem(this.targets, this.player, () => this.ships);
     this.subscribeToParamsReload = subscribeToParamsReload ?? null;
+  }
+
+  /** 세력 태그가 붙은 함선 목록 — 경제 반응·잠수함-함선 충돌이 순회한다 */
+  get ships(): readonly CargoShipSystem[] {
+    return [this.cargoShip];
   }
 
   /**
@@ -177,32 +191,75 @@ export class GameplaySystems implements GameSystem {
     const push = this.collision.resolveHull(hull);
     if (push) this.player.applyExternalOffset(push.x, push.y, push.z);
 
-    // 3) 보정된 최종 높이로 심도 구간 판정 (depthChanged 발행)
-    this.depth.update(deltaSeconds);
-
-    // 3.5) 화물선 항행·침몰 진행 — 어뢰 판정(7)보다 먼저 최신 위치로 갱신
+    // 3) 화물선 항행·침몰 진행 — 함선 충돌·어뢰 판정보다 먼저 최신 위치로
     this.cargoShip.update(deltaSeconds);
 
-    // 4) 마우스 조준 의도 → AimSystem 공용 진입점 (에지 단위 — HUD 버튼과 동일 경로)
-    const aimHeld = this.mouse.aimHeld;
-    if (aimHeld && !this.previousAimHeld) this.aim.beginAim();
-    else if (!aimHeld && this.previousAimHeld) this.aim.endAim();
-    this.previousAimHeld = aimHeld;
+    // 3.5) 잠수함-함선 충돌 — 통과 방지·밀어냄만, 피해 없음 (5차 결의 1).
+    //      어뢰 명중 판정과 동일한 박스 근사(hullBox)를 공유한다.
+    this.resolveShipCollisions();
 
-    // 5) 조준 유지 조건 감시 (잠망경 심도 이탈 시 자동 해제)
+    // 4) 보정된 최종 높이로 심도 구간 판정 (depthChanged 발행)
+    this.depth.update(deltaSeconds);
+
+    // 5) 우클릭 토글 → 조준경 전환 (5차 결의 3 — HUD 조준 버튼과 동일 경로)
+    const toggles = this.mouse.consumeAimToggleClicks();
+    for (let i = 0; i < toggles; i += 1) this.aim.toggleAim();
+
+    // 6) 조준 유지 조건 감시 (잠망경 심도 이탈 시 자동 해제)
     this.aim.update(deltaSeconds);
 
-    // 6) 좌클릭 발사 요청 — 클릭 1회 = fireTorpedo 1회 (성공 여부는 단일 fire 판정)
+    // 7) 좌클릭 발사 — **조준경 상태에서만** 발사 경로로 전달 (결의 2).
+    //    비조준 좌클릭은 카메라 전용이므로 여기서 버린다 (fire 시도 아님).
     const fireClicks = this.mouse.consumeFireClicks();
-    for (let i = 0; i < fireClicks; i += 1) this.aim.fireTorpedo();
+    if (this.aim.aiming) {
+      for (let i = 0; i < fireClicks; i += 1) this.aim.fireTorpedo();
+    }
 
-    // 7) 어뢰 주행·명중·사거리 판정
+    // 8) 어뢰 주행·명중·사거리 판정 + 장비(디코이 수명·쿨다운)
     this.torpedo.update(deltaSeconds);
+    this.equipment.update(deltaSeconds);
+
+    // 9) 경제 — 격침·파괴 반응(드롭 생성·경비 요청) 및 접근 자동 회수
+    this.economy.update(deltaSeconds);
+  }
+
+  /** 함선 박스 근사에 대한 잠수함 밀어냄 (함선은 밀리지 않음) — 결의 1 */
+  private resolveShipCollisions(): void {
+    for (let pass = 0; pass < 2; pass += 1) {
+      let pushed = false;
+      const spheres = computeHullSpheres(
+        this.player.positionX,
+        this.player.positionY,
+        this.player.positionZ,
+        this.player.headingRadians,
+      );
+      for (const ship of this.ships) {
+        if (ship.removed) continue;
+        for (const sphere of spheres) {
+          const push = computeShipBoxPush(
+            ship.hullBox,
+            ship,
+            sphere.x,
+            sphere.y,
+            sphere.z,
+            sphere.radius,
+          );
+          if (push) {
+            this.player.applyExternalOffset(push.x, push.y, push.z);
+            pushed = true;
+            break; // 위치가 바뀌었으므로 구를 다시 계산 (다음 패스)
+          }
+        }
+        if (pushed) break;
+      }
+      if (!pushed) break;
+    }
   }
 
   dispose(): void {
     this.unsubscribeParamsReload?.();
     this.unsubscribeParamsReload = null;
+    this.economy.dispose(); // 해저 재화 등록·드롭 정리
     this.cargoShip.dispose(); // 표적 등록·참조 정리
     this.detachInput();
   }
