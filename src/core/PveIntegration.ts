@@ -792,9 +792,18 @@ export function composeSalvageSpawnPlan(
   return plan;
 }
 
-/** 게임플레이 스폰 진입점의 최소 단면 — EconomySystem.spawnSalvage가 충족 */
+/**
+ * 게임플레이 스폰 진입점의 최소 단면 — `GameplaySystems.spawnSalvageFromPlan`
+ * (내부적으로 `EconomySystem.spawnSalvageFromPlan`)이 충족한다.
+ *
+ * **결합 entry를 통째로** 넘긴다. 좌표만 넘기던 구 시그니처
+ * (`spawnSalvage(kind, x, y, z, rarePartId)`)는 `spawnId`와 확정 보상
+ * (`credits`)을 잃어, 게임플레이 측의 spawnId 기반 중복·회수 후 재생성
+ * 거부가 아예 작동하지 못했다. 스포너의 출항당 1회 가드는 그대로 두고
+ * 게임플레이 가드와 **이중 방어**가 된다 (INT-GAME-011 ③).
+ */
 export interface SalvageSpawnAdapter {
-  spawnSalvage(kind: SalvageKind, x: number, y: number, z: number, rarePartId: string | null): unknown;
+  spawnSalvageFromPlan(entry: SalvageSpawnPlanEntry): { readonly status: string };
 }
 
 export type SalvageSpawnReport =
@@ -855,16 +864,13 @@ export class SortieSalvageSpawner {
       return { status: 'rejected', message: error instanceof Error ? error.message : String(error) };
     }
 
+    // 결합 entry 전체를 그대로 전달한다 — spawnId·확정 보상이 유실되면
+    // 게임플레이 측 중복 거부가 성립하지 않는다.
+    let spawnedCount = 0;
     for (const entry of plan) {
-      this.adapter.spawnSalvage(
-        entry.kind,
-        entry.worldPosition.x,
-        entry.worldPosition.y,
-        entry.worldPosition.z,
-        entry.rarePartId,
-      );
+      if (this.adapter.spawnSalvageFromPlan(entry).status === 'spawned') spawnedCount += 1;
     }
     this.spawnedThisSortie = true;
-    return { status: 'spawned', count: plan.length };
+    return { status: 'spawned', count: spawnedCount };
   }
 }

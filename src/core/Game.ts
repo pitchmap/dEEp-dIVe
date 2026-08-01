@@ -366,9 +366,10 @@ export class Game {
     //     게임플레이 spawn 어댑터를 호출한다. 좌표는 여기서 만들지 않는다 —
     //     그래픽스 배치 구현체 도착 시 attachPlacementSource로 연결한다
     //     (그 전까지 명시적 unwired: 출항 시 경고 로그, salvage 미생성).
+    //     결합 entry는 **통째로** 게임플레이 진입점에 넘긴다 — spawnId가
+    //     넘어와야 게임플레이 측 중복·회수 후 재생성 거부가 작동한다.
     this.salvageSpawner = new SortieSalvageSpawner(official.economy, {
-      spawnSalvage: (kind, x, y, z, rarePartId) =>
-        gameplay.economy.spawnSalvage(kind, x, y, z, rarePartId),
+      spawnSalvageFromPlan: (entry) => gameplay.spawnSalvageFromPlan(entry),
     });
     //     월드·그래픽스 배치 연결 (INT-RENDER-010): 좌표 전용 소스 —
     //     보상(credits·rareParts)은 economy params에만 있고 배치에는 없다.

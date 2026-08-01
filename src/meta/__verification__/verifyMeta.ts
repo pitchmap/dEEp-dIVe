@@ -884,9 +884,10 @@ export function runMetaVerification(): VerificationResult[] {
     {
       const spawned: string[] = [];
       const spawner = new SortieSalvageSpawner(fixtureEconomy, {
-        spawnSalvage: (kind) => {
-          spawned.push(kind);
-          return null;
+        // 결합 entry 전체 수신 — spawnId 유실 여부를 여기서 검사한다
+        spawnSalvageFromPlan: (entry) => {
+          spawned.push(entry.spawnId);
+          return { status: 'spawned' };
         },
       });
       const unwired = spawner.beginSortie();
@@ -908,6 +909,12 @@ export function runMetaVerification(): VerificationResult[] {
         `first=${JSON.stringify(first)}, again=${again.status}, spawned=${spawned.length}`,
       );
 
+      check(
+        'salvage 스포너: spawnId 유실 없음 — 결합 entry가 그대로 전달된다',
+        spawned.join(',') === 's-a,s-b',
+        `spawnIds=${spawned.join(',')}`,
+      );
+
       const nextSortie = spawner.beginSortie();
       check(
         'salvage 스포너: 새 출항 = 재생성 (MVP 루프 규칙)',
@@ -918,9 +925,10 @@ export function runMetaVerification(): VerificationResult[] {
     {
       const spawned: string[] = [];
       const spawner = new SortieSalvageSpawner(fixtureEconomy, {
-        spawnSalvage: (kind) => {
-          spawned.push(kind);
-          return null;
+        // 결합 entry 전체 수신 — spawnId 유실 여부를 여기서 검사한다
+        spawnSalvageFromPlan: (entry) => {
+          spawned.push(entry.spawnId);
+          return { status: 'spawned' };
         },
       });
       spawner.attachPlacementSource({ placements: [fixturePlacements.placements[0]!] });
