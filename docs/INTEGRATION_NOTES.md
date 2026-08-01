@@ -56,6 +56,29 @@
 
 ## 제안 목록
 
+### INT-CORE-007 — 상위 메타 루프·업그레이드 배율 레이어 구현과 조립
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (PvE 1단계 — INT-CORE-006 계약의 리드 파트 구현) |
+| 대상 시스템 | `src/meta/`(신규 — MetaState·MetaLoop·upgradeMath·settlement·provisionalEconomy·__verification__), `src/core/Game.ts`(메타 루프 등록·세션 포트 어댑터·부트 전환 이동) |
+| 필요한 변경 | ① 2계층 상태 머신 상위(BASE→SORTIE_PREP→SORTIE→DEBRIEF, 허용표 밖 throw) — 하위 무수정 포장, 통신 3종 제한 ② 정산: 파괴 시 크레딧 손실(임시 50%)·희귀 즉시 확정·저장 요청 발행 ③ 업그레이드 합연산 순수 함수(effectiveValue·effectiveDurationSeconds·mergeModifiers — params 불변) ④ Game 조립: metaLoop 최선두 등록, BOOT→DEPARTURE 전환을 SortieSessionPort 어댑터로 이동(세션 시작이 상위 루프 경유), 기지 화면 도입 전 임시 자동 출항 ⑤ 결정적 검증 19항목(`node src/meta/__verification__/run.mjs`) |
+| 변경 이유 | PvE 소회의 결의 2·4의 리드 담당 구현. 각 파트(경제·저장·기지 UI)가 붙을 골격 선행 제공 |
+| 관련 게이트 | PvE D+4(메타 루프에서 세션 시작·정산 전달)·D+9(성장 루프 완주) Exit Criteria |
+| 영향을 받는 파일 | src/meta/* (신규), src/core/Game.ts |
+| 하위 호환 여부 | 하위 세션 코드 무수정 — 기존 결정적 검증 75/75 유지. 부트 전환 경로만 first render → 포트 어댑터로 이동 (동작 동일) |
+| 개발 리드 결정 | 승인 (자기 소유 영역). **R7 임시값 1건**: 파괴 손실률 0.5 [30~70%] — `src/meta/provisionalEconomy.ts` 한 곳, 기획 경제 수치표(D+3 병목) 도착 시 `params/economy.json` 이관·파일 삭제 |
+| 적용 커밋 | (본 브랜치 [LOOP] 구현 커밋) |
+
+**각 파트 적용 요청 (INT-CORE-006·007 소비):**
+- **게임플레이**: ① `src/systems/economy/` — Faction 태그 부여(화물선 hostile부터), 드롭 테이블, `lootDropped` 발행, 중립 공격 판정 → `guardShipRequested` 발행 ② 세션 리셋 API(재출항 시 전투 세션 초기화 — SortieSessionPort 어댑터가 호출할 진입점) 제공 ③ 세션 종료 판정(파괴·귀환 지점 도달) 시 `MetaLoop.settleSortie` 호출 경로는 리드와 조립 협의 ④ 보스 약점 판정 →`bossWeakPointChanged` 발행 (판정 소유)
+- **빌드·툴**: ① `src/meta/save/` — SaveSystem(스키마 버전+마이그레이션 틀+이중 슬롯), `saveRequested` 구독, 저장 데이터는 MetaLoop.wallet 등 스냅숏 주입으로 수신 ② 업그레이드 시뮬레이터 — **`src/meta/upgradeMath.ts` 동일 함수 사용**(계산 복제 금지) ③ 스코프 가드 빌드 경고(upgrades.json 8항목↑) ④ HUD에 중도 귀환 버튼 → `returnToBaseRequested` 발행
+- **그래픽스**: 기지 화면(`metaStateChanged` 구독 — BASE에서 표시), 보스 연출은 `bossPhaseChanged`·`bossWeakPointChanged` 구독만(판정 계산 금지), 보스 분절 애니 1주차 스파이크(P13)
+- **기획**: `params/economy.json`(손실률 50% [30~70]·드롭량)·`params/upgrades.json`(7항목 단계·비용) 작성 — PvE D+3 절대 마감(병목), [ECON] 태그
+
+**PROJECT_STATE.md 갱신용 사실 목록 (통합 담당 최종 갱신 — 리드 기록):**
+① 코드 트랙이 PvE 1단계 착수 상태로 진입 — 상위 메타 루프(src/meta)·PvE 계약(contracts/meta.ts) 반영 ② '아직 없는 것' 목록에 PvE 항목 추가 필요: 기지 화면·저장·업그레이드 화면·economy·보스 ③ 조작표는 유효하나 상단 배너의 "PvE 전환 코드 미반영" 문구는 본 브랜치 병합 시 갱신 대상 ④ 구 세션형 범위 설명(§1 '한눈에 보기'의 세션형 정의)은 회의록 10 결의 1·P1로 대체
+
 ### INT-CORE-006 — PvE 전환 선행 계약 (메타 루프·경제·업그레이드·보스)
 
 | 필드 | 내용 |
