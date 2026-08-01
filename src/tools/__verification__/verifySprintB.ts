@@ -81,6 +81,20 @@ export interface SprintBRunInput {
   newGuardAiSites: readonly string[];
   /** 고가치 수송선 배율을 소비하는 production 지점 */
   highValueConsumers: readonly string[];
+  /**
+   * 경비 스폰 경로의 조립 배선 관측 (B4-port).
+   * 두 지점 모두 production composition에서 실제로 연결돼야 개체가 생긴다.
+   * 값을 넘기지 않으면(undefined) 이전처럼 `blocked`로 남는다 —
+   * **관측 없이 통과로 바꾸지 않는다**.
+   */
+  guardSpawnWiring?: {
+    /** `attachLocationStrategy(...)` 호출 지점 (인자가 null이면 미연결) */
+    readonly locationStrategySites: readonly string[];
+    /** `attachFactory(createProductionDestroyerAIFactory(...))` 호출 지점 */
+    readonly aiFactorySites: readonly string[];
+    /** 이동 포트 팩토리에 `create: () => null` 더미가 남아 있는 지점 */
+    readonly nullMotionFactorySites: readonly string[];
+  };
 }
 
 /** B5가 막혔을 때의 고정 사유 코드 — 보고서·CI가 같은 문자열을 본다 */
@@ -345,12 +359,32 @@ export function runSprintBVerification(input: SprintBRunInput): BCheckResult[] {
     '중복 방지 원장(GuardIncidentLedger)과 경계 로직은 리드 소유이며 verify:meta 46항목이 결정적으로 검증한다 — 이 러너는 중복 검증하지 않는다. 실제 사건 발생 경로는 B4-emit(게임플레이) 대기',
   );
 
-  note(
-    'B4-port',
-    'B4 GuardSpawnPort 연결 · 실제 guard entity 생성',
-    'blocked',
-    `스폰 경로는 배선돼 있으나 두 지점이 미연결이라 실제 개체가 생기지 않는다: ① 위치 전략(GuardSpawnLocationStrategy) — 게임플레이·월드 소유, 미연결 시 noSpawnLocation(임의 좌표 생성 금지) ② AI 팩토리 — ${B5_BLOCKED_CODE}. 둘 중 하나라도 없으면 spawnGuardShip은 개체를 만들지 않는다`,
-  );
+  {
+    // B4-port는 '조립 배선이 실제로 존재하는가'만 정적으로 관측한다.
+    // 실제 개체 생성·이동은 브라우저 실측 항목이며 여기서 통과로 만들지 않는다.
+    const wiring = input.guardSpawnWiring;
+    if (!wiring) {
+      note(
+        'B4-port',
+        'B4 GuardSpawnPort 연결 · 실제 guard entity 생성',
+        'blocked',
+        `스폰 경로는 배선돼 있으나 두 지점이 미연결이라 실제 개체가 생기지 않는다: ① 위치 전략(GuardSpawnLocationStrategy) — 게임플레이·월드 소유, 미연결 시 noSpawnLocation(임의 좌표 생성 금지) ② AI 팩토리 — ${B5_BLOCKED_CODE}. 둘 중 하나라도 없으면 spawnGuardShip은 개체를 만들지 않는다`,
+      );
+    } else {
+      const hasLocation = wiring.locationStrategySites.length > 0;
+      const hasFactory = wiring.aiFactorySites.length > 0;
+      const hasNullMotion = wiring.nullMotionFactorySites.length > 0;
+      const wired = hasLocation && hasFactory && !hasNullMotion;
+      note(
+        'B4-port',
+        'B4 GuardSpawnPort 조립 배선 — 위치 전략 · production AI 팩토리 연결',
+        wired ? 'pass' : 'blocked',
+        wired
+          ? `위치 전략 ${wiring.locationStrategySites.join(', ')} · AI 팩토리 ${wiring.aiFactorySites.join(', ')} · null 이동 포트 더미 0건 (실제 개체 생성·이동은 브라우저 실측 항목)`
+          : `미연결: 위치 전략=${hasLocation} · AI 팩토리=${hasFactory} · null 이동 포트 잔존=${wiring.nullMotionFactorySites.join(', ') || '없음'}`,
+      );
+    }
+  }
 
   /* ── B5: 경비함 = 기존 구축함 AI 재사용 ─────────────────── */
 
