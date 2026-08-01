@@ -25,7 +25,9 @@ import type {
   CurrencyBundle,
   MetaStateId,
   SortieReport,
+  PurchaseCost,
   SortieSessionPort,
+  WalletTransactionPort,
 } from '../contracts/meta';
 import type { EventBus, Unsubscribe } from '../core/EventBus';
 import type { GameSystem, SystemContext } from '../core/GameSystem';
@@ -37,7 +39,7 @@ export interface MetaLoopOptions {
   creditLossOnDestroyedRatio: number;
 }
 
-export class MetaLoop implements GameSystem {
+export class MetaLoop implements GameSystem, WalletTransactionPort {
   readonly id = 'metaLoop';
 
   private readonly bus: EventBus;
@@ -118,6 +120,30 @@ export class MetaLoop implements GameSystem {
     this.walletRareParts = Math.floor(wallet.rareParts);
   }
 
+  /* ── WalletTransactionPort (구매 트랜잭션 전용 — 지갑 소유자로서 구현) ── */
+
+  /** 트랜잭션 스냅샷용 — wallet getter와 동일한 복사본 */
+  snapshotWallet(): CurrencyBundle {
+    return this.wallet;
+  }
+
+  /**
+   * 구매 비용 차감 — 잔액 부족·유효하지 않은 비용·기지 밖이면 false·무변경
+   * (throw 금지 계약). 구매는 기지(BASE)에서만 일어난다 — 출항 중 차감은
+   * 출항 집계·정산과 충돌하므로 거부한다.
+   */
+  spendFromWallet(cost: PurchaseCost): boolean {
+    if (this.state !== 'BASE') return false;
+    const credits = Math.floor(cost.credits);
+    const rareParts = Math.floor(cost.rareParts);
+    if (!Number.isFinite(credits) || !Number.isFinite(rareParts)) return false;
+    if (credits < 0 || rareParts < 0) return false;
+    if (this.walletCredits < credits || this.walletRareParts < rareParts) return false;
+    this.walletCredits -= credits;
+    this.walletRareParts -= rareParts;
+    return true;
+  }
+
   /** 기지 → 출항 준비 */
   beginSortiePrep(): void {
     this.transition('SORTIE_PREP');
@@ -133,6 +159,11 @@ export class MetaLoop implements GameSystem {
    * 기지에서 출항하면 기존 전투 세션이 초기화되는 규칙의 진입점.
    */
   launchSortie(): void {
+    // 출항 확정 직전 저장 [13차 결의 4 — 저장 시점 5종] — 아직 SORTIE_PREP
+    // 상태에서 발행한다 (허용표 밖 상태면 발행 없이 아래 transition이 던진다)
+    if (this.state === 'SORTIE_PREP') {
+      this.bus.emit('saveRequested', { cause: 'sortieLaunch' });
+    }
     this.transition('SORTIE');
     this.sortieCount += 1;
     this.tallyCredits = 0;
