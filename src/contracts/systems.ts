@@ -130,6 +130,12 @@ export interface TorpedoSystem extends Updatable {
 export interface CargoShipStateSource {
   /** 표적 식별자 — torpedoHit 이벤트의 targetId와 동일 체계 */
   readonly id: number;
+  /**
+   * 세력 태그 (contracts/meta.ts FactionId — 6차 결의 3 적대/중립 구분).
+   * 미지정은 hostile로 간주한다(현 MVP 화물선의 과도기 호환) —
+   * 게임플레이 Faction 태그 작업 완료 시 필수 필드로 승격 예정 (INT-CORE-006).
+   */
+  readonly faction?: import('./meta').FactionId;
   readonly positionX: number;
   /** 수면 흘수선 기준 판정 위치 — 침몰 연출 변위(하강)는 렌더가 sinkProgress로 매핑 */
   readonly positionY: number;

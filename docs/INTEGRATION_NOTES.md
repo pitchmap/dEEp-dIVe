@@ -56,6 +56,20 @@
 
 ## 제안 목록
 
+### INT-CORE-006 — PvE 전환 선행 계약 (메타 루프·경제·업그레이드·보스)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (6차 대회의 `meetings/10`·개발팀 소회의 `meetings/11` 결의의 계약 번역 — PvE 1단계 착수 선행분) |
+| 대상 시스템 | `src/contracts/meta.ts`(신규), `src/contracts/events.ts`(이벤트 9종 추가), `src/contracts/systems.ts`(CargoShipStateSource.faction 선택 필드) |
+| 필요한 변경 | ① 메타 타입: `MetaStateId`(BASE/SORTIE_PREP/SORTIE/DEBRIEF)·`SortieOutcome`(returned/aborted/destroyed)·`SortieReport`·`SortieSettlement`(earned/lost/net/희귀 확정)·`SortieSessionPort`(start/requestReturnToBase — 계층 통신 3종 중 상위→하위) ② 경제: `FactionId`(hostile/neutral/patrol 태그)·`LootSource`·`CurrencyBundle`(크레딧·희귀 부품 이원화) ③ 업그레이드: `UpgradeStatId` 7항목 상한·`UpgradeModifiers`(합연산 — 최종값 = 기준값 × (1+보정 합)) ④ 장비: `EquipmentId` 4종 상한·`EquipmentLoadout` ⑤ 보스: `BossPhase`(1/2/3) ⑥ 이벤트: `metaStateChanged`·`sortieStarted`·`sortieEnded`·`returnToBaseRequested`·`lootDropped`·`guardShipRequested`·`saveRequested`(settlement/rarePart)·`bossPhaseChanged`·`bossWeakPointChanged` |
+| 변경 이유 | PvE 전환 작업(게임플레이 Faction·드롭, 툴링 저장·시뮬레이터, 렌더 기지·보스 연출)이 전부 이 계약에 의존 — 각 창이 서로 다른 형태로 임시 정의하기 전에 선행 확정 필요 |
+| 관련 게이트 | PvE 트랙 전체 (D+9 성장 루프·D+16 완주 Exit Criteria) |
+| 영향을 받는 파일 | 계약 3파일 + INTERFACES.md §1·§2c. 소비 측: src/meta(리드), src/systems/economy(게임플레이), src/meta/save(툴링), 렌더 기지·보스 연출 |
+| 하위 호환 여부 | 깨짐 없음 — 전부 추가. `faction`은 선택 필드(미지정 = hostile 과도기 호환, 게임플레이 태그 작업 후 필수 승격 예정) |
+| 개발 리드 결정 | 승인 — 신 스코프 가드(업그레이드 7항목·장비 4종)를 유니언 타입 상한으로 기계 강제. 계층 통신 3종 제한을 포트+이벤트로 고정. 저장 이벤트는 `saveRequested` 단일(cause 구분)로 통합 |
+| 적용 커밋 | (본 브랜치 선행 계약 커밋) |
+
 ### INT-CORE-005 — D+10 통합 배선·검증 핸들 (통합 담당 기록)
 
 | 필드 | 내용 |
