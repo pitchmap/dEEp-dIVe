@@ -163,6 +163,81 @@
 체인의 현재 도달점: 중립 유효 피격 → `neutralShipHit` → 원장 중복 방지 → `guardShipRequested` → 위치 전략 **해결** →
 `GuardShipAdapter.spawn()` → **`spawnFailed`(AI 팩토리 미연결)**. 팩토리만 연결되면 같은 체인이 실제 개체를
 만든다는 것을 검증에서 확인했다(초기 표적=공격자·세력 patrol·중복 요청 0 — 최소 AI 더블 사용, production 코드 아님).
+### INT-RENDER-011 — [FACTION][RENDER] 스프린트 B 선행개발 렌더: 식별 태그·세력 외형·경비 방향·호위 표현
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스 (스프린트 B 선행개발 — 기준 `85ec32b`/A tip `8f40117`, 리드 계약 `afd5c71`·최종 tip `1378834` 병합) |
+| 대상 시스템 | `src/render/*`(신규 4 + CargoShipVisual 변형), `src/core/GuardShipAdapter.ts`(핸들 1필드), `src/core/Game.ts`(스폰 결과 배선), `src/meta/__verification__/run.mjs`(B5 가드레일 허용목록) |
+| 관련 게이트 | B1·B2·B5·B6 표현 (판정·스폰은 게임플레이·리드 소유) |
+| 하위 호환 여부 | 계약 파일(`src/contracts/*`) 무수정. 소스 미주입 시 전부 미표시 — A 경로 영향 없음 |
+| 개발 리드 결정 | **확인 대기** — ⚠ 항목 2건 |
+| 적용 커밋 | (이 브랜치 스프린트 B 렌더 커밋) |
+
+**소비 계약 (판정·추측 없음).** 식별 태그는 `ShipIdentificationSource`/
+`ShipIdentificationView`만, 세력 외형은 게임플레이가 준 `FactionId`만,
+호위 표현은 `HighValueTransportView`·`EscortBinding`만 소비한다. 모델·메시·
+클래스 이름으로 세력을 추측하는 경로는 없고, 보상 판정·중립 공격 이벤트
+생성·경비함 스폰 실행도 하지 않는다. 미식별 상태에서는 `view.faction`을
+읽지 않으며 라벨·색·기호 모두 '미식별' 하나로 고정한다.
+
+**B1 세력 외형** (`render/factionVisuals.ts` + `CargoShipVisual` 변형):
+적대=각진 무장 상부구조·포탑 2·삼각 마크·경고등 점멸 / 중립=매끈한 화물
+적재 실루엣·무장 0·사각 마크·상시 백색등 / 경비=저현 전투 갑판·포탑 1·
+마름모 마크·청색 점멸. **색 이전에 실루엣·마크 형태·등화 거동으로 구분**
+되며 원거리·저해상도에서도 실루엣 차이가 남는다. 변형 선택은
+`state.faction` 변화에만 반응한다.
+
+**B2 식별 태그** (`render/IdentificationTags.ts`): 상태 4종을 기호(◇▲■◆)+
+문구+거리+조준 가부로 표시한다. `tagDisplayable=false`면 숨김,
+`isAlive=false`면 제거, `isTargetable=false`면 '조준 불가' 표기.
+십자선 중심 보호 반경 안으로 들어오면 아래로 뒤집고, 겹치면 세로 간격을
+확보한다. 기존 조준 마스크·십자선·거리 눈금은 무변경(z-index 31 별도 층).
+
+**B7 노출 신호**: `IdentificationExposureSink.onTagExposure({entityId,
+identificationTagVisible, factionRevealed, firstShownAtMs})` — 태그가 처음
+표시된 시점과 세력 정보 실노출 여부만 알린다. **결과 분류·오인 사격 판정은
+하지 않는다**(툴링 소유). 툴링은 이 싱크를 `attachIdentificationSource`의
+두 번째 인자로 주입하면 되고, `opportunityId` 연결은 툴링이 entityId·시각을
+키로 수행한다.
+
+**B5 경비 방향 표시** (`render/GuardDirectionIndicator.ts`): **실제 스폰
+결과만** 가리킨다 — 요청 이벤트(`guardShipRequested`)의 사건 지점은 경비함
+위치가 아니므로 마커 근거로 쓰지 않는다. 화면 밖이면 가장자리 방향(화살표
+회전 + 거리 문구), 화면 안이면 해제(0.25s 체류 조건 — 장면 전환 프레임
+오판 방지), 6초 후 자동 소멸. 기지 상태에서는 억제한다. 시간 정지·컷신·
+탐지 게이지·경보 없음.
+
+**B6 호위 표현** (`render/ConvoyVisuals.ts`): 고가치 수송선 ◈ 배지 + 호위
+⚔ 배지 + **EscortBinding 기반 점선 결속선**(거리 추측 아님). 화면 좌표는
+식별 read model의 entityId 조인으로만 얻고, `rewardMultiplierRef`는 참조
+키이므로 **보상 숫자를 노출하지 않는다**.
+
+**⚠ 조립부 최소 변경 2건 (리드 확인 요청).**
+1. `GuardShipHandle.spawnPosition` 추가 (`src/core/GuardShipAdapter.ts`) —
+   기존 핸들에 위치가 없어 방향 마커가 실재하는 경비함을 가리킬 수 없었다.
+   코디네이터가 이미 `location`을 갖고 있어 전달만 한다(판정 변화 없음).
+   `Game.ts`는 `attachSpawnListener`로 실제 스폰 좌표만 렌더에 넘긴다 —
+   **스폰이 차단된 동안 목록은 비어 있고 마커도 뜨지 않는다.**
+2. `src/meta/__verification__/run.mjs` B5 가드레일 허용목록에
+   `src/render/GuardDirectionIndicator.ts` 추가 — 파일명이 `/guard/i`에
+   걸리는 **렌더 오버레이**이며 AI 판단 로직이 없다. 가드레일을 피하려고
+   파일명을 바꾸지 않고, AI 어휘 검사 대상에 이 파일을 **포함**시켜 검사가
+   계속 감시하도록 했다 (77/77 통과).
+
+**검증 구분 (작업 지시 §12).**
+- **production 실동작**: B1 세력 변형이 실제 화물선 상태(`faction:'hostile'`)
+  로 선택됨, B 오버레이는 소스 미구현·스폰 차단으로 **표시 0건**(가짜 데이터
+  없음), A 회귀 없음(기지 UI 7종·salvage 3개·재화 HUD·조준경).
+- **UI 단위 검증(fixture `?bdemo=1`)**: 태그 4종·죽은 표적 제거·조준 불가
+  표기·경비 방향 마커(화면 밖→가장자리, 화면 안→해제)·호위 결속선·보상
+  숫자 미노출. **production 통과가 아니다** — 게임플레이 B 판정 구현 후
+  재검증이 필요하다.
+
+**게임플레이 연결 지침**: `ShipIdentificationSource` 구현 후
+`scene.attachIdentificationSource(source, sink?)` 1줄, B6는
+`scene.attachConvoySource(source)` 1줄. 경비 스폰은 위치 전략·AI 팩토리가
+연결되면 마커가 **코드 변경 없이** 동작한다.
 
 ### INT-CORE-012 — 스프린트 B 선행 계약: Faction 정본·식별 read model·중립 유효 피격·경비함 스폰
 
