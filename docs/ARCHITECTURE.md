@@ -287,6 +287,27 @@ settlement·rarePart·sortieLaunch) + 트랜잭션 직접 저장 2종(구매·�
 게임플레이의 localStorage 직접 접근 / UI의 params 직접 변경 / any 캐스팅
 계약 우회 / 전역 싱글턴 추가.
 
+### production 기지 경제 조립 (INT-CORE-010 — 스프린트 A 마감)
+
+```
+[UI — 그래픽스]                    [조립 — PveIntegration/Game]        [판정·상태]
+EconomyHud ─┐                      createMetaUiPorts ── BaseScreenPort  MetaLoop(실지갑·집계)
+SortiePrep ─┴─ 포트 소비만  ──────▶  ├ purchaseUpgrade → PurchaseTransaction → UpgradePurchaseSystem(판정)
+ControlsHud 출항 버튼 ────────────▶  ├ equip/replace/unequip → EquipmentTransaction → EquipmentJudgeAdapter → EquipmentSystem
+                                    └ confirmDeparture → DepartureCommand
+                                          모든 저장 = CountingSavePort(계측) → SaveBridge.writeSnapshot → SaveStore
+```
+
+- **단계의 단일 저장소** = `UpgradePurchaseSystem.levelSnapshot` — 저장·UI·
+  유효 파라미터가 전부 여기서 파생. `UpgradeState`는 파생 뷰(보정·외형 단계)로
+  구매 확정 후에만 동기화된다.
+- 경제 데이터 미확정(공식 params null)은 `economyDataUnavailable`로
+  **트랜잭션 진입 전 차단** — 상태·저장 0회, null→0 변환·provisional 대입 금지.
+- QA 데모(`econUiQaDemo`)는 `?econdemo` 플래그 전용 — production composition
+  (Game·PveIntegration)에 포함되지 않는다 (verify:meta 정적 검사).
+- 저장 책임 표는 INTERFACES §2d — 한 사용자 명령 = SavePort 최대 1회,
+  `CountingSavePort.callCount`로 계측 가능.
+
 ## 게임 상태 전환과 장면 전환의 분리
 
 - **게임 상태(국면)** — `GameStateMachine`이 소유. 전환은 허용표 검증 후

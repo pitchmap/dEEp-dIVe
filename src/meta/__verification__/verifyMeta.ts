@@ -30,6 +30,15 @@ import {
 } from '../../core/conventions';
 import { TorpedoTubeSocketRig } from '../../core/TorpedoTubeSocketRig';
 import { TORPEDO_TUBE_ANCHOR } from '../../world/torpedoTubeAnchor';
+import {
+  CountingSavePort,
+  DepartureCommand,
+  EquipmentJudgeAdapter,
+  createBaseScreenPort,
+} from '../../core/PveIntegration';
+import { UpgradePurchaseSystem } from '../../systems/economy/UpgradePurchaseSystem';
+import { EquipmentSystem } from '../../systems/EquipmentSystem';
+import type { EquipmentCatalog, UpgradeEntry } from '../../tools/economyMath';
 import { MetaLoop } from '../MetaLoop';
 import { EquipmentTransaction } from '../EquipmentTransaction';
 import { PurchaseTransaction } from '../PurchaseTransaction';
@@ -561,6 +570,196 @@ export function runMetaVerification(): VerificationResult[] {
       '저장 책임: launchSortie는 saveRequested를 발행하지 않음 (출항 저장은 Departure command 소유 — INT-CORE-010)',
       !events.some((e) => e.startsWith('save:')),
       `save events=${events.filter((e) => e.startsWith('save')).join(',') || '없음'}`,
+    );
+  }
+
+  // ── 스프린트 A production 조립 검증 (§6 — 저장 횟수·롤백·미확정 처리) ──
+  /** 공식 카탈로그 모양의 테스트 항목 (수치는 검증 전용 — 밸런스 값 아님) */
+  const testEntry = (
+    id: UpgradeEntry['id'],
+    costs: readonly (number | null)[],
+  ): UpgradeEntry => ({
+    id,
+    label: `${id} 테스트`,
+    maxLevel: costs.length,
+    costCredits: costs,
+    costRareParts: costs.map((value) => (value === null ? null : 0)),
+    effectBonus: costs.map((value) => (value === null ? null : 0.1)),
+  });
+  const emptyEquipmentCatalog: EquipmentCatalog = { slotCapacity: 2, items: [] };
+
+  /** production과 동일한 조립(실제 MetaLoop·판정 시스템·트랜잭션·계측 포트) */
+  const buildProduction = (options?: {
+    catalog?: readonly UpgradeEntry[];
+    saveFailures?: number;
+    wallet?: { credits: number; rareParts: number };
+  }): {
+    loop: MetaLoop;
+    purchase: UpgradePurchaseSystem;
+    savePort: CountingSavePort;
+    screen: ReturnType<typeof createBaseScreenPort>;
+    equipment: EquipmentSystem;
+    committed: { count: number };
+  } => {
+    const { loop } = buildLoop();
+    loop.restoreWallet(options?.wallet ?? { credits: 500, rareParts: 2 });
+    const catalog = options?.catalog ?? [testEntry('maxSpeed', [100, 200])];
+    const inner = flakySave(options?.saveFailures ?? 0);
+    const savePort = new CountingSavePort(inner);
+    const purchase = new UpgradePurchaseSystem(
+      catalog.map((entry) => ({ id: entry.id, maxLevel: entry.maxLevel, bonusPerLevel: 0.1 })),
+      {
+        get credits() {
+          return loop.wallet.credits;
+        },
+        get rareParts() {
+          return loop.wallet.rareParts;
+        },
+        applyDelta: () => {},
+      },
+      (statId, nextLevel) => {
+        const entry = catalog.find((candidate) => candidate.id === statId);
+        const credits = entry?.costCredits[nextLevel - 1] ?? null;
+        const rareParts = entry?.costRareParts[nextLevel - 1] ?? null;
+        if (credits === null || rareParts === null) {
+          return { credits: Number.POSITIVE_INFINITY, rareParts: Number.POSITIVE_INFINITY };
+        }
+        return { credits, rareParts };
+      },
+    );
+    const equipment = new EquipmentSystem(['standardTorpedo']);
+    const committed = { count: 0 };
+    const screen = createBaseScreenPort({
+      meta: loop,
+      upgradeCatalog: catalog,
+      equipmentCatalog: emptyEquipmentCatalog,
+      levelsOf: () => purchase.levelSnapshot,
+      loadoutOf: () => equipment.loadout,
+      purchaseTx: new PurchaseTransaction(purchase, loop, purchase, savePort),
+      equipmentTx: new EquipmentTransaction(new EquipmentJudgeAdapter(equipment), savePort),
+      departure: new DepartureCommand(loop, savePort),
+      onPurchaseCommitted: () => {
+        committed.count += 1;
+      },
+    });
+    return { loop, purchase, savePort, screen, equipment, committed };
+  };
+
+  {
+    const { loop, purchase, savePort, screen, committed } = buildProduction();
+    const outcome = screen.purchaseUpgrade('maxSpeed');
+    check(
+      'production 구매: 성공 시 저장 정확히 1회 + 실지갑 차감·단계 확정·파생 갱신 훅 1회',
+      outcome === 'success' &&
+        savePort.callCount === 1 &&
+        loop.wallet.credits === 400 &&
+        purchase.levelSnapshot['maxSpeed'] === 1 &&
+        committed.count === 1,
+      `outcome=${outcome}, saves=${savePort.callCount}, credits=${loop.wallet.credits}`,
+    );
+  }
+  {
+    const { loop, purchase, savePort, screen } = buildProduction({ wallet: { credits: 50, rareParts: 0 } });
+    const outcome = screen.purchaseUpgrade('maxSpeed');
+    check(
+      'production 구매: 불가(크레딧 부족) 시 저장 0회·상태 무변경',
+      outcome === 'insufficientCredits' &&
+        savePort.callCount === 0 &&
+        loop.wallet.credits === 50 &&
+        (purchase.levelSnapshot['maxSpeed'] ?? 0) === 0,
+      `outcome=${outcome}, saves=${savePort.callCount}`,
+    );
+  }
+  {
+    const { loop, purchase, savePort, screen } = buildProduction({ saveFailures: 1 });
+    const outcome = screen.purchaseUpgrade('maxSpeed');
+    const retry = screen.purchaseUpgrade('maxSpeed');
+    check(
+      'production 구매: 저장 실패 시 저장 시도 1회 + 크레딧·단계 롤백, 재시도 성공',
+      outcome === 'saveFailedRolledBack' &&
+        retry === 'success' &&
+        savePort.callCount === 2 &&
+        loop.wallet.credits === 400 &&
+        purchase.levelSnapshot['maxSpeed'] === 1,
+      `outcome=${outcome}, retry=${retry}, saves=${savePort.callCount}, credits=${loop.wallet.credits}`,
+    );
+  }
+  {
+    const { savePort, screen, equipment } = buildProduction();
+    const equip = screen.equipItem('decoy', 1);
+    const replace = screen.replaceItem('heavyTorpedo', 0);
+    const unequip = screen.unequipItem(1);
+    check(
+      'production 장비: 장착·교체·해제 성공 시 각각 저장 1회 (총 3회)',
+      equip === 'success' &&
+        replace === 'success' &&
+        unequip === 'success' &&
+        savePort.callCount === 3 &&
+        equipment.slots[0] === 'heavyTorpedo' &&
+        equipment.slots[1] === null,
+      `results=${equip}/${replace}/${unequip}, saves=${savePort.callCount}`,
+    );
+  }
+  {
+    const { savePort, screen, equipment } = buildProduction();
+    const outcome = screen.replaceItem('standardTorpedo', 1); // 이미 슬롯0에 장착됨
+    check(
+      'production 장비: 실패(이미 장착) 시 저장 0회·loadout 무변경',
+      outcome === 'alreadyEquipped' && savePort.callCount === 0 && equipment.slots[1] === null,
+      `outcome=${outcome}, saves=${savePort.callCount}`,
+    );
+  }
+  {
+    const { loop, savePort, screen } = buildProduction();
+    const result = screen.confirmDeparture();
+    check(
+      'production 출항: 성공 시 저장 1회 후 해역 전환 (departed)',
+      result === 'departed' && savePort.callCount === 1 && loop.metaState === 'SORTIE',
+      `result=${result}, saves=${savePort.callCount}, state=${loop.metaState}`,
+    );
+  }
+  {
+    const { loop, savePort, screen } = buildProduction({ saveFailures: 1 });
+    const result = screen.confirmDeparture();
+    check(
+      'production 출항: 저장 실패 시 전환 없음 (기지 유지·재시도 가능)',
+      result === 'saveFailed' && savePort.callCount === 1 && loop.metaState === 'BASE',
+      `result=${result}, state=${loop.metaState}`,
+    );
+    const retry = screen.confirmDeparture();
+    check(
+      'production 출항: 실패 후 재시도 — 저장 성공 시 출항',
+      retry === 'departed' && loop.metaState === 'SORTIE',
+      `retry=${retry}, state=${loop.metaState}`,
+    );
+  }
+  {
+    const { loop, purchase, savePort, screen } = buildProduction({
+      catalog: [testEntry('sonarRange', [null, null])], // 공식 수치 미확정
+    });
+    const outcome = screen.purchaseUpgrade('sonarRange');
+    const item = screen.upgradeCatalog.find((candidate) => candidate.id === 'sonarRange');
+    check(
+      'production 경제 미확정: economyDataUnavailable — 상태 변경 0·저장 0·null 비변환·버튼 비활성 신호',
+      outcome === 'economyDataUnavailable' &&
+        savePort.callCount === 0 &&
+        loop.wallet.credits === 500 &&
+        (purchase.levelSnapshot['sonarRange'] ?? 0) === 0 &&
+        item?.nextCost === null &&
+        item?.nextCostPending === true,
+      `outcome=${outcome}, saves=${savePort.callCount}, pending=${item?.nextCostPending}`,
+    );
+  }
+  {
+    const { loop, screen } = buildProduction({ wallet: { credits: 123, rareParts: 4 } });
+    const sameAsMeta =
+      screen.wallet.credits === loop.wallet.credits &&
+      screen.wallet.rareParts === loop.wallet.rareParts &&
+      screen.wallet.credits === 123;
+    check(
+      'production BaseScreenPort: 실제 MetaLoop 지갑을 반환 (사본·임시 지갑 아님)',
+      sameAsMeta && screen.lastResult === null,
+      `wallet=${JSON.stringify(screen.wallet)}`,
     );
   }
 

@@ -31,6 +31,26 @@ try {
   process.exit(1);
 }
 
+// QA 데모 분리 정적 검사 (§6) — production composition(Game·PveIntegration)이
+// QA 데모 객체(econUiQaDemo)를 import하지 않아야 한다. QA 데모는
+// ?econdemo 플래그 경로(CanyonScene) 전용이다.
+{
+  const { readFileSync } = await import('node:fs');
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const compositionFiles = ['src/core/Game.ts', 'src/core/PveIntegration.ts'];
+  const importPattern = /from\s+['"][^'"]*econUiQaDemo['"]/;
+  const offenders = compositionFiles.filter((file) =>
+    importPattern.test(readFileSync(path.join(root, file), 'utf8')),
+  );
+  results.push({
+    name: 'production composition에 QA 데모 미포함 (Game·PveIntegration에 econUiQaDemo import 없음)',
+    passed: offenders.length === 0,
+    detail: offenders.length === 0 ? '정적 검사 통과' : `위반: ${offenders.join(', ')}`,
+  });
+}
+
 let failures = 0;
 for (const { name, passed, detail } of results) {
   if (!passed) failures += 1;
