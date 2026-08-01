@@ -990,3 +990,47 @@ scene.attachCargoShipSource(gameplay.cargoShipState); // CargoShipStateSource �
 | 하위 호환 여부 | 해당 없음 (최초 정의) |
 | 개발 리드 결정 | 승인 (부트스트랩 범위) |
 | 적용 커밋 | 부트스트랩 커밋 |
+
+### INT-INTEG-002 — [LOOP][ECON] A_STACK 통합 회차 처리 결과 (통합 관리자)
+
+| 필드 | 내용 |
+|---|---|
+| 처리자 | 통합 관리자 (세션 브랜치 `claude/deep-dive-d5-gray-box-integration-tree5i`) |
+| 대상 | 리드 `ffa945a` · 게임플레이 `4ea3542` · 그래픽스 `86f5ee5` · 툴링 `96af8bc` 병합 + 조립 배선 |
+| 관련 게이트 | A8(공식 수치·소비 배선) · A4/A5-ui/A6-ui(배선) · MVP 재화 루프 |
+
+**INT-GAME-011 요청 3건 — 전부 반영.**
+
+| 요청 | 처리 |
+|---|---|
+| ① `attachOfficialParams(official)` | **생성자 주입**으로 반영 (`new GameplaySystems(bus, params, subscribe, layout, official)`). 요청서가 동일 효과로 명시한 대안이며, 주입 시점 이전의 unwired 구간이 생기지 않는다. 이중 주입 없음 |
+| ② `restoreSavedLoadout` | 반영. `loaded.source === 'fresh' ? null : loaded.data.equippedGear` — 캐스팅 대신 공식 4종 필터를 써서 5번째 장비 유입을 조립부에서 차단 |
+| ③ salvage plan 전달 | 반영. 리드 `SalvageSpawnAdapter`를 `spawnSalvageFromPlan(entry)`로 개정 — 구 시그니처가 `spawnId`·확정 `credits`를 잃는다는 지적이 맞았다. 리드 스포너의 출항당 1회 가드는 유지(이중 방어), 검증 픽스처도 새 단면으로 갱신하고 **spawnId 유실 없음** 검사를 추가 |
+
+**INT-RENDER-010 — 병합 시 처리.**
+
+- `slotPositions` 읽기 전용 보완 뷰: **보존**. `BaseScreenPort` 정식 계약 승격은
+  이번 기술 통합의 조건이 아니며 후속 기술 부채로 기록(매니페스트 §A9).
+- `EconomySystem.pickupRadiusMeters`: 그래픽스가 추가한 `PROVISIONAL_PICKUP_RADIUS_METERS`
+  참조 getter가 게임플레이의 공식 params 기반 getter와 **중복 선언**되어
+  typecheck를 깨뜨렸다. 정본 우선순위표(EconomySystem params 소비 = 게임플레이)에
+  따라 공식 getter를 남기고, '렌더가 같은 값을 소비한다'는 그래픽스 의도는
+  정본 주석에 병합했다. 렌더 소비 경로는 변경 없음.
+- 자동 출항 제거·출항 진입점 1개(기지 화면)·QA 데모 production 분리: 그대로 채택.
+
+**계약 정규화 (소비자 0 확인 후):**
+
+- `src/tools/upgradeMath.ts` **삭제** — 정본은 `tools/economyMath.ts`.
+  툴링이 자기 브랜치에서 삭제하려다 `PveIntegration` 소비로 보류했던 항목이며,
+  이번 회차에 소비자 이관이 끝나 제거했다.
+- `MetaLoop`·`settlement`·`SalvageObject`의 '임시: provisionalEconomy' 주석을
+  공식 `params/economy.json` 출처 표기로 정정 (파일은 이미 삭제 상태였다).
+
+**남긴 결정 요청 (통합 창이 임의로 처리하지 않음):**
+
+1. **deferred upgrade consumer 3종** — `hullIntegrity`·`maxDepth`·`sonarRange`는
+   공식 가격이 붙어 **구매·결제·저장이 되지만 런타임 효과가 0**이다. UI에 이
+   상태를 표시하는 경로가 없다(`DEFERRED_UPGRADE_CONSUMERS` 소비 코드 0건).
+   **경고 표시 / 구매 차단** 중 무엇을 택할지는 기획·리드 결정 사항이며,
+   통합 창은 체력·소나 시스템을 만들지 않는다(스텁 포함 금지).
+2. `slotPositions`의 `BaseScreenPort` 계약 승격 여부.

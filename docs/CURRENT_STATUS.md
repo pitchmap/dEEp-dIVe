@@ -6,7 +6,65 @@
 
 ---
 
-## 스프린트 A 최종 판정 (통합 관리자 — 조준 rig 단일화 수정 후)
+## 스프린트 A 스택 통합 (A_STACK_BASE) — 통합 관리자, 최신
+
+> 상세: `docs/SPRINT_A_INTEGRATION_MANIFEST.md` §A1~A12 ·
+> `docs/SPRINT_A_ACCEPTANCE.md` 'A_STACK 회차'.
+> 브랜치: `claude/deep-dive-d5-gray-box-integration-tree5i` (dev 미병합, PR 없음).
+> **이 회차는 브라우저 최종 인수 검증을 하지 않았다.**
+
+### 병합된 역할 tip (원격 실측 = 보고값 일치)
+
+| 역할 | 브랜치 | tip | 병합 커밋 | 충돌 |
+|---|---|---|---|---|
+| 개발 리드 | `claude/deep-dive-core-lead-uyg77p` | `ffa945a` | `668c011` | 없음 |
+| 게임플레이 | `claude/submarine-controls-depth-3wi424` | `4ea3542` | `4ae9575` | 없음 |
+| 그래픽스 | `feat/render` | `86f5ee5` | `c321f25` | 2건 (문서·`EconomySystem` getter) |
+| 빌드·툴 | `claude/deep-dive-tooling-phase-0-cj6c49` | `96af8bc` | `ec3b76e` | 없음 |
+
+필수 커밋 ancestry 4건(`a3dd257`·`384dd00`·`2a89400`·`60ece41`) 전부 확인.
+전부 `--no-ff` tip merge — cherry-pick·squash·rebase·force push 없음.
+
+### 조립부 배선 3건 (게임플레이 미배선 보고분)
+
+| # | 항목 | 상태 |
+|---|---|---|
+| 1 | 공식 params 주입 | ✅ 로더 각 1회 → `GameplaySystems` 생성자 1회 주입 |
+| 2 | 저장 loadout 복원 | ✅ `fresh`=null(시작 어뢰) / `[]`=명시적 해제 보존 |
+| 3 | salvage spawnId 보존 | ✅ 어댑터를 `spawnSalvageFromPlan(entry)`로 교체 |
+
+### 자동 검증
+
+typecheck ✅ · build ✅ · size ✅ 4.6% · scope ✅ ·
+**gameplay 167/167 · meta 59/59 · tooling 26/26 · sprint-a 자동 전 항목 ·
+HUD 34/34** · 브라우저 최종 인수 **미실시(범위 밖)**.
+
+### 데이터·배선 확인
+
+| 항목 | 결과 |
+|---|---|
+| 공식 경제 params 미확정(null) | **0** (업그레이드 7×5 가격·희귀·A/B군 누적, 장비 4종, slotCapacity 2, 손실률 0.5, 픽업 6m, 수입 245) |
+| production provisional import (경제 6종) | **0** |
+| salvage production spawn | `salvage-1/2/3` — 보상=`params/economy.json`, 좌표=`world/salvagePlacements` |
+| production 성장 UI | `EconomyHud`·`SortiePrepScreen` 마운트, `BaseScreenPort` v2만 소비 |
+| 자동 출항 / 출항 버튼 | 없음 / **1개** |
+| 저장 이중 호출 | 없음 (계측) |
+| `slotPositions` 보완 뷰 | 보존됨 (§A9) |
+| deferred upgrade consumer | `hullIntegrity`·`maxDepth`·`sonarRange` — 구매 가능·효과 0 (§A10, 조치 결정 대기) |
+
+### 판정
+
+```
+A_STACK_READY = true
+B 선행개발 = 가능 (선행개발 상태로만)
+```
+
+**A_STACK_READY ≠** 스프린트 A 공식 인수 / A PR 병합 / B 공식 발효 /
+브라우저 최종 검증 완료. 네 가지 전부 **미완료**다.
+
+---
+
+## 스프린트 A 이전 판정 (조준 rig 단일화 수정 후) — 히스토리
 
 > 상세·근거: `docs/SPRINT_A_ACCEPTANCE.md` '최종 재판정' /
 > 절차·미해소: `docs/SPRINT_A_INTEGRATION_MANIFEST.md`.
