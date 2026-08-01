@@ -17,7 +17,14 @@
  *    제공한다 — 계약 확정 시 소비 경로만 교체 (INT-GAME-008).
  */
 
+import type { EquipmentLoadout } from '../contracts/meta';
 import type { Updatable } from '../contracts/systems';
+import {
+  conditionFailure,
+  saveFailure,
+  type TransactionResult,
+} from './economy/purchaseTypes';
+import type { PurchaseSavePort } from './economy/UpgradePurchaseSystem';
 import {
   PROVISIONAL_DECOY,
   PROVISIONAL_EQUIPMENT_SLOTS,
@@ -79,7 +86,7 @@ interface ActiveDecoy {
 }
 
 export class EquipmentSystem implements Updatable {
-  private readonly slotList: Array<EquipmentId | null>;
+  private slotList: Array<EquipmentId | null>;
   private activeIndex = 0;
   private modifiers: UpgradeModifiers = ZERO_MODIFIERS;
 
@@ -88,11 +95,31 @@ export class EquipmentSystem implements Updatable {
   private nextDecoyId = 1;
   private decoys: ActiveDecoy[] = [];
 
+  /**
+   * 장착 변경 저장 포트 [13차 결의 4: 장착 변경 직후 즉시 저장].
+   * 미주입이면 저장 없이 즉시 확정한다(해역 내 전투 조립 등 저장 대상이
+   * 아닌 맥락). 주입 시 저장 실패는 **이전 loadout으로 롤백**된다.
+   */
+  private savePort: PurchaseSavePort | null = null;
+
   constructor(initialSlots: readonly EquipmentId[] = ['standardTorpedo']) {
     this.slotList = new Array<EquipmentId | null>(PROVISIONAL_EQUIPMENT_SLOTS).fill(null);
     initialSlots.slice(0, PROVISIONAL_EQUIPMENT_SLOTS).forEach((id, index) => {
       this.slotList[index] = id;
     });
+  }
+
+  /** 저장 포트 연결 (기지 조립부에서 1회) — 장착 변경의 원자성 확보 */
+  attachSavePort(port: PurchaseSavePort | null): void {
+    this.savePort = port;
+  }
+
+  /** 공식 계약 형태의 장착 상태 (UI·저장 소비) */
+  get loadout(): EquipmentLoadout {
+    return {
+      slotCapacity: this.slotList.length,
+      equipped: this.slotList.filter((slot): slot is EquipmentId => slot !== null),
+    };
   }
 
   /** 장착 슬롯 (읽기 전용 뷰) — 길이 = 슬롯 제한 */
@@ -104,17 +131,93 @@ export class EquipmentSystem implements Updatable {
     return this.slotList.length;
   }
 
-  /** 슬롯에 장비 장착. 범위 밖·중복 장착이면 false (슬롯 제한 강제) */
+  /**
+   * 슬롯 지정 장착 — 범위 밖·중복 장착이면 false (슬롯 제한 강제).
+   * 저장 포트가 붙어 있으면 저장 실패 시 이전 loadout으로 롤백한다.
+   */
   equip(slotIndex: number, id: EquipmentId): boolean {
     if (slotIndex < 0 || slotIndex >= this.slotList.length) return false;
     if (this.slotList.some((slot, index) => slot === id && index !== slotIndex)) return false;
-    this.slotList[slotIndex] = id;
-    return true;
+    return this.commitLoadout((slots) => {
+      slots[slotIndex] = id;
+    }).ok;
+  }
+
+  /**
+   * 장착 (슬롯 자동 배정) — 기지 UI 진입점.
+   * 실패 사유: 이미 장착 중(alreadyEquipped) / 빈 슬롯 없음(slotFull) /
+   * 저장 실패(saveFailed — 이전 loadout 복원).
+   */
+  equipItem(id: EquipmentId): TransactionResult {
+    if (this.slotList.includes(id)) return conditionFailure('alreadyEquipped');
+    const emptyIndex = this.slotList.indexOf(null);
+    if (emptyIndex < 0) return conditionFailure('slotFull');
+    return this.commitLoadout((slots) => {
+      slots[emptyIndex] = id;
+    });
+  }
+
+  /**
+   * 교체 — 지정 슬롯의 장비를 다른 장비로 바꾼다 (슬롯이 가득 찬 상태의
+   * 정상 경로). 다른 슬롯에 이미 있으면 alreadyEquipped.
+   */
+  replaceItem(slotIndex: number, id: EquipmentId): TransactionResult {
+    if (slotIndex < 0 || slotIndex >= this.slotList.length) {
+      return conditionFailure('slotFull');
+    }
+    if (this.slotList.some((slot, index) => slot === id && index !== slotIndex)) {
+      return conditionFailure('alreadyEquipped');
+    }
+    return this.commitLoadout((slots) => {
+      slots[slotIndex] = id;
+    });
+  }
+
+  /** 해제 — 빈 슬롯이면 상태 변경 없이 성공 처리 (멱등) */
+  unequipItem(slotIndex: number): TransactionResult {
+    if (slotIndex < 0 || slotIndex >= this.slotList.length) {
+      return conditionFailure('slotFull');
+    }
+    if (this.slotList[slotIndex] === null) return { ok: true };
+    return this.commitLoadout((slots) => {
+      slots[slotIndex] = null;
+    });
   }
 
   unequip(slotIndex: number): void {
-    if (slotIndex < 0 || slotIndex >= this.slotList.length) return;
-    this.slotList[slotIndex] = null;
+    this.unequipItem(slotIndex);
+  }
+
+  /**
+   * loadout 변경의 원자적 커밋 — 스냅샷 → 변경 → 저장 → 확정/롤백.
+   * 저장 실패 시 슬롯·활성 슬롯이 변경 전과 완전히 동일해진다.
+   */
+  private commitLoadout(mutate: (slots: Array<EquipmentId | null>) => void): TransactionResult {
+    const snapshotSlots = [...this.slotList];
+    const snapshotActive = this.activeIndex;
+
+    const next = [...this.slotList];
+    mutate(next);
+    this.slotList = next;
+    if (this.slotList[this.activeIndex] === null) {
+      const fallback = this.slotList.findIndex((slot) => slot !== null);
+      this.activeIndex = fallback >= 0 ? fallback : 0;
+    }
+
+    if (!this.savePort) return { ok: true };
+
+    let saved = false;
+    try {
+      saved = this.savePort.save();
+    } catch (error) {
+      console.warn('[EquipmentSystem] 저장 실패로 장착 변경을 롤백합니다.', error);
+      saved = false;
+    }
+    if (saved) return { ok: true };
+
+    this.slotList = snapshotSlots;
+    this.activeIndex = snapshotActive;
+    return saveFailure();
   }
 
   /** 활성 슬롯 선택 (빈 슬롯이면 false) */
