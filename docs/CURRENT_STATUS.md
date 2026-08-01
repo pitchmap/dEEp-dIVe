@@ -98,14 +98,19 @@
 
 ## 그래픽스
 
-- **완료:** ① D3~D5 회색 박스 장면(`CanyonScene`) — 잠수함 대체 오브젝트(캡슐+함교+선미 프로펠러, **-Z 선수/+Z 선미 규약**), 기본 수중 포그·배경(수면 위/아래 전환), 조명 2개 이내, 블롭 섀도, 해수면(`SeaSurface` — 정점 파도) / 카메라 추적·리센터(`CameraRig`) + 카메라 입력(`CameraInputAdapter`) / **X-ray 스파이크 판정: 성공**(`docs/RENDER_SPIKE_XRAY.md`) ② **INT-CORE-003·004 정식 계약 소비 적용 완료** — ⓐ 포즈: 로컬 Pick 타입 삭제 → 계약 `SubmarinePoseSource`(positionX/Y/Z·heading·forwardSpeedMetersPerSecond, 전 필드 필수) 소비, 잠수함 Y 매 프레임 적용 ⓑ 프로펠러: `forwardSpeedMetersPerSecond` + `conventions.propellerSpinRatio()` + `movement.json`(공회전·최고 속력 단일 소스) — 위치 차분 재계산·중복 정의 없음, renderVisualParams.json에는 최대 각속도·감쇠·폭발·침몰 매핑 등 순수 연출값만 ⓒ 화물선: 로컬 인터페이스 삭제 → 계약 `CargoShipStateSource` 소비(`applyState` 매핑 — 이동·왕복·침몰 타이머 없음), `sinkProgress`→기울기·하강, `removed`→dispose, 폭발은 `torpedoHit` 구독(`attachEventBus` 포트, targetId 일치·멱등) + 상태 `hit` 보조 ⓓ 협곡: 자체 수식 삭제 → **공유 `STARTING_CANYON_LAYOUT`(src/world) 블록 순회로 메시 생성**, 해수면·바닥·스폰도 layout 값 ⓔ 리센터: `cameraRecenterOffsetDirectionXZ` 기준(+π 우회 제거)
+- **완료:**
+  - (D+10까지) 회색 박스 장면·프로펠러·해수면·화물선·X-ray 스파이크 성공·정식 계약(INT-CORE-003·004) 소비 — 이력: PROJECT_STATE §2
+  - **[LOOP] 5차 결의 시각 이행** — ① 어뢰 로우폴리+기포 항적(`TorpedoVisuals` — 풀링·인스턴싱 1드로우, 리드샷 학습 피드백 P1) ② 조준경(`PeriscopeView` — 동일 카메라+원형 마스크(DOM)+FOV 보간+십자선·눈금, `aimModeChanged` 소비만) ③ 조준경 내 리드샷 보조선(`LeadShotIndicator`) ④ 해수면 정점 파도 확인(기존 구현 유효 — 변경 없음) ⑤ 환경 부활 1호(`EnvironmentDressing` — 산호 3종 18개소·어군 2종 인스턴싱·침몰선 잔해 1·원경 실루엣 1겹, 연안 한정·밀도 캡 기록·드로우 +10)
+  - **[LOOP] PvE 성장 루프 시각** — 기지 화면(`BaseSceneView` — 경량 3D 독, 메타 상태 소비 전용) + 외형 단계 어댑터(`SubmarineVisual` — 선체·주무장 각 3단계, visualTier 주입만, 최종 에셋 교체 지점 격리)
+  - **[BOSS] 분절 애니 스파이크 판정: 성공(조건부)** — 강체 5분절 계층 트랜스폼+사인파 위상차, 스켈레탈·스키닝·관절 물리 0, 충돌 단일 캡슐 전제 유지. 위협감 실측 충족, 최종 모션 리뷰(리드·아트) 1건 잔여. B안(`BossMotionFallback` — 대시·관성·카메라 흔들림 훅) 경계 준비, 기본 비활성. `docs/RENDER_SPIKE_BOSS.md`
+  - 약점·단계 연출 연결점 — `setWeakpointActive`(발광·점멸·턱 개방)·`setPhase`(체색 전환)·`onPhaseTransition` 시임. 활성·단계 판정은 게임플레이 소유
 - **진행 중:** 없음
-- **다음 작업:** INT-RENDER-005 배선 후 실기 통합 확인 / 조준 카메라 고정(`aimModeChanged` — attachEventBus 확장) / 어뢰 항적(`torpedo.torpedoes` 폴링) / 소음 파문(D10~12) / 심도별 포그·X-ray 본 통합(D13~14) / 모델 임포트(D+8 이후)
-- **차단 문제:** 없음. 단 `attachCargoShipSource(gameplay.cargoShip)`·`attachEventBus(bus)` composition root 배선은 리드 D6 통합 대기(INT-RENDER-005 — 2줄, 코드 예시 기록). 미배선 상태에서도 빌드·기본 장면 정상(화물선 미표시)
-- **변경된 계약:** 없음 (`src/contracts/*`·`src/world/*` 미수정 — INT-CORE-003·004 계약·데이터를 소비만 함)
-- **통합 주의사항:** 검증은 **임시 배선(원복 완료)으로 실제 게임플레이 시스템 구동** — Playwright 실측: 리센터·전진(W, 화면 안쪽)·후진(S)·A 단독(공회전만)·Shift/Ctrl 수직 이동·실제 CargoShipSystem 왕복·torpedoHit 폭발·sinkProgress 침몰·removed 제거·벽 충돌 정지(가시 벽면과 일치) 스크린샷 확보. `?shipdemo=<0~1>`는 고정 상태 스냅샷 QA(정식 소스 주입 시 무시). 게임플레이 `collision/startingArea.ts` 구 미러(구 벽 높이 15/16±3·sin)의 layout 소비 전환은 게임플레이 적용분 대기 — 전환 전까지 가시 능선 위 약 4~6m 구간에 구 충돌 잔존(수평 footprint는 일치). X-ray 선체·해수면 depthWrite:false — 반투명 renderOrder 서열(블롭1<X-ray2<수면3<폭발4). 실시간 그림자·반사 금지 유지 (§12)
-- **마지막 업데이트:** D6 통합 준비 (INT-CORE-003·004 렌더 적용 — 정식 포즈·화물선 계약, 공유 레이아웃, feat/render)
-- **담당 브랜치:** `feat/render` (게임플레이 b7faf44 + 리드 c4841cf 병합 기반)
+- **다음 작업:** INT-RENDER-006(어뢰 배선 1줄)·007(기지·visualTier 메타 배선) 리드 반영 후 실기 확인 / 보스 모션 리뷰(실기 60fps) / 보스 본통합 시 AI 포즈 소비 교체·전장 엄폐 예산 재배분 / 단계 전환 파티클·카메라(D17~20)
+- **차단 문제:** 없음. 단 ① 어뢰·항적은 INT-RENDER-006 배선 전 미표시 ② 기지·외형 단계는 메타 루프(리드 신규) 대기 — QA 플래그로 검수 가능 ③ 키 스왑(Ctrl 상승)·조준 토글은 게임플레이·툴링 구현 대기 — 렌더는 aimModeChanged 소비라 어느 쪽이든 무변경
+- **변경된 계약:** 없음 (`src/contracts/*` 미수정 — INT-RENDER-006·007 배선 제안만)
+- **통합 주의사항:** 조준경은 `aimModeChanged`만 소비(홀드→토글 개편에도 렌더 무변경). 어뢰 소비 인터페이스(`TorpedoStateSource`)는 StraightRunTorpedoSystem이 구조적 충족. 환경 밀도는 renderVisualParams.environment가 상한 — 보스 전장 데코는 '추가'가 아니라 '이동'(11차 결의 1). 반투명 renderOrder 서열: 블롭1<X-ray2<수면3=기포3<폭발4<보조선5. 신규 모듈 전부 dispose 일괄 관리(geometry·material·InstancedMesh). QA 플래그: `?xray` `?shipdemo` `?lookup` `?bossSpike=1(&bossMotion=b)` `?base=1` `?tiers=h,w`
+- **마지막 업데이트:** PvE 준비 스프린트 (5차 시각 이행 + 성장 루프 렌더 + 보스 스파이크, feat/render)
+- **담당 브랜치:** `feat/render` (D+10 통합 `89de73f` 병합 기반)
 
 ## 빌드·툴
 

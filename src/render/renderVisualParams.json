@@ -34,5 +34,17 @@
     "coralClusterTarget": 18,
     "fishPerSchool": 22,
     "fishSchoolCount": 2
+  },
+  "bossSpike": {
+    "$comment": "보스 분절 애니 스파이크(11차 결의 5) — 사인파 진폭·주기 연출값",
+    "swimCycleSeconds": 3.4,
+    "tailSwingRadians": 0.42,
+    "tailLagRadians": 0.9,
+    "jawOpenRadians": 0.5,
+    "finFlapRadians": 0.35,
+    "bodyRollRadians": 0.06,
+    "weakpointPulseHz": 1.4,
+    "fallbackDashSeconds": 2.6,
+    "fallbackShakeAmplitude": 0.25
   }
 }

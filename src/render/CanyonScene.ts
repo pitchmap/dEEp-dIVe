@@ -7,7 +7,7 @@
  * 화물선(계약 상태 매핑) / 어뢰 가시화·기포 항적(TorpedoVisuals) /
  * 조준경(PeriscopeView — aimModeChanged 소비) + 리드샷 보조선 /
  * 환경 배치(EnvironmentDressing — 부활 1호) / QA 격리 경로: ?xray ·
- * ?base=1(기지 화면 미리보기).
+ * ?bossSpike=1(보스 분절 스파이크) · ?base=1(기지 화면 미리보기).
  *
  * 성능 예산 (§12 [확정]): 실시간 조명 2개 이내(방향광 1 + 보조 환경광),
  * 실시간 그림자 미사용(블롭 섀도만), 반사·굴절 미사용.
@@ -39,6 +39,10 @@ import { STARTING_CANYON_LAYOUT } from '../world/startingCanyonLayout';
 import type { Renderer } from './Renderer';
 import { BaseSceneView } from './BaseSceneView';
 import { BlobShadow } from './BlobShadow';
+import { BossSegmentSpike } from './boss/BossSegmentSpike';
+import { BossMotionFallback } from './boss/BossMotionFallback';
+import { SegmentedSwimMotion } from './boss/SegmentedSwimMotion';
+import type { BossMotionStyle } from './boss/BossMotionStyle';
 import { CameraRig } from './CameraRig';
 import { CargoShipVisual } from './CargoShipVisual';
 import { EnvironmentDressing } from './EnvironmentDressing';
@@ -88,8 +92,11 @@ export class CanyonScene implements ManagedScene {
   private cargoShip: CargoShipVisual | null = null;
   private xraySpike: XrayFloodingSpike | null = null;
 
-  // QA 격리 경로 — 기지 화면 미리보기(?base=1)
+  // QA 격리 경로 — 기지 화면 미리보기(?base=1)·보스 분절 스파이크(?bossSpike=1)
   private baseView: BaseSceneView | null = null;
+  private bossSpike: BossSegmentSpike | null = null;
+  private bossShakeIntensity = 0;
+  private elapsed = 0;
 
   // 검증 완료된 이동 파라미터 — 프로펠러(공회전 비율·최고 속력)의 소스.
   // 핫리로드 통지로 유효한 새 값만 교체된다 (JSON 역기록 없음).
@@ -153,7 +160,40 @@ export class CanyonScene implements ManagedScene {
 
     this.shipDemoSnapshot = this.parseShipDemoSnapshot();
     this.mountXraySpikeIfRequested();
+    this.mountBossSpikeIfRequested();
     this.mountBaseViewIfRequested();
+  }
+
+  /**
+   * 보스 분절 스파이크 장착 — `?bossSpike=1` (11차 결의 5, 1주차 판정).
+   * `&bossMotion=b`면 B안(이동 곡선·관성·카메라 흔들림) — 기본 비활성.
+   * 격리 원칙: 실패해도 기본 장면·빌드는 정상 작동한다.
+   */
+  private mountBossSpikeIfRequested(): void {
+    const query = new URLSearchParams(window.location.search);
+    if (query.get('bossSpike') !== '1') return;
+    try {
+      const spawn = this.layout.submarineSpawn;
+      const useFallback = query.get('bossMotion') === 'b';
+      let motion: BossMotionStyle;
+      if (useFallback) {
+        const fallback = new BossMotionFallback(4, this.renderer.camera.position);
+        fallback.onNearPass = (intensity) => {
+          this.bossShakeIntensity = Math.max(this.bossShakeIntensity, intensity);
+        };
+        motion = fallback;
+      } else {
+        motion = new SegmentedSwimMotion(spawn.x, 4, spawn.z - 34);
+      }
+      this.bossSpike = new BossSegmentSpike(motion, true);
+      this.scene.add(this.bossSpike.root);
+      console.info(
+        `[CanyonScene] 보스 분절 스파이크 장착 (?bossSpike=1${useFallback ? '&bossMotion=b' : ''}).`,
+      );
+    } catch (error) {
+      this.bossSpike = null;
+      console.warn('[CanyonScene] 보스 스파이크 초기화 실패 — 기본 장면은 계속 작동합니다.', error);
+    }
   }
 
   /**
@@ -244,6 +284,8 @@ export class CanyonScene implements ManagedScene {
       this.baseView.update(deltaSeconds);
       return;
     }
+    this.elapsed += deltaSeconds;
+
     const spawn = this.layout.submarineSpawn;
     const x = this.poseSource?.positionX ?? spawn.x;
     const y = this.poseSource?.positionY ?? DEFAULT_SUBMARINE_Y;
@@ -254,6 +296,14 @@ export class CanyonScene implements ManagedScene {
     this.submarine.root.rotation.y = meshYawRadians(heading);
     this.blobShadow.follow(x, z); // 블롭 섀도는 해저 투영 — 수직 이동과 무관
     this.rig.update(deltaSeconds, x, y, z, heading);
+
+    // B안 스파이크 전용 — 근접 통과 카메라 흔들림 (지수 감쇠, 기본 0)
+    if (this.bossShakeIntensity > 0.001) {
+      const camera = this.renderer.camera;
+      camera.position.x += Math.sin(this.elapsed * 47) * this.bossShakeIntensity;
+      camera.position.y += Math.cos(this.elapsed * 53) * this.bossShakeIntensity * 0.6;
+      this.bossShakeIntensity *= Math.exp(-3 * deltaSeconds);
+    }
 
     // 프로펠러: 계약 forwardSpeedMetersPerSecond(+선수/−선미)만 사용 —
     // 위치 차분 재계산 금지. A/D 단독 선회는 이 값에 영향이 없다.
@@ -271,6 +321,7 @@ export class CanyonScene implements ManagedScene {
     this.updateCargoShip(deltaSeconds);
     this.updateFogByCameraDepth();
     this.xraySpike?.update(deltaSeconds);
+    this.bossSpike?.update(deltaSeconds);
   }
 
   /**
@@ -340,6 +391,8 @@ export class CanyonScene implements ManagedScene {
     this.unsubscribeAimMode = null;
     this.baseView?.dispose();
     this.baseView = null;
+    this.bossSpike?.dispose();
+    this.bossSpike = null;
     this.periscope?.dispose();
     this.periscope = null;
     this.xraySpike?.dispose();
