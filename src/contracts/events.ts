@@ -23,6 +23,13 @@ export type DepthLayerId = 'periscope' | 'cruise' | 'deep';
 /** 탐지 게이지 3단계 — 눈 아이콘 UI와 1:1 대응 (마스터 플랜 §5.6) */
 export type DetectionStage = 'safe' | 'searching' | 'detected';
 
+import type {
+  BossPhase,
+  LootSource,
+  MetaStateId,
+  SortieSettlement,
+} from './meta';
+
 /** 폭뢰 피해 구분 (마스터 플랜 §5.13) */
 export type DamageCause = 'direct' | 'near';
 
@@ -47,9 +54,19 @@ export interface GameEvents {
   /** 탐지 게이지 값·단계 변경 시 (발행: DetectionSystem) */
   detectionChanged: { gauge: number; stage: DetectionStage };
 
+  /** 조준 뷰 진입·해제 시 (발행: AimSystem — 마우스·HUD 버튼 공용 진입점).
+   *  구독: 렌더(조준 중 카메라 고정 §3.2), UI(조준 표시) */
+  aimModeChanged: { aiming: boolean };
+
   /** 어뢰 발사 순간. 발사 지점(수평면 좌표)은 구축함의
    *  '마지막 목격 위치'로 무조건 기록된다 (§5.10 확정 규칙) */
   torpedoFired: { originX: number; originZ: number };
+
+  /** 어뢰 명중 순간 (발행: 게임플레이 명중 판정 — 타이밍의 주인).
+   *  targetId는 CargoShipStateSource.id와 동일 체계. x/z는 명중 위치(수평면).
+   *  구독: 렌더(폭발·침몰 연출 트리거), 오디오(아케이드식 과장 폭발음 §4.4),
+   *  UI(격침 기록), 격침 보상 어뢰 +1(§5.9)의 게임플레이 진입점 */
+  torpedoHit: { targetId: number; x: number; z: number };
 
   /** 폭뢰 입수 순간 — '풍덩→3초→폭발' 시그니처 리듬의 시작점.
    *  사운드(입수음 패닝)와 판정 타이머가 이 이벤트에 동기화된다 */
@@ -68,6 +85,48 @@ export interface GameEvents {
   /** 성능 샘플(약 1초 주기, 발행: core/Game).
    *  계측 오버레이·게이트 기록 툴이 구독한다 (G1·G2) */
   performanceSampled: { fps: number; averageFps: number; minFps: number };
+
+  /* ── PvE 메타 루프 계약 (INT-CORE-006, 회의록 10·11 근거) ── */
+
+  /** 상위 메타 루프 상태 전환 완료 시 (발행: meta/MetaLoop).
+   *  구독: 기지 화면(렌더·UI), 오디오(국면 음악). 하위 세션 상태
+   *  (gameStateChanged)와 별개 계층이다 */
+  metaStateChanged: { previous: MetaStateId | null; next: MetaStateId };
+
+  /** ① 메타 세션(출항) 시작 — 하위 해역 세션 재시작과 동시 발행
+   *  (발행: meta/MetaLoop). 구독: 렌더(해역 진입 연출), UI, 오디오 */
+  sortieStarted: { sortieNumber: number };
+
+  /** ② 해역 세션 결과 확정 — 귀환 정산 데이터 포함 (발행: meta/MetaLoop).
+   *  구독: 기지·정산 UI, 오디오. 파괴 시 크레딧 손실이 settlement에 반영된다 */
+  sortieEnded: { sortieNumber: number; settlement: SortieSettlement };
+
+  /** ③ 중도 귀환 요청 (발행: UI/입력 측 — Tab·기지 귀환 버튼).
+   *  구독: meta/MetaLoop (세션 포트 경유로 하위 정리 후 정산) */
+  returnToBaseRequested: Record<string, never>;
+
+  /** 드롭 결과 — 재화 획득 발생 (발행: 게임플레이 economy 판정).
+   *  구독: meta/MetaLoop(출항 집계 — 희귀 부품은 즉시 확정),
+   *  UI(획득 표시), 렌더·오디오(픽업 연출) */
+  lootDropped: { source: LootSource; credits: number; rareParts: number; x: number; z: number };
+
+  /** 경비함 출현 요청 — 중립 선박 공격 불이익 단일 [확정 6차 결의 3]
+   *  (발행: 게임플레이 판정). 구독: 경비함 AI(리드 — 구축함 AI 재활용 스폰) */
+  guardShipRequested: { x: number; z: number };
+
+  /** 저장 요청 (발행: meta/MetaLoop). cause:
+   *  'settlement' = 귀환 정산 확정 후 / 'rarePart' = 희귀 부품 획득 즉시
+   *  [확정 6차 결의 9 — 그 외 자동 저장 없음]. 구독: SaveSystem(툴링) */
+  saveRequested: { cause: 'settlement' | 'rarePart' };
+
+  /** 보스 단계 전환 (발행: 보스 AI — 리드). 구독: 렌더(단계 연출),
+   *  오디오(침묵 전환·음정 하강), UI */
+  bossPhaseChanged: { phase: BossPhase };
+
+  /** 보스 약점 활성 상태 변경 (발행: 게임플레이 약점 판정 — 판정 소유는
+   *  게임플레이, 발광·개방 연출은 렌더 [소회의 결의 5 경계]).
+   *  구독: 렌더, UI(조준 보조) */
+  bossWeakPointChanged: { active: boolean };
 }
 
 export type GameEventName = keyof GameEvents;

@@ -1,0 +1,29 @@
+{
+  "$comment": "HUD 표시 파라미터 (툴링 파트 직접 사용 — 게임 밸런스 값 아님). 형식·범위 검증과 핫리로드: src/ui/uiParams.ts. 버튼 사용률 판단 기준(계측 기반): 화면 버튼 사용률 30% 이상 → 버튼 확대 검토 / 5% 미만 → 기본 흐림 강화 검토.",
+  "screenButtonBaseOpacity": {
+    "value": 0.45,
+    "range": [0.1, 1.0],
+    "unit": "opacity",
+    "note": "화면 조준·발사 버튼 기본 투명도 (반투명 소형 원칙)"
+  },
+  "screenButtonDimmedOpacity": {
+    "value": 0.18,
+    "range": [0.02, 1.0],
+    "unit": "opacity",
+    "note": "마우스 조준 숙련 관측 후 존재감 축소 시 투명도"
+  },
+  "mouseAimCountToDimButtons": {
+    "value": 3,
+    "range": [1, 20],
+    "unit": "count",
+    "note": "마우스 조준을 이 횟수 이상 사용하면 화면 버튼 존재감을 낮춘다"
+  },
+  "showScreenButtonsByDefault": {
+    "value": true,
+    "note": "화면 조준·발사 버튼 기본 표시 여부 (H로 언제든 전환)"
+  },
+  "showControlsGuideByDefault": {
+    "value": true,
+    "note": "조작 안내 기본 표시 여부 (H로 언제든 전환)"
+  }
+}

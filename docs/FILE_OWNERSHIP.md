@@ -8,11 +8,11 @@
 
 | 역할 | 소유 영역 | 비고 |
 |---|---|---|
-| **개발 리드** (prompts/LEAD.md) | `src/core/`, 공통 계약(`src/contracts/`) 최종 승인, 구축함 AI, dev 통합 | 비상 컷 단독 권한 |
-| **게임플레이** (prompts/GAMEPLAY.md) | `src/systems/` | 판정·탐지·전투 로직의 주인 |
+| **개발 리드** (prompts/LEAD.md) | `src/core/`, `src/meta/`(단, `save/` 제외 — PvE 소회의 결의 7), 공통 계약(`src/contracts/`) 최종 승인, 구축함·보스 AI, dev 통합 | 비상 컷 단독 권한 (R-P3 포함) |
+| **게임플레이** (prompts/GAMEPLAY.md) | `src/systems/` (`economy/` 포함 — 드롭·손실·Faction 판정) | 판정·탐지·전투 로직의 주인 |
 | **그래픽스** (prompts/GRAPHICS.md) | `src/render/`, 렌더 관련 `assets/`(models·textures) | 게임 판정 계산 금지 |
-| **빌드·툴** (prompts/TOOLING.md) | `src/tools/`, `scripts/`, `.github/`, `src/audio/`(오디오 배관), `src/ui/`(계측 오버레이) | 판정 시간 소유권 없음 |
-| **기획** | `params/` | 수치 직접 커밋 가능 — `[Gx]` 태그 + 튜닝표 기록 필수 |
+| **빌드·툴** (prompts/TOOLING.md) | `src/tools/`, `scripts/`, `.github/`, `src/audio/`(오디오 배관), `src/ui/`(계측 오버레이), `src/meta/save/`(세이브 시스템 — 버전·이중 슬롯) | 판정 시간 소유권 없음. 세이브 스키마 변경 커밋은 마이그레이션 함수 동반 필수 |
+| **기획** | `params/` (`upgrades.json`·`economy.json` 포함 — PvE 확장) | 수치 직접 커밋 가능 — `[Gx]`/`[ECON]` 태그 + 튜닝표 기록 필수 |
 | **공통 파일** | 아래 목록 | **리드 승인 없이 변경 금지** |
 
 ## 공통 보호 파일 (리드 승인 필수)
@@ -34,6 +34,10 @@ CLAUDE.md
 
 - `src/config/` (ParamLoader·validateParams): 계약(`contracts/params.ts`)과 한 몸 —
   **공통 보호에 준함**. 검증 규칙 변경은 리드 승인.
+- `src/world/` (공용 레이아웃 데이터 — startingCanyonLayout 등): 렌더·게임플레이가
+  같은 인스턴스를 소비하는 데이터 모듈 영역 — **공통 보호에 준함**. 내용 교체
+  (정식 블록아웃 반영 등)는 리드 승인 커밋 경유, 로직·시스템 코드 추가 금지
+  (INT-CORE-004).
 - `src/ui/`: 계측 오버레이(현재)는 툴링 소유. 게임 UI(눈 아이콘·붉은 호 등,
   D6 이후)는 게임플레이 소유로 분리한다.
 - `docs/`: 각 역할이 자기 관련 구역 갱신 가능. 단 `deep_dive_master_plan.md`는

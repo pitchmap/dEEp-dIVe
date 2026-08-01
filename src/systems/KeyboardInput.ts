@@ -3,31 +3,34 @@
  *
  * 책임: 키 상태 추적뿐이다. 이동·심도 규칙은 각 시스템이 소유한다.
  *
- * 안전 규칙 (마스터 플랜 §5.1~5.3 조작 신뢰성):
- *  - OS 키 반복(repeat) 이벤트는 무시한다 — Shift/Ctrl 층 이동이
- *    "누르고 있는 동안 연속 발동"되는 것을 막는다 (층 단위 이동 [확정]).
+ * 키 배치 (5차 대회의 결의 4 — 키 스왑):
+ *  - W/S: 전진·후진, A/D: 선회 (잠수함 방향 기준)
+ *  - **Ctrl = 상승 / Shift = 하강** (누르는 동안 연속 — 근거: '긴급 동작
+ *    (잠항)에 최편의 키' 원리). **E = 상승 병행 키** — 창 모드에서 Ctrl+W
+ *    탭 닫힘 회피용. Keyboard Lock·안내 UI는 툴링 소유, 이 어댑터는
+ *    E를 Ctrl과 동일한 상승 명령으로만 처리한다.
+ *
+ * 안전 규칙 (조작 신뢰성):
+ *  - OS 키 반복(repeat) 이벤트는 무시한다 — 유지 상태는 최초 keydown/keyup으로만
+ *    관리해 반복 이벤트가 상태를 오염시키지 않는다.
  *  - 창 포커스 상실(blur)·탭 전환(visibilitychange hidden) 시 모든 키 상태를
  *    해제한다 — keyup을 놓쳐 키가 눌린 채 고정되는 상황 방지.
  */
 
 /** 이동 입력 (매 프레임 폴링) — PlayerController가 읽는다 */
 export interface MovementInput {
-  /** W — 전진 가속 */
+  /** W — 전진 (선수 방향) */
   readonly throttleForward: boolean;
-  /** S — 감속(제동). W와 동시 입력 시 제동이 우선한다 */
-  readonly brake: boolean;
+  /** S — 후진 (선미 방향, 최고 속력은 전진의 비율로 제한). W와 동시 입력 시 상쇄 */
+  readonly reverse: boolean;
   /** A — 좌선회 (잠수함 방향 기준) */
   readonly turnLeft: boolean;
   /** D — 우선회 (잠수함 방향 기준) */
   readonly turnRight: boolean;
-}
-
-/** 심도 입력 (에지 단위) — 층 단위 이동이므로 '누른 횟수'만 의미가 있다 */
-export interface DepthInput {
-  /** 마지막 호출 이후의 부상(Shift) 입력 횟수를 반환하고 0으로 되돌린다 */
-  consumeAscendRequests(): number;
-  /** 마지막 호출 이후의 잠항(Ctrl) 입력 횟수를 반환하고 0으로 되돌린다 */
-  consumeDescendRequests(): number;
+  /** Ctrl 또는 E — 누르는 동안 연속 상승 (결의 4: 키 스왑 + 병행 키) */
+  readonly ascend: boolean;
+  /** Shift — 누르는 동안 연속 하강 (결의 4: 긴급 잠항 = 최편의 키) */
+  readonly descend: boolean;
 }
 
 /** window 대용으로 주입 가능한 최소 이벤트 소스 (검증 코드에서 EventTarget 사용) */
@@ -38,10 +41,21 @@ export interface VisibilitySource extends KeyEventSource {
   readonly visibilityState: DocumentVisibilityState;
 }
 
-export class KeyboardInput implements MovementInput, DepthInput {
+/** 추적 대상 키 코드 (그 외 키는 무시 — 카메라·조준 입력은 각 소유 파트 담당) */
+const TRACKED_CODES = new Set([
+  'KeyW',
+  'KeyS',
+  'KeyA',
+  'KeyD',
+  'KeyE',
+  'ShiftLeft',
+  'ShiftRight',
+  'ControlLeft',
+  'ControlRight',
+]);
+
+export class KeyboardInput implements MovementInput {
   private readonly heldCodes = new Set<string>();
-  private ascendRequests = 0;
-  private descendRequests = 0;
   private detachListeners: Array<() => void> = [];
 
   /**
@@ -77,18 +91,16 @@ export class KeyboardInput implements MovementInput, DepthInput {
     this.reset();
   }
 
-  /** 모든 키 상태·대기 중 심도 요청 해제 (포커스 상실 대응) */
+  /** 모든 키 상태 해제 (포커스 상실·탭 전환 대응) */
   reset(): void {
     this.heldCodes.clear();
-    this.ascendRequests = 0;
-    this.descendRequests = 0;
   }
 
   get throttleForward(): boolean {
     return this.heldCodes.has('KeyW');
   }
 
-  get brake(): boolean {
+  get reverse(): boolean {
     return this.heldCodes.has('KeyS');
   }
 
@@ -100,42 +112,23 @@ export class KeyboardInput implements MovementInput, DepthInput {
     return this.heldCodes.has('KeyD');
   }
 
-  consumeAscendRequests(): number {
-    const count = this.ascendRequests;
-    this.ascendRequests = 0;
-    return count;
+  get ascend(): boolean {
+    return (
+      this.heldCodes.has('ControlLeft') ||
+      this.heldCodes.has('ControlRight') ||
+      this.heldCodes.has('KeyE')
+    );
   }
 
-  consumeDescendRequests(): number {
-    const count = this.descendRequests;
-    this.descendRequests = 0;
-    return count;
+  get descend(): boolean {
+    return this.heldCodes.has('ShiftLeft') || this.heldCodes.has('ShiftRight');
   }
 
   private readonly onKeyDown = (event: Event): void => {
     const key = event as KeyboardEvent;
-    // OS 키 반복은 새 입력이 아니다 — 이동 키는 held 집합이 이미 참이고,
-    // 심도 키는 반복 발동을 금지해야 한다 (층 단위 이동 [확정])
+    // OS 키 반복은 새 입력이 아니다 — 유지 상태는 최초 keydown이 이미 세웠다
     if (key.repeat) return;
-
-    switch (key.code) {
-      case 'KeyW':
-      case 'KeyS':
-      case 'KeyA':
-      case 'KeyD':
-        this.heldCodes.add(key.code);
-        break;
-      case 'ShiftLeft':
-      case 'ShiftRight':
-        this.ascendRequests += 1;
-        break;
-      case 'ControlLeft':
-      case 'ControlRight':
-        this.descendRequests += 1;
-        break;
-      default:
-        break;
-    }
+    if (TRACKED_CODES.has(key.code)) this.heldCodes.add(key.code);
   };
 
   private readonly onKeyUp = (event: Event): void => {

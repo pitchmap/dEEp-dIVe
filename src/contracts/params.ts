@@ -44,6 +44,12 @@ export interface MovementParams {
   maxSpeedMetersPerSecond: FixedNumber;
   /** 정지→최고 속력 도달 시간 (초) — 임시 초기 테스트값 (INT-GAME-001 이관) */
   accelerationSeconds: FixedNumber;
+  /**
+   * 프로펠러 공회전 비율 (0~1, 최대 회전 속도 대비) — 정지 상태에서도
+   * 이 비율만큼 회전한다. 기본 0.08 [D+5 리뷰 후속 소회의, INT-CORE-002].
+   * 소비: core/conventions.ts propellerSpinRatio (렌더는 결과 비율만 사용)
+   */
+  propellerIdleSpinRatio: FixedNumber;
 }
 
 /** 심도 층별 탐지 보정값 — 낮을수록 탐지되기 어렵다 */

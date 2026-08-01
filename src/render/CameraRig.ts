@@ -12,6 +12,7 @@
  */
 
 import * as THREE from 'three';
+import { cameraRecenterOffsetDirectionXZ } from '../core/conventions';
 
 /** 상하 회전 제한 ±60도 [확정 — 마스터 플랜 §3.2] */
 const PITCH_LIMIT_RADIANS = (60 * Math.PI) / 180;
@@ -61,8 +62,13 @@ export class CameraRig {
     targetZ: number,
     headingRadians: number,
   ): void {
-    // 후방 뷰 기준: 잠수함 진행 방향의 반대쪽 + 궤도 오프셋
-    const yaw = headingRadians + Math.PI + this.yawOffset;
+    // 후방 뷰 [INT-CORE-004 확정]: 카메라 위치 오프셋 = 선미 방향
+    // (cameraRecenterOffsetDirectionXZ — 위치·시선 함수 분리, +π 보정 없음).
+    // 시선은 lookAt(잠수함)으로 자동으로 선수 방향
+    // (cameraRecenterLookDirectionXZ 충족) — 리센터 시 프로펠러(선미)가
+    // 카메라 가까운 쪽에 보이고, W 전진 시 화면 안쪽으로 나아간다.
+    const offsetDirection = cameraRecenterOffsetDirectionXZ(headingRadians);
+    const yaw = Math.atan2(offsetDirection.x, offsetDirection.z) + this.yawOffset;
     const pitch = THREE.MathUtils.clamp(
       BASE_PITCH_RADIANS + this.pitchOffset,
       -PITCH_LIMIT_RADIANS,
