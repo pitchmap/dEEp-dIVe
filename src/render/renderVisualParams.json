@@ -15,11 +15,14 @@
     "sinkTiltRadians": 0.4
   },
   "periscope": {
-    "$comment": "5차 결의 3 — 동일 3D 카메라 + 원형 마스크 + FOV 축소. 순수 연출값",
+    "$comment": "5차 결의 3 — 동일 3D 카메라 + 원형 마스크 + FOV 축소. 순수 연출값. tubeFrame*는 어뢰 조준경 하단 2D 발사관 프레임(폐쇄감·방향감 — 3D 클리핑 없이 DOM만)",
     "aimFovDegrees": 28,
     "fovLerpDamping": 9,
     "maskDiameterViewportRatio": 0.86,
-    "rangeTickCount": 4
+    "rangeTickCount": 4,
+    "tubeFrameHeightRatio": 0.2,
+    "tubeFrameRimWidthRatio": 0.8,
+    "tubeFrameSideWallWidthRatio": 0.16
   },
   "torpedoTrail": {
     "$comment": "5차 결의 2 — 기포 궤적(리드샷 학습 피드백). 풀 크기·수명은 연출값",
