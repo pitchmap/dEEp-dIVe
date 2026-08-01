@@ -1,0 +1,59 @@
+{
+  "$comment": "장비 2층 4종 — 공식 확정값 (사용자 승인, [ECON]). id는 계약 src/contracts/meta.ts EquipmentId와 1:1, 4종 고정·상위호환 관계 금지(6차 결의 5). 가격·희귀 부품 요구량은 승인값이며, performance는 기존 런타임 값(src/systems/provisionalEquipment.ts)을 그대로 이관한 것이다 — 새 밸런스 변경이 아니다. standardTorpedo는 startingItem: true (가격 0, 시작 보유 — 첫 출항 성립 조건). 검증: src/tools/economyMath.ts (4종 초과·미지 id·음수 가격·희귀 정수·슬롯 용량·시작 보유 검증).",
+  "slotCapacity": 2,
+  "items": [
+    {
+      "id": "standardTorpedo",
+      "label": "기본 어뢰",
+      "costCredits": 0,
+      "costRareParts": 0,
+      "slotCost": 1,
+      "startingItem": true,
+      "performance": {
+        "speedMetersPerSecond": 20,
+        "damage": 1.0
+      },
+      "note": "균형 기준점 — 시작 보유. 성능값은 provisionalEquipment 승계(속력은 provisionalCombat의 어뢰 속력 20과 동일)"
+    },
+    {
+      "id": "fastTorpedo",
+      "label": "고속 어뢰",
+      "costCredits": 260,
+      "costRareParts": 0,
+      "slotCost": 1,
+      "startingItem": false,
+      "performance": {
+        "speedMetersPerSecond": 30,
+        "damage": 0.5
+      },
+      "note": "속력↑·피해↓ — 크레딧만으로 접근 가능한 첫 스타일 변경"
+    },
+    {
+      "id": "heavyTorpedo",
+      "label": "중어뢰",
+      "costCredits": 420,
+      "costRareParts": 1,
+      "slotCost": 1,
+      "startingItem": false,
+      "performance": {
+        "speedMetersPerSecond": 12,
+        "damage": 2.5
+      },
+      "note": "속력↓·피해↑ — 보스 준비 최소 사양에 포함, 희귀 부품 1개 게이트"
+    },
+    {
+      "id": "decoy",
+      "label": "디코이",
+      "costCredits": 340,
+      "costRareParts": 1,
+      "slotCost": 1,
+      "startingItem": false,
+      "performance": {
+        "stockPerSortie": 2,
+        "lifetimeSeconds": 20,
+        "cooldownSeconds": 5
+      },
+      "note": "음향 기만 — 회피 축. 어뢰가 아니므로 speed·damage 대신 보유 수·지속·쿨다운"
+    }
+  ]
+}

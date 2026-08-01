@@ -98,6 +98,50 @@ export function cameraRecenterLookDirectionXZ(headingRadians: number): Direction
 }
 
 /**
+ * 미세 조준각 yaw 클램프 (13차 결의 3) — 한계는 도(°) 단위 양수 크기, ± 대칭.
+ * 카메라·조준·테스트가 **이 함수 하나만** 사용한다 (이중 부호·개별 계산 금지).
+ */
+export function clampAimYawRadians(yawRadians: number, yawLimitDegrees: number): number {
+  const limit = (Math.abs(yawLimitDegrees) * Math.PI) / 180;
+  return Math.min(limit, Math.max(-limit, yawRadians));
+}
+
+/**
+ * 미세 조준각 pitch 클램프 (13차 결의 8) — 상향·하향 한계는 **모두 양의
+ * 크기**로 받는다(JSON 저장 규칙과 동일). 하향 방향의 음수 적용은 이
+ * 계산에서만 한다: pitchMin = −down, pitchMax = +up.
+ */
+export function clampAimPitchRadians(
+  pitchRadians: number,
+  upLimitDegrees: number,
+  downLimitDegrees: number,
+): number {
+  const max = (Math.abs(upLimitDegrees) * Math.PI) / 180;
+  const min = -(Math.abs(downLimitDegrees) * Math.PI) / 180;
+  return Math.min(max, Math.max(min, pitchRadians));
+}
+
+/**
+ * 조준 전방 단위 벡터 — 선체 heading + 잠수함 로컬 미세 조준각 (yaw + = 좌,
+ * pitch + = 상향). 미세각 0이면 bowDirectionXZ와 수평 성분이 일치한다.
+ * **어뢰 초기 진행 방향과 조준 카메라 시선이 모두 이 함수 하나에서 나온다**
+ * (십자선 = 탄도, 7차 결의 1-④) — 시스템별 방향 계산 금지.
+ */
+export function aimForwardDirection(
+  headingRadians: number,
+  aimYawRadians: number,
+  aimPitchRadians: number,
+): Direction3 {
+  const totalYaw = headingRadians + aimYawRadians;
+  const cosPitch = Math.cos(aimPitchRadians);
+  return {
+    x: -Math.sin(totalYaw) * cosPitch,
+    y: Math.sin(aimPitchRadians),
+    z: -Math.cos(totalYaw) * cosPitch,
+  };
+}
+
+/**
  * 프로펠러 회전 비율 (0~1, 최대 회전 속도 대비).
  *
  *  - 실제 전후 속도에만 연결 [확정] — 선회(A/D)·카메라 입력은 인자에 없다.

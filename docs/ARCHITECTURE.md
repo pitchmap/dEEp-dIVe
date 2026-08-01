@@ -124,7 +124,8 @@ Space 리센터 = **선미 뒤쪽 상단에서 선수 방향을 바라보는 후
 마우스(우클릭)와 PC 화면 HUD 조준·발사 버튼은 **별도 전투 경로 없이 동일한
 `AimSystem`**(contracts/systems.ts)을 호출한다 [D+5 리뷰 후속 소회의 확정]:
 
-- 공용 진입점: `beginAim()`(잠망경 심도 아니면 false) / `endAim()` /
+- 공용 진입점: `beginAim()`(**전 심도 허용** — 7차 결의 1로 구 '잠망경 심도
+  전용' 규칙 폐기, 재도입 금지) / `endAim()`(미세 조준각 reset) /
   `fireTorpedo()`(TorpedoSystem 위임). 읽기 상태 `aiming`.
 - 입력 어댑터(마우스=게임플레이 입력, HUD 버튼=UI)는 composition root
   (`Game.composeSystems`)에서 같은 AimSystem 인스턴스를 주입받는다 —
@@ -239,6 +240,186 @@ BOOT → DEPARTURE → APPROACH → ATTACK → ESCAPE → RESULT (→ DEPARTURE)
 - 신 스코프 가드(7항목·장비 4종)는 `UpgradeStatId`·`EquipmentId` 유니언
   타입 상한으로 기계 강제.
 
+## 스프린트 A 통합 계약 (INT-CORE-008·009)
+
+### 선수 발사관 소켓 — 단일 진실 공급원 (7차 결의 1 · 13차 결의 2)
+
+```
+world/torpedoTubeAnchor  (앵커 로컬 위치 + 안전 오프셋 — 유일한 정의 지점)
+ └ core/TorpedoTubeSocketRig (TorpedoTubeSocketSource 단일 구현)
+    ├─ aimCameraSocket    앵커 정위치 · 동일 전방축   → 그래픽스 조준 카메라
+    └─ torpedoSpawnSocket 동일 전방축 + 안전 오프셋  → 게임플레이 어뢰 생성
+```
+
+- 전방축은 `conventions.aimForwardDirection(heading, aimYaw, aimPitch)`
+  **한 함수**에서만 — 십자선 = 탄도. 미세각 클램프도
+  `clampAimYawRadians`/`clampAimPitchRadians` 공용 함수만(이중 부호 금지).
+- 하향 제한각은 params에 **양수 크기**로 저장, 음수 적용은 클램프 계산에서만.
+- 조준 중 자기 선체 제외는 **조준 카메라 레이어 마스크로 한정** — 객체 전역
+  숨김 금지(그림자·파문·타 카메라 보존).
+- 조준 해제 = yaw·pitch 0 reset 단일 동작. `aimReturnBehavior`·persist는
+  계약·스키마·코드 어디에도 만들지 않는다.
+
+### 원자적 구매·장비 트랜잭션 (13차 결의 7)
+
+`meta/PurchaseTransaction`·`meta/EquipmentTransaction`(리드 = 틀):
+스냅샷 → 재검증 → 차감 → 적용 → 저장 → 저장 성공 시 확정 / 실패 시 전체
+롤백(부분 성공 금지). 판정 내용(가격·상한·슬롯·사유 5종)은 게임플레이 판정
+포트, 영속 저장은 툴링 SavePort(`save(): boolean`, throw 금지), 결과 표시는
+그래픽스(BaseScreenPort 소비). 저장 실패는 `saveFailedRolledBack`으로 일반
+불가 사유와 구분하며 내부 예외 문자열을 UI에 싣지 않는다.
+
+**저장 시점 5종** [13차 결의 4]: 이벤트 3종(`saveRequested` —
+settlement·rarePart·sortieLaunch) + 트랜잭션 직접 저장 2종(구매·장비 변경
+직후, SavePort 동기 호출 — 중복 이벤트 금지). 그 외 자동·주기 저장 없음.
+
+### 스프린트 A 최종 조립 기준 (composition root 전용)
+
+| 연결 | 방식 |
+|---|---|
+| 조준 소켓 소스 → 게임플레이 AimSystem·그래픽스 조준 카메라 | `tubeSockets`(단일 rig) — 게임플레이 조준이 `FineAimSource` 구현 시 `attachFineAimSource`, 카메라·어뢰는 소켓 소비만 |
+| 어뢰 spawn socket → TorpedoSystem | `torpedoSpawnSocket` 소비 — 게임플레이 자체 SPAWN_OFFSET 상수 삭제 |
+| 구매 UI command → PurchaseTransaction → 게임플레이 판정 → SavePort | `BaseScreenPort.purchaseUpgrade` — UI는 포트만 호출 |
+| 장비 UI command → EquipmentTransaction → 게임플레이 판정 → SavePort | `BaseScreenPort.changeEquipment` |
+| MetaLoop 상태 → 기지·해역 UI | `metaStateChanged` 구독 + `BaseScreenPort` 읽기 상태 |
+
+금지: EventBus·어뢰·저장 시스템 중복 생성 / 그래픽스의 지갑 직접 수정 /
+게임플레이의 localStorage 직접 접근 / UI의 params 직접 변경 / any 캐스팅
+계약 우회 / 전역 싱글턴 추가.
+
+### production 기지 경제 조립 (INT-CORE-010 — 스프린트 A 마감)
+
+```
+[UI — 그래픽스]                    [조립 — PveIntegration/Game]        [판정·상태]
+EconomyHud ─┐                      createMetaUiPorts ── BaseScreenPort  MetaLoop(실지갑·집계)
+SortiePrep ─┴─ 포트 소비만  ──────▶  ├ purchaseUpgrade → PurchaseTransaction → UpgradePurchaseSystem(판정)
+ControlsHud 출항 버튼 ────────────▶  ├ equip/replace/unequip → EquipmentTransaction → EquipmentJudgeAdapter → EquipmentSystem
+                                    └ confirmDeparture → DepartureCommand
+                                          모든 저장 = CountingSavePort(계측) → SaveBridge.writeSnapshot → SaveStore
+```
+
+- **단계의 단일 저장소** = `UpgradePurchaseSystem.levelSnapshot` — 저장·UI·
+  유효 파라미터가 전부 여기서 파생. `UpgradeState`는 파생 뷰(보정·외형 단계)로
+  구매 확정 후에만 동기화된다.
+- 경제 데이터 미확정(공식 params null)은 `economyDataUnavailable`로
+  **트랜잭션 진입 전 차단** — 상태·저장 0회, null→0 변환·provisional 대입 금지.
+- QA 데모(`econUiQaDemo`)는 `?econdemo` 플래그 전용 — production composition
+  (Game·PveIntegration)에 포함되지 않는다 (verify:meta 정적 검사).
+- 저장 책임 표는 INTERFACES §2d — 한 사용자 명령 = SavePort 최대 1회,
+  `CountingSavePort.callCount`로 계측 가능.
+
+### 공식 런타임 params·해저 재화 결합 (INT-CORE-011 — 공식 경제 연결)
+
+```
+loadEconomyParams() ┐  (툴링 로더 — composeSystems에서 각 1회)
+loadAimingParams()  ┘
+        │
+        ▼
+OfficialRuntimeParams (contracts/officialParams.ts)
+  ├─ economy.creditLossOnDestroyedRatio → MetaLoop (provisional 삭제됨)
+  ├─ upgrades → UpgradePurchaseSystem·UpgradeState·BaseScreenPort·UI 포트
+  ├─ equipment → BaseScreenPort
+  ├─ economy·cargo·equipment → GameplaySystems 생성자 1회 주입
+  ├─ economy.salvageSpawns ─┐
+  └─ aiming → 조준 로더 배선 대기 (provisionalAiming 잔존)
+                            │ spawnId 결합 (composeSalvageSpawnPlan)
+SalvagePlacementSource ─────┘   좌표 = world/salvagePlacements.ts (월드·그래픽스)
+        │
+        ▼
+SortieSalvageSpawner.beginSortie()  ← sessionPort.start() (출항당 1회 가드)
+        │
+        ▼
+gameplay.spawnSalvageFromPlan(entry)   ← 결합 entry 전체 (spawnId 보존)
+        │
+        ▼
+EconomySystem — spawnId 기준 중복·회수 후 재생성 거부 (이중 방어)
+```
+
+- 공식 로더 호출은 composition root **각 1회** — 시스템·UI의 JSON·로더
+  직접 호출 금지 (verify:meta 정적 검사 ②·③).
+- 보상은 economy params에서만, 좌표는 SalvagePlacementSource에서만 파생.
+  누락·중복·미지 spawnId는 **거부**(무시 금지) — 거부 시 부분 생성 없음.
+- 같은 출항 중복 생성·파괴분 재생성 금지(출항당 플래그 가드), 새 출항 시
+  재생성 (`resetSortieSession` 직후 `beginSortie`).
+- 배치 미도착 상태는 명시적 unwired — 임시 좌표를 만들지 않는다.
+- **spawnId는 결합부터 생성까지 유실 없이 전달된다.** 좌표만 넘기던 구
+  어댑터(`spawnSalvage(kind,x,y,z,rarePartId)`)는 spawnId·확정 credits를
+  잃어 게임플레이 측 중복 거부가 성립하지 않았으므로 폐기했다.
+- 경제 계열 provisional 모듈은 **전부 삭제됐다** — `meta/provisionalEconomy`·
+  `systems/economy/provisionalEconomy`·`systems/provisionalCargo`·
+  `systems/provisionalEquipment`·`provisionalUpgradeCost`·`purchaseTypes`.
+  production import 0건 (verify:gameplay·verify:meta 정적 검사로 고정).
+  손실률 0.5·픽업 6m·드롭 120/60/40/25는 `params/economy.json`이 정본이다.
+- 저장 loadout 복원도 이 조립 지점 1회다:
+  `restoreSavedLoadout(loaded.source === 'fresh' ? null : loaded.data.equippedGear)`.
+  `null`(저장 없음)과 `[]`(명시적 전부 해제)를 **구분**한다 — 빈 배열에
+  기본 어뢰를 되돌려 주면 '전부 해제'가 새로고침마다 무효가 된다.
+
+### 세력·식별·경비함 스폰 조립 (INT-CORE-012 — 스프린트 B **선행개발**)
+
+> B 범위표는 A 통합 PR 병합 시 발효된다(15차 결의 1). 아래는 발효 전
+> 선행개발분이며, A+B 최종 통합 브랜치 검증 전까지 B 완료로 보지 않는다.
+
+```
+게임플레이 유효 피해 적용 (판정 소유)
+      │  neutralShipHit { targetFaction, damageAmount, attackCorrelationId,
+      │                   firstValidNeutralHit, ... }
+      ▼
+NeutralIncidentBoundary ── GuardIncidentLedger (중복 방지 정본 1곳)
+      │  guardShipRequested v2 { requestId, correlationId, incidentPosition, ... }
+      ▼
+GuardSpawnBridge → GuardSpawnCoordinator (GuardSpawnPort)
+      │   ├─ 위치: GuardSpawnLocationStrategy (게임플레이·월드 소유, 미연결 =
+      │   │        noSpawnLocation — 임의 좌표 금지)
+      │   └─ AI : GuardShipAdapter → production DestroyerAIFactory →
+      ▼           **범용 DestroyerAIController** → gameplay motion adapter
+                  (이동 포트 미연결 = spawnFailed — 대체 AI·가짜 이동 금지)
+world entity registration (attachSpawnListener 훅)
+
+식별: 게임플레이 ShipIdentificationSource → (조립부 주입) → 렌더 조준경 태그
+격침 보상: 세력 → rewardDropTableIdFor → economy dropTables → 지갑
+           (neutral = null → 지갑 불변)
+```
+
+**통합 창이 연결할 API와 순서** (전부 조립부 1줄 배선):
+
+1. `guardSpawn.attachLocationStrategy(gameplay.guardSpawnLocations)` — 게임플레이
+   위치 전략 도착 시. 없으면 스폰은 `noSpawnLocation`으로 끝난다.
+2. `surfaceMotionPorts` 교체 — **남은 유일한 연결**. `Game.composeSystems`의
+   `SurfaceShipMotionPortFactory`(현재 `create: () => null`)를 게임플레이
+   motion adapter로 바꾸면 스폰이 실제 개체를 만든다. 범용 AI 팩토리는 이미
+   `attachFactory`로 연결돼 있다.
+3. `guardSpawn.attachSpawnListener((handle) => …)` — 스폰된 개체의 표적
+   등록·렌더 표시 배선.
+4. `scene.attachIdentificationSource(gameplay.identifications)` — 그래픽스
+   조준경 태그 UI 도착 시(렌더는 이 모델만 소비).
+
+등록 순서는 경제 브리지(②-a) → 사건 경계 → 스폰 브리지 → 어댑터(③ AI 그룹)다.
+중복 방지 저장소는 `GuardIncidentLedger` **하나**이며, 게임플레이 시스템
+내부에 같은 목적의 표를 만들지 않는다 (원장은 출항 경계에서 리셋).
+
+**B5 규칙 개정 (INT-CORE-013 — 15차 diff-only 변경):** 조사 결과 production
+`DestroyerAI` 구현체가 **0개**(계약·어댑터·검증 더블만)여서 '기존 구현체
+재사용 / 신규 AI 0'은 성립 불가한 전제였다. 개정 후 구조:
+
+- **범용 `DestroyerAIController` 1개**(`src/core/`) — 이 저장소의 유일한
+  production `DestroyerAI` 구현체. 경비함(patrol)과 일반 적대 구축함이
+  **같은 구현체**를 소비한다(세력·초기 표적만 다름).
+- 어댑터는 여전히 주입과 수명주기 전달만 한다. 경비 전용 `GuardAI`·
+  `GuardBehavior`·`GuardStateMachine`은 **계속 금지**.
+- AI 책임: 초기 표적·마지막 확인 위치 보관, pose 읽기, 목표 방향 이동 명령,
+  수면 고도 유지, 월드 경계 이탈 방지, 표적 무효 시 안전 동작.
+  **미포함**: 탐지·시야/소나 게이지·폭뢰·무기 발사·선체 체력·침수(스프린트 C).
+- **이동은 게임플레이 소유** — `SurfaceShipMotionPort`(getPosition·getForward·
+  turnToward·moveForward·maintainSurfaceHeight·isWithinWorldBounds·
+  isTargetAlive·getTargetPosition). 리드는 계약만 제공하고 선박 transform을
+  직접 조작하지 않는다. 선회·속력·해수면·경계 **수치는 전부 구현측 소유**.
+- 정적 검사(개정): 범용 구현 **정확히 1개**(`implements DestroyerAI` 내용
+  기준 — 파일 이름으로 회피 불가) / Guard 전용 AI 0개 / 어댑터의 범용 factory
+  사용 / `CargoShipSystem` 위장 금지 / 검증 더블의 production 사용 금지 /
+  범용 AI의 C 기능 참조 0건. 렌더·UI 오버레이는 AI가 아니므로 허용하되
+  같은 내용 검사를 적용한다.
+
 ## 게임 상태 전환과 장면 전환의 분리
 
 - **게임 상태(국면)** — `GameStateMachine`이 소유. 전환은 허용표 검증 후
@@ -339,3 +520,60 @@ gameplay.poseSource)`로 읽기 전용 잠수함 포즈를 1회 주입한다. �
 판정·이동을 계산하지 않고, 시스템 update 이후 sceneManager.update가
 포즈를 소비한다. `WebAudioSystem`은 아직 미조립(후속 통합 항목 —
 CURRENT_STATUS 빌드·툴 구역).
+
+## 스프린트 B 조립 계약 (INT-CORE-012·013 — 세력·식별·경비함)
+
+```
+중립 유효 피해 (게임플레이 CargoShipSystem)
+        │  neutralShipHit { targetEntityId, damageAmount>0,
+        ▼                   attackCorrelationId: "torpedo:<어뢰 id>" }
+NeutralIncidentBoundary ──▶ GuardIncidentLedger.claimRequest(correlationId)
+        │                        └ 같은 사건 두 번째 요청은 여기서 멈춘다
+        ▼  guardShipRequested { requestId = correlationId, requestedFaction:'patrol' }
+GuardSpawnBridge ──▶ GuardSpawnCoordinator.spawnGuardShip()
+        ├─ ledger.claimSpawn(requestId)      → duplicateRequest
+        ├─ GuardSpawnLocationStrategy.resolve() → noSpawnLocation (임의 좌표 금지)
+        │     정본: gameplay.guardSpawnLocation (CanyonPatrolSpawnLocation)
+        ▼
+GuardShipAdapter.spawn()
+        └─ createProductionDestroyerAIFactory(surfaceMotionPorts)
+              ├─ 판단: DestroyerAIController      (리드 — production 유일 구현체)
+              └─ 이동: SurfaceShipMotionPort      (게임플레이 PatrolShipEntity)
+                     정본 팩토리: gameplay.surfaceShipMotionPortFactory
+        ▼
+GuardShipHandle { requestId, entityId, faction:'patrol',
+                  initialTargetEntityId = PLAYER_ENTITY_ID, spawnPosition }
+        ├─▶ TargetRegistry (어뢰 명중 판정)
+        ├─▶ gameplay.shipWorldSource     → 렌더 3D 표현
+        ├─▶ gameplay.shipIdentification  → 조준경 태그
+        └─▶ scene.attachGuardSightingSource → 등장 방향 마커 (실제 spawnPosition만)
+```
+
+**중복 방지 저장소는 `GuardIncidentLedger` 하나뿐이다** — 요청(상관 id)과
+스폰(요청 id)이 같은 원장을 공유한다. 시스템 내부에 별도 중복 표를 두지 않는다.
+새 출항에서 원장·함대·식별 상태가 전부 초기화되므로, 과거 requestId가 새
+출항의 정상 사건을 막지 않는다.
+
+**AI는 transform을 소유하지 않는다.** pose 정본은 게임플레이 `PatrolShipEntity`
+하나이고, AI는 이동 포트를 통해 명령만 낸다. 이 분리 덕분에 '경비함 = 기존
+구축함 AI 재사용'(신규 AI 코어 0)이 구조로 보장된다 — production
+`implements DestroyerAI` 구현체는 `src/core/DestroyerAIController.ts` **1개**뿐이며,
+검사는 파일명이 아니라 내용 기준이라 이름을 바꿔 피할 수 없다.
+
+### 다중 선박 렌더 경로
+
+```
+gameplay.shipWorldSource (ShipWorldView[] — 평면 스냅샷, 객체 참조 없음)
+        │  적대 화물선 + 중립 화물선 + 스폰된 경비함
+        ▼
+CanyonScene.attachShipWorldSource
+        └─ entityId → CargoShipVisual (변형 = view.faction 값으로만 선택)
+           · 주입 시 단일 화물선 경로(attachCargoShipSource)를 **대체**
+             → 적대 화물선이 두 경로로 중복 렌더되지 않는다
+           · 목록에서 사라지거나 alive=false → 인스턴스 제거·dispose
+           · torpedoHit 폭발은 맞은 개체 인스턴스에서만 시작 (멱등)
+```
+
+렌더는 모델·클래스 이름으로 세력을 추측하지 않는다 — `factionVisuals.ts`의
+변형 3종(적대 삼각·포탑 2 / 중립 사각·포탑 0 / 경비 마름모·포탑 1)은
+`FactionId` 값으로만 선택되며, **색 이전에 실루엣·마크 형태로 구분**된다.

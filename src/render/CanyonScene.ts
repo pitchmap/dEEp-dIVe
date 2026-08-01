@@ -31,6 +31,7 @@ import type { MovementParams } from '../contracts/params';
 import type {
   CargoShipStateSource,
   SubmarinePoseSource,
+  TorpedoTubeSocketSource,
 } from '../contracts/systems';
 import { meshYawRadians } from '../core/conventions';
 import type { EventBus, Unsubscribe } from '../core/EventBus';
@@ -45,15 +46,31 @@ import { SegmentedSwimMotion } from './boss/SegmentedSwimMotion';
 import type { BossMotionStyle } from './boss/BossMotionStyle';
 import { CameraRig } from './CameraRig';
 import { CargoShipVisual } from './CargoShipVisual';
+import type { ShipWorldSource, ShipWorldView } from '../systems/faction/ShipWorldSource';
 import { EnvironmentDressing } from './EnvironmentDressing';
 import { LeadShotIndicator } from './LeadShotIndicator';
 import { PeriscopeView } from './PeriscopeView';
 import { Propeller } from './Propeller';
 import { SeaSurface } from './SeaSurface';
+import type { ConvoyPositionSource, ConvoySource } from './ConvoyVisuals';
+import { ConvoyVisuals } from './ConvoyVisuals';
+import type { GuardSightingSource } from './GuardDirectionIndicator';
+import { GuardDirectionIndicator } from './GuardDirectionIndicator';
+import type { IdentificationExposureSink } from './IdentificationTags';
+import { IdentificationTags } from './IdentificationTags';
+import type { ShipIdentificationSource } from '../contracts/identification';
+import type { SalvageStateSource } from './SalvageVisuals';
+import { SalvageVisuals } from './SalvageVisuals';
 import { SubmarineVisual } from './SubmarineVisual';
 import type { TorpedoStateSource } from './TorpedoVisuals';
 import { TorpedoVisuals } from './TorpedoVisuals';
 import { XrayFloodingSpike } from './xray/XrayFloodingSpike';
+import { EconomyUiQaDemo, parseEconDemoFlag } from '../ui/econUiQaDemo';
+import {
+  createSprintBFixture,
+  parseSprintBFixtureFlag,
+  type SprintBFixture,
+} from './sprintBRenderFixture';
 
 /** 수중 배경·포그 톤 — 임시 색상. 심도별 그라데이션·아트 색은 D13 이후 (§3.1) */
 const WATER_COLOR = 0x0e3140;
@@ -72,6 +89,29 @@ const WALL_COLOR = 0x59646c;
 /** 포즈 미주입 시 기본 수직 위치 — 스폰 관례(y=0, 순항 구간)와 동일 */
 const DEFAULT_SUBMARINE_Y = 0;
 
+/** 조준 카메라 lookAt 재사용 벡터 (프레임당 할당 방지) */
+const AIM_LOOK_TARGET = new THREE.Vector3();
+
+/**
+ * 자기 선체 전용 렌더 레이어 (13차 결의 3) — 조준 카메라에서 **레이어
+ * 마스크로만** 자기 선체를 제외한다. 객체 visible·material 전역 변경 금지:
+ * 블롭 섀도·수면·타 카메라(QA·기지 뷰)에는 선체가 그대로 남는다.
+ */
+const SELF_HULL_LAYER = 1;
+
+/**
+ * 미세 조준 각 소스 — 게임플레이 소유 상태의 구조적 소비 인터페이스
+ * (13차 결의 4: aiming.json 한계각·감도·복귀는 게임플레이가 판정).
+ * 렌더는 결과 각도만 소비하며, 소스 부재 시 0(정면)으로 취급한다.
+ * 정식 계약 이관은 INT-RENDER-008 요청.
+ */
+export interface AimAngleSource {
+  /** 소켓 전방축 기준 미세 yaw (rad) — 게임플레이 한계각 적용 후 값 */
+  readonly yawRadians: number;
+  /** 소켓 전방축 기준 미세 pitch (rad, 양수 = 위) */
+  readonly pitchRadians: number;
+}
+
 export class CanyonScene implements ManagedScene {
   private readonly scene = new THREE.Scene();
   private readonly layout: CanyonLayout;
@@ -82,19 +122,59 @@ export class CanyonScene implements ManagedScene {
   private readonly seaSurface: SeaSurface;
   private readonly torpedoVisuals = new TorpedoVisuals();
   private readonly leadIndicator = new LeadShotIndicator();
+  private readonly salvageVisuals = new SalvageVisuals();
   private readonly environment: EnvironmentDressing;
   private periscope: PeriscopeView | null = null;
+  // 스프린트 B 표현 — 전부 계약 read model 소비 (판정·스폰 실행 없음)
+  private identificationTags: IdentificationTags | null = null;
+  private convoyVisuals: ConvoyVisuals | null = null;
+  private guardDirection: GuardDirectionIndicator | null = null;
+  private identificationSource: ShipIdentificationSource | null = null;
+  private convoySource: ConvoySource | null = null;
+  private guardSightingSource: GuardSightingSource | null = null;
+  private exposureSink: IdentificationExposureSink | null = null;
   private readonly disposables: Array<{ dispose(): void }> = [];
 
   private poseSource: SubmarinePoseSource | null = null;
   private cargoShipSource: CargoShipStateSource | null = null;
   private torpedoSource: TorpedoStateSource | null = null;
+  /**
+   * ⚠ 미세각 소스는 더 이상 조준 카메라 계산에 쓰이지 않는다 — 각도는 공식
+   * 소켓 rig가 이미 반영한다(스프린트 A 정규화: 렌더 자체 각도 계산 금지).
+   * 주입은 QA 호환을 위해 받아만 두고 소비하지 않는다.
+   */
+  private aimAngleSource: AimAngleSource | null = null;
+  /**
+   * 공식 발사관 소켓 rig (리드 `TorpedoTubeSocketSource`) — composition root가
+   * 게임플레이·렌더에 **같은 인스턴스**를 주입한다. 조준 카메라는 이
+   * 소켓의 월드 포즈만 소비하며 자체 앵커·오프셋·각도를 계산하지 않는다.
+   */
+  private torpedoTubeSocketSource: TorpedoTubeSocketSource | null = null;
   private cargoShip: CargoShipVisual | null = null;
+  /**
+   * 다중 선박 read source (B1·B5) — 적대·중립 화물선과 경비함이 한 목록으로
+   * 온다. 주입되면 단일 화물선 경로(`cargoShipSource`)를 **대체**한다:
+   * 같은 개체가 두 경로로 그려지지 않게 하기 위한 것이며, 렌더는 목록에
+   * 있는 것만 그린다 (없는 배를 지어내지 않는다).
+   */
+  private shipWorldSource: ShipWorldSource | null = null;
+  /** entityId → 시각 인스턴스 (다중 선박 경로 전용) */
+  private readonly shipVisuals = new Map<number, CargoShipVisual>();
   private xraySpike: XrayFloodingSpike | null = null;
 
   // QA 격리 경로 — 기지 화면 미리보기(?base=1)·보스 분절 스파이크(?bossSpike=1)
   private baseView: BaseSceneView | null = null;
   private bossSpike: BossSegmentSpike | null = null;
+  // 경제·성장 UI QA 데모(?econdemo=1) — 실사용 배선 아님 (배지로 구분)
+  private econDemo: EconomyUiQaDemo | null = null;
+  // 스프린트 B 표시 규칙 UI 단위 검증 fixture(?bdemo=1) — production 아님
+  private bFixture: SprintBFixture | null = null;
+  /**
+   * `?bdemo` 검수 중에는 fixture 표본이 우선한다 — 이후 조립부의 production
+   * 주입(현재 식별·호위는 미구현, 경비는 빈 목록)이 표본을 덮어쓰지 않게
+   * 한다. **플래그가 없으면 항상 false**라 production 경로는 영향이 없다.
+   */
+  private bFixtureOverrides = false;
   private bossShakeIntensity = 0;
   private elapsed = 0;
 
@@ -141,6 +221,11 @@ export class CanyonScene implements ManagedScene {
     this.buildCanyonFromLayout();
     this.mountSubmarine();
 
+    // 자기 선체(프로펠러·조준 소켓 포함 서브트리)를 전용 레이어에만 둔다.
+    // 3인칭 카메라는 이 레이어를 켠 채 시작 — 조준 중에만 끈다 (13차 결의 3).
+    this.submarine.root.traverse((node) => node.layers.set(SELF_HULL_LAYER));
+    this.renderer.camera.layers.enable(SELF_HULL_LAYER);
+
     this.blobShadow = new BlobShadow(this.layout.floorY);
     this.scene.add(this.blobShadow.mesh);
 
@@ -151,6 +236,7 @@ export class CanyonScene implements ManagedScene {
     this.scene.add(this.environment.root);
     this.scene.add(this.torpedoVisuals.root);
     this.scene.add(this.leadIndicator.root);
+    this.scene.add(this.salvageVisuals.root);
 
     this.rig = new CameraRig(this.renderer.camera);
     // 렌더 검증용: ?lookup 플래그 시 카메라를 아래로 내려 해수면·실루엣 확인
@@ -162,6 +248,40 @@ export class CanyonScene implements ManagedScene {
     this.mountXraySpikeIfRequested();
     this.mountBossSpikeIfRequested();
     this.mountBaseViewIfRequested();
+    this.mountEconDemoIfRequested();
+    this.mountSprintBFixtureIfRequested();
+
+    // `?aimdemo=1` — 어뢰 조준경 **표시 고정** QA 플래그: 조준경·조준 카메라·
+    // 선체 레이어 제외를 임의 심도에서 정지 검수한다. 게임플레이 조준 판정
+    // (전 심도 진입 — 창2 작업)과 무관한 렌더 검수 전용이며, 정식
+    // aimModeChanged 이벤트가 오면 그 상태가 우선한다 (?shipdemo 관례).
+    if (new URLSearchParams(window.location.search).get('aimdemo') === '1') {
+      this.ensurePeriscope().setAiming(true);
+      this.ensureBOverlays();
+      this.identificationTags?.setAiming(true);
+      this.convoyVisuals?.setAiming(true);
+      this.setAimCameraActive(true);
+      console.info('[CanyonScene] 조준경 표시 고정 (?aimdemo=1 — 렌더 QA 전용).');
+    }
+  }
+
+  /**
+   * 경제·성장 UI QA 데모 — `?econdemo=1` (저장 실패 변형: `?econdemo=savefail`).
+   * 실사용 UI(실제 MetaLoop·EquipmentSystem 배선)는 composition root 소관 —
+   * 이 경로는 배지 표기된 QA 하네스만 마운트한다 (?shipdemo 관례).
+   */
+  private mountEconDemoIfRequested(): void {
+    const flag = parseEconDemoFlag(window.location.search);
+    if (!flag.mount) return;
+    try {
+      const host =
+        this.renderer.webgl.domElement.parentElement ?? document.body;
+      this.econDemo = new EconomyUiQaDemo(host, flag.forceSaveFailure);
+      console.info('[CanyonScene] 경제 UI QA 데모 장착 (?econdemo — 실사용 배선 아님).');
+    } catch (error) {
+      this.econDemo = null;
+      console.warn('[CanyonScene] 경제 UI QA 데모 초기화 실패 — 기본 장면은 계속 작동합니다.', error);
+    }
   }
 
   /**
@@ -215,6 +335,47 @@ export class CanyonScene implements ManagedScene {
     }
   }
 
+  /**
+   * 스프린트 B 표시 규칙 fixture — `?bdemo=1` (UI 단위 검증 전용).
+   * production 데이터가 아니며 배지로 구분한다. 경비함 3D 개체는 만들지
+   * 않는다 — 방향 마커 좌표 규칙만 검수한다 (§6 가짜 경비함 금지).
+   */
+  private mountSprintBFixtureIfRequested(): void {
+    if (!parseSprintBFixtureFlag(window.location.search)) return;
+    const fixture = createSprintBFixture(this.layout.seaSurfaceY);
+    this.bFixture = fixture;
+    this.identificationSource = fixture.identification;
+    this.convoySource = fixture.convoy;
+    this.guardSightingSource = fixture.guard;
+    this.bFixtureOverrides = true;
+
+    const host = this.renderer.webgl.domElement.parentElement ?? document.body;
+    const badge = document.createElement('div');
+    badge.setAttribute('data-render-b-fixture-badge', '');
+    badge.textContent = 'B fixture — 표시 규칙 검수용 (게임플레이 실제 상태 아님)';
+    badge.style.cssText = [
+      'position:absolute',
+      'left:0.75rem',
+      'top:0.75rem',
+      'z-index:33',
+      'padding:0.25rem 0.5rem',
+      'border:1px dashed #ffb347',
+      'border-radius:4px',
+      'background:rgba(6,16,22,0.85)',
+      'color:#ffb347',
+      'font:0.7rem system-ui,sans-serif',
+    ].join(';');
+    host.appendChild(badge);
+    // 검수 조작 핸들 — ?bdemo 플래그가 있을 때만 노출되는 QA 경로다
+    (globalThis as unknown as Record<string, unknown>)['__deepDiveBFixture'] = fixture;
+    console.info('[CanyonScene] 스프린트 B fixture 장착 (?bdemo=1 — UI 단위 검증 전용).');
+  }
+
+  /** fixture 검수 조작 핸들 (?bdemo 전용 — production에서는 null) */
+  get sprintBFixture(): SprintBFixture | null {
+    return this.bFixture;
+  }
+
   /** 게임플레이 포즈 상태(계약 SubmarinePoseSource) 연결점 — 렌더는 소비만 한다 */
   attachPoseSource(source: SubmarinePoseSource): void {
     this.poseSource = source;
@@ -226,12 +387,84 @@ export class CanyonScene implements ManagedScene {
   }
 
   /**
+   * 다중 선박 상태(`ShipWorldSource`) 연결점 — 적대·중립 화물선 + 경비함을
+   * 한 목록으로 받는다 (B1·B5). composition root가 1회 주입한다.
+   *
+   * 주입되면 단일 화물선 경로를 **대체**한다 — 적대 화물선이 두 경로로
+   * 중복 렌더되지 않게 하기 위한 것이다. 세력 변형은 목록이 준 `faction`
+   * 값으로만 선택되며 렌더는 모델·클래스 이름으로 세력을 추측하지 않는다.
+   */
+  attachShipWorldSource(source: ShipWorldSource): void {
+    this.shipWorldSource = source;
+  }
+
+  /**
    * 어뢰 상태 연결점 — gameplay.torpedo(읽기 전용 스냅샷·어뢰 속력)를
    * composition root가 1회 주입한다 (INT-RENDER-006). 미주입 시 어뢰·항적
    * 미표시(렌더가 상태를 지어내지 않음).
    */
   attachTorpedoSource(source: TorpedoStateSource): void {
     this.torpedoSource = source;
+  }
+
+  /**
+   * 해저 재화 상태 연결점 — 게임플레이 `EconomySystem.salvageObjects`
+   * 읽기 전용 스냅샷을 소비만 한다 (파괴 판정·보상은 게임플레이 소유).
+   * 회수 반경도 게임플레이 값을 그대로 받는다 — 렌더가 정의하지 않는다.
+   */
+  /**
+   * B2 식별 read model 연결 — 계약 `ShipIdentificationSource`만 소비한다.
+   * 미주입이면 태그를 그리지 않는다 (렌더가 식별 상태를 만들지 않는다).
+   */
+  attachIdentificationSource(
+    source: ShipIdentificationSource,
+    exposureSink?: IdentificationExposureSink,
+  ): void {
+    if (this.bFixtureOverrides) return; // ?bdemo 검수 중 — 표본 유지
+    this.identificationSource = source;
+    this.exposureSink = exposureSink ?? null;
+    if (this.identificationTags) {
+      this.identificationTags.attachSource(source);
+      if (exposureSink) this.identificationTags.attachExposureSink(exposureSink);
+    }
+    if (this.convoyVisuals) this.convoyVisuals.attachPositionSource(source);
+  }
+
+  /** B6 고가치 수송선·호위 결속 read model (미주입 = 미표시) */
+  attachConvoySource(source: ConvoySource): void {
+    if (this.bFixtureOverrides) return; // ?bdemo 검수 중 — 표본 유지
+    this.convoySource = source;
+    this.convoyVisuals?.attachSource(source);
+  }
+
+  /**
+   * 경비함 스폰 결과 read model — **실제 스폰된 개체만** 담겨야 한다.
+   * 스폰이 차단돼 있으면 비워 둔다 (가짜 경비함 표시 금지).
+   */
+  attachGuardSightingSource(source: GuardSightingSource): void {
+    if (this.bFixtureOverrides) return; // ?bdemo 검수 중 — 표본 유지
+    this.guardSightingSource = source;
+    this.guardDirection?.attachSource(source);
+  }
+
+  attachSalvageSource(source: SalvageStateSource, pickupRadiusMeters: number): void {
+    this.salvageVisuals.setPickupRadiusMeters(pickupRadiusMeters);
+    this.salvageVisuals.attachSource(source);
+  }
+
+  /**
+   * 미세 조준 각 소스 연결점 — 게임플레이가 aiming.json 한계각·감도를 적용해
+   * 계산한 결과 각을 렌더가 소비만 한다 (렌더 독자 한계각·감도 금지).
+   * 미주입 시 조준 카메라는 소켓 정면(미세각 0)을 본다.
+   */
+  /** 공식 소켓 rig 주입 — composition root 1회 (조준 카메라 = 어뢰와 동일 출처) */
+  attachTorpedoTubeSocket(source: TorpedoTubeSocketSource): void {
+    this.torpedoTubeSocketSource = source;
+  }
+
+  attachAimAngleSource(source: AimAngleSource): void {
+    this.aimAngleSource = source;
+    void this.aimAngleSource;
   }
 
   /**
@@ -255,6 +488,8 @@ export class CanyonScene implements ManagedScene {
    * 후속 — 그때 이 메서드가 대체된다).
    */
   setMetaBaseActive(active: boolean, tiers?: { hull: number; weapon: number }): void {
+    // 경비함 방향 마커는 해역 전용 — 기지 화면에는 표시하지 않는다 (§10)
+    this.guardDirection?.setSuppressed(active);
     if (active) {
       if (!this.baseView) this.baseView = new BaseSceneView(this.renderer);
       if (tiers) {
@@ -283,7 +518,27 @@ export class CanyonScene implements ManagedScene {
     this.unsubscribeAimMode?.();
     this.unsubscribeAimMode = bus.on('aimModeChanged', (payload) => {
       this.ensurePeriscope().setAiming(payload.aiming);
+      this.ensureBOverlays();
+      this.identificationTags?.setAiming(payload.aiming);
+      this.convoyVisuals?.setAiming(payload.aiming);
+      this.setAimCameraActive(payload.aiming);
     });
+  }
+
+  /**
+   * 조준 카메라 전환 (aimModeChanged 전이에서만 호출 — 렌더 독자 전환 없음).
+   *  - 진입: 자기 선체 레이어를 조준 카메라 마스크에서만 끈다 (13차 결의 3 —
+   *    그림자·수면·타 카메라 보존, visible·material 전역 변경 없음).
+   *  - 해제: 레이어 복원 + 현 카메라 위치에서 3인칭 후방 뷰로 자연 복귀.
+   */
+  private setAimCameraActive(active: boolean): void {
+    const camera = this.renderer.camera;
+    if (active) {
+      camera.layers.disable(SELF_HULL_LAYER);
+      return;
+    }
+    camera.layers.enable(SELF_HULL_LAYER);
+    this.rig.beginReturnFrom(camera.position);
   }
 
   /** 조준경 오버레이 지연 생성 — 캔버스 부모(#app)에 겹친다 */
@@ -296,12 +551,44 @@ export class CanyonScene implements ManagedScene {
     return this.periscope;
   }
 
+  /**
+   * 스프린트 B 오버레이 지연 생성 — 조준경과 같은 host에 겹친다.
+   * 소스가 이미 주입돼 있으면 생성 시점에 연결한다 (주입 순서 무관).
+   */
+  private ensureBOverlays(): void {
+    const host = this.renderer.webgl.domElement.parentElement ?? document.body;
+    if (!this.identificationTags) {
+      this.identificationTags = new IdentificationTags(host);
+      if (this.identificationSource) {
+        this.identificationTags.attachSource(this.identificationSource);
+      }
+      if (this.exposureSink) this.identificationTags.attachExposureSink(this.exposureSink);
+    }
+    if (!this.convoyVisuals) {
+      this.convoyVisuals = new ConvoyVisuals(host);
+      if (this.convoySource) this.convoyVisuals.attachSource(this.convoySource);
+      if (this.identificationSource) {
+        this.convoyVisuals.attachPositionSource(
+          this.identificationSource as ConvoyPositionSource,
+        );
+      }
+    }
+    if (!this.guardDirection) {
+      this.guardDirection = new GuardDirectionIndicator(host);
+      if (this.guardSightingSource) {
+        this.guardDirection.attachSource(this.guardSightingSource);
+      }
+    }
+  }
+
   /** 카메라 입력 어댑터(CameraInputAdapter) 연결용 */
   get cameraRig(): CameraRig {
     return this.rig;
   }
 
   update(deltaSeconds: number): void {
+    // 경제 UI QA 데모 — 장면과 무관한 DOM 갱신 (기지 미리보기와도 병행)
+    this.econDemo?.update();
     // 기지 화면 미리보기(?base=1) — 협곡 장면 대신 기지 장면만 갱신 (QA 경로)
     if (this.baseView) {
       this.baseView.update(deltaSeconds);
@@ -318,7 +605,14 @@ export class CanyonScene implements ManagedScene {
     this.submarine.root.position.set(x, y, z);
     this.submarine.root.rotation.y = meshYawRadians(heading);
     this.blobShadow.follow(x, z); // 블롭 섀도는 해저 투영 — 수직 이동과 무관
-    this.rig.update(deltaSeconds, x, y, z, heading);
+
+    if (this.periscope?.isAiming) {
+      // 어뢰 조준경 — 선수 발사관 시점. 모든 심도에서 동일 진입(별도 잠망경
+      // 심도 카메라 전환 없음): 소켓이 잠수함을 따라가므로 심도별 분기 불필요.
+      this.updateAimCamera();
+    } else {
+      this.rig.update(deltaSeconds, x, y, z, heading);
+    }
 
     // B안 스파이크 전용 — 근접 통과 카메라 흔들림 (지수 감쇠, 기본 0)
     if (this.bossShakeIntensity > 0.001) {
@@ -339,12 +633,49 @@ export class CanyonScene implements ManagedScene {
     this.seaSurface.update(deltaSeconds);
     this.environment.update(deltaSeconds);
     this.torpedoVisuals.update(deltaSeconds, this.torpedoSource);
+    this.salvageVisuals.update(deltaSeconds);
     this.periscope?.update(deltaSeconds);
+    // 스프린트 B 오버레이 — 계약 read model → 화면 좌표 매핑만 (판정 없음)
+    this.identificationTags?.update(this.renderer.camera);
+    this.convoyVisuals?.update(this.renderer.camera);
+    this.guardDirection?.update(deltaSeconds, this.renderer.camera);
     this.updateLeadIndicator();
     this.updateCargoShip(deltaSeconds);
     this.updateFogByCameraDepth();
     this.xraySpike?.update(deltaSeconds);
     this.bossSpike?.update(deltaSeconds);
+  }
+
+  /**
+   * 어뢰 조준경 카메라 — aimCameraSocket의 월드 위치·방향을 **그대로**
+   * 사용한다 (13차 결의 2: 독자 오프셋 계산 금지 — 소켓 정의가 단일 지점).
+   * 미세 조준 각은 게임플레이 소스(aimAngleSource)의 결과 값만 소켓 로컬축
+   * 기준으로 더한다 — 렌더가 한계각·감도를 판정하지 않는다. 발사 후에도
+   * aimModeChanged(false)가 올 때까지 이 시점을 유지한다.
+   */
+  private updateAimCamera(): void {
+    const camera = this.renderer.camera;
+    // 공식 소켓 rig(리드 TorpedoTubeSocketRig) — 위치·전방축을 그대로 쓴다.
+    // 미세각은 이미 rig가 반영한 값이며, 렌더는 각도를 계산하지 않는다
+    // (스프린트 A 정규화: 어뢰 spawn 소켓과 동일 rig = 십자선 = 탄도).
+    const socket = this.torpedoTubeSocketSource;
+    if (socket) {
+      const pose = socket.aimCameraSocket;
+      camera.position.set(pose.positionX, pose.positionY, pose.positionZ);
+      AIM_LOOK_TARGET.set(
+        pose.positionX + pose.forwardX,
+        pose.positionY + pose.forwardY,
+        pose.positionZ + pose.forwardZ,
+      );
+      camera.up.set(0, 1, 0);
+      camera.lookAt(AIM_LOOK_TARGET);
+      return;
+    }
+    // 소켓 미주입(QA 플래그 단독 검수) — 시각 부모만으로 근사 표시
+    const visualSocket = this.submarine.aimCameraSocket;
+    this.submarine.root.updateMatrixWorld(true);
+    visualSocket.getWorldPosition(camera.position);
+    visualSocket.getWorldQuaternion(camera.quaternion);
   }
 
   /**
@@ -406,6 +737,10 @@ export class CanyonScene implements ManagedScene {
   }
 
   dispose(): void {
+    for (const visual of this.shipVisuals.values()) visual.removeAndDispose();
+    this.shipVisuals.clear();
+    // 조준 카메라 레이어 복원 — 장면 수명과 함께 마스크 상태를 남기지 않는다
+    this.renderer.camera.layers.enable(SELF_HULL_LAYER);
     this.unsubscribeParamsReload?.();
     this.unsubscribeParamsReload = null;
     this.unsubscribeTorpedoHit?.();
@@ -414,15 +749,24 @@ export class CanyonScene implements ManagedScene {
     this.unsubscribeAimMode = null;
     this.baseView?.dispose();
     this.baseView = null;
+    this.econDemo?.dispose();
+    this.econDemo = null;
     this.bossSpike?.dispose();
     this.bossSpike = null;
     this.periscope?.dispose();
     this.periscope = null;
+    this.identificationTags?.dispose();
+    this.identificationTags = null;
+    this.convoyVisuals?.dispose();
+    this.convoyVisuals = null;
+    this.guardDirection?.dispose();
+    this.guardDirection = null;
     this.xraySpike?.dispose();
     this.xraySpike = null;
     this.cargoShip?.removeAndDispose();
     this.cargoShip = null;
     this.torpedoVisuals.dispose();
+    this.salvageVisuals.dispose();
     this.leadIndicator.dispose();
     this.environment.dispose();
     this.submarine.dispose();
@@ -489,6 +833,12 @@ export class CanyonScene implements ManagedScene {
 
   /** torpedoHit — 현재 화물선 id와 일치할 때만 폭발 시작 (멱등 처리) */
   private onTorpedoHit(payload: GameEvents['torpedoHit']): void {
+    // 다중 선박 경로 — 맞은 개체의 인스턴스에서만 폭발을 시작한다 (멱등).
+    const struck = this.shipVisuals.get(payload.targetId);
+    if (struck) {
+      struck.startHitExplosion();
+      return;
+    }
     const source = this.cargoShipSource ?? this.shipDemoSnapshot;
     if (!source || payload.targetId !== source.id) return;
     this.cargoShip?.startHitExplosion();
@@ -500,6 +850,11 @@ export class CanyonScene implements ManagedScene {
    * 화물선을 그리지 않는다 (렌더가 상태를 지어내지 않는다).
    */
   private updateCargoShip(deltaSeconds: number): void {
+    // 다중 선박 소스가 있으면 그쪽이 유일 경로다 (중복 렌더 방지).
+    if (this.shipWorldSource) {
+      this.updateShipWorld(deltaSeconds);
+      return;
+    }
     const source = this.cargoShipSource ?? this.shipDemoSnapshot;
     if (!source) return;
 
@@ -521,6 +876,40 @@ export class CanyonScene implements ManagedScene {
       this.cargoShip.startHitExplosion();
     }
     this.cargoShip.update(deltaSeconds);
+  }
+
+  /**
+   * 다중 선박 렌더 — 목록에 있는 개체마다 시각 인스턴스를 하나 유지한다.
+   *
+   *  - 새 entityId → 그 세력 변형으로 인스턴스 생성
+   *  - 목록에서 사라지거나 `alive=false` → 인스턴스 제거·dispose
+   *  - 세력 변형 교체·침몰 매핑은 기존 `applyState`가 그대로 담당한다
+   *
+   * 렌더는 판정하지 않는다: 위치·세력·생존·침몰 진행 전부 게임플레이
+   * 스냅샷 값이고, 여기서는 표현만 매핑한다.
+   */
+  private updateShipWorld(deltaSeconds: number): void {
+    const views = this.shipWorldSource?.shipViews ?? [];
+    const seen = new Set<number>();
+
+    for (const view of views) {
+      if (!view.alive) continue;
+      seen.add(view.entityId);
+      let visual = this.shipVisuals.get(view.entityId);
+      if (!visual) {
+        visual = new CargoShipVisual(view.faction);
+        this.scene.add(visual.root);
+        this.shipVisuals.set(view.entityId, visual);
+      }
+      visual.applyState(shipWorldViewAsCargoState(view));
+      visual.update(deltaSeconds);
+    }
+
+    for (const [entityId, visual] of [...this.shipVisuals]) {
+      if (seen.has(entityId)) continue;
+      visual.removeAndDispose();
+      this.shipVisuals.delete(entityId);
+    }
   }
 
   /**
@@ -569,4 +958,26 @@ export class CanyonScene implements ManagedScene {
       );
     }
   }
+}
+
+/**
+ * `ShipWorldView` → `CargoShipStateSource` 어댑터 (표현 매핑 전용).
+ * `CargoShipVisual.applyState`가 쓰는 필드만 채운다 — 속도·명중 플래그는
+ * 이 경로에서 쓰이지 않으므로 0/false로 두고, 폭발은 `torpedoHit`
+ * 이벤트가 개체별로 시작한다. 렌더가 값을 지어내지 않는다.
+ */
+function shipWorldViewAsCargoState(view: ShipWorldView): CargoShipStateSource {
+  return {
+    id: view.entityId,
+    faction: view.faction,
+    positionX: view.positionX,
+    positionY: view.positionY,
+    positionZ: view.positionZ,
+    headingRadians: view.headingRadians,
+    velocityX: 0,
+    velocityZ: 0,
+    hit: false,
+    sinkProgress: view.sinkProgress,
+    removed: !view.alive,
+  };
 }

@@ -18,19 +18,27 @@
  *  - delta time 기반 — dt≤0·비유한값 무시.
  */
 
+import { PLAYER_ENTITY_ID } from '../contracts/guard';
 import type { CombatParams } from '../contracts/params';
-import type { TorpedoSystem } from '../contracts/systems';
+import type { TorpedoSystem, TorpedoTubeSocketSource } from '../contracts/systems';
 import type { EventBus } from '../core/EventBus';
-import { bowDirectionXZ } from '../core/conventions';
 import type { CollisionWorld } from './collision/CollisionWorld';
 import { sphereIntersectsShipBox } from './collision/shipHullBox';
-import { SUBMARINE_HULL_HALF_LENGTH } from './collision/submarineHull';
+import { TORPEDO_COLLISION_RADIUS } from './collision/torpedoTubeSocket';
 import type { EquipmentId, TorpedoProfile } from './EquipmentSystem';
 import {
   PROVISIONAL_TORPEDO_MAX_RANGE_METERS,
   PROVISIONAL_TORPEDO_SPEED_MPS,
 } from './provisionalCombat';
 import type { CombatTarget, TargetRegistry } from './TargetRegistry';
+
+/**
+ * 어뢰 1발의 공격 상관 id (B4 정본 형식).
+ * 레거시 `legacy:<targetId>` 형식과 구분된다 — 표적이 아니라 **공격**이 키다.
+ */
+export function torpedoAttackCorrelationId(torpedoId: number): string {
+  return `torpedo:${torpedoId}`;
+}
 
 /**
  * 무장 공급 포트 — EquipmentSystem이 충족한다 (장비 4종 단일 소스).
@@ -43,22 +51,11 @@ export interface ArmamentPort {
   launchDecoy(x: number, y: number, z: number): boolean;
 }
 
-/** 어뢰 충돌 반경 (m) — 구조 상수 (선체 근사와 동급, 밸런스 수치 아님) */
-const TORPEDO_COLLISION_RADIUS = 0.35;
-
-/** 선수 표면과 어뢰 생성점 사이 여유 — 자함 선체와 즉시 겹치지 않게 */
-const BOW_CLEARANCE = 0.2;
-
-/** 발사 지점 오프셋: 선체 반길이 + 어뢰 반경 + 여유 (선수 방향) */
-const SPAWN_OFFSET_METERS =
-  SUBMARINE_HULL_HALF_LENGTH + TORPEDO_COLLISION_RADIUS + BOW_CLEARANCE;
-
 /** 발사 시점 포즈 읽기 전용 원천 — SubmarinePlayerController가 충족 */
 export interface TorpedoLaunchPose {
   readonly positionX: number;
   readonly positionY: number;
   readonly positionZ: number;
-  readonly headingRadians: number;
 }
 
 /** 주행 중 어뢰의 읽기 전용 상태 — 렌더(항적·모델)·검증이 소비 */
@@ -68,6 +65,8 @@ export interface TorpedoSnapshot {
   readonly y: number;
   readonly z: number;
   readonly directionX: number;
+  /** 수직 성분 — 미세 조준 pitch가 반영된 3D 진행 방향 */
+  readonly directionY: number;
   readonly directionZ: number;
   readonly traveledMeters: number;
   /** 발사 시점 장비 프로파일 (m/s) — 렌더 항적 보간용 */
@@ -80,6 +79,7 @@ interface ActiveTorpedo {
   y: number;
   z: number;
   directionX: number;
+  directionY: number;
   directionZ: number;
   traveledMeters: number;
   speedMetersPerSecond: number;
@@ -96,21 +96,27 @@ export class StraightRunTorpedoSystem implements TorpedoSystem {
   // 생성자 매개변수 프로퍼티 미사용 — 검증 러너(run.mjs)의 Node 타입
   // 스트리핑 호환(삭제 가능 문법만)을 위해 명시적 필드로 둔다.
   private readonly bus: EventBus;
-  private readonly pose: TorpedoLaunchPose;
   private readonly environment: CollisionWorld;
   private readonly targets: TargetRegistry;
   private readonly armament: ArmamentPort;
+  /**
+   * 공식 발사관 소켓 (리드 `TorpedoTubeSocketRig`) — 생성 위치와 초기
+   * 진행 방향이 **모두** 여기서 온다. 조준 카메라도 같은 rig의
+   * `aimCameraSocket`을 쓰므로 십자선 = 탄도가 구조적으로 보장된다.
+   * 자체 앵커·오프셋·전방 계산은 이 클래스에 없다 (스프린트 A 정규화).
+   */
+  private readonly socket: TorpedoTubeSocketSource;
 
   constructor(
     bus: EventBus,
     combat: CombatParams,
-    pose: TorpedoLaunchPose,
     environment: CollisionWorld,
     targets: TargetRegistry,
     armament: ArmamentPort,
+    socket: TorpedoTubeSocketSource,
   ) {
     this.bus = bus;
-    this.pose = pose;
+    this.socket = socket;
     this.environment = environment;
     this.targets = targets;
     this.armament = armament;
@@ -147,6 +153,15 @@ export class StraightRunTorpedoSystem implements TorpedoSystem {
     return this.active;
   }
 
+  /**
+   * 어뢰 유효 사거리 (m) — **기존 판정 범위의 단일 노출 지점**.
+   * 식별(B2)·경비함 스폰 위치(B4)가 새 거리 상수를 만들지 않고 이 값을
+   * 재사용한다. 값의 출처는 어뢰 수치 모듈 하나뿐이다.
+   */
+  get maxRangeMeters(): number {
+    return PROVISIONAL_TORPEDO_MAX_RANGE_METERS;
+  }
+
   /** 활성 장비 어뢰 속력 (m/s) — 리드샷 보조선의 리드 지점 계산 입력 */
   get torpedoSpeedMetersPerSecond(): number {
     return this.armament.activeTorpedoProfile()?.speedMetersPerSecond ?? PROVISIONAL_TORPEDO_SPEED_MPS;
@@ -159,12 +174,12 @@ export class StraightRunTorpedoSystem implements TorpedoSystem {
    * 어뢰 성공 시 torpedoFired 발행.
    */
   fire(): boolean {
-    const direction = bowDirectionXZ(this.pose.headingRadians);
-    const bowX = this.pose.positionX + direction.x * SPAWN_OFFSET_METERS;
-    const bowZ = this.pose.positionZ + direction.z * SPAWN_OFFSET_METERS;
+    // 위치·방향 모두 공식 소켓 하나에서 온다 (자체 앵커·오프셋 계산 없음)
+    const spawn = this.socket.torpedoSpawnSocket;
+    const forward = { x: spawn.forwardX, y: spawn.forwardY, z: spawn.forwardZ };
 
     if (this.armament.activeEquipment === 'decoy') {
-      return this.armament.launchDecoy(bowX, this.pose.positionY, bowZ);
+      return this.armament.launchDecoy(spawn.positionX, spawn.positionY, spawn.positionZ);
     }
 
     const profile = this.armament.activeTorpedoProfile();
@@ -176,11 +191,12 @@ export class StraightRunTorpedoSystem implements TorpedoSystem {
 
     const torpedo: ActiveTorpedo = {
       id: this.nextTorpedoId,
-      x: bowX,
-      y: this.pose.positionY,
-      z: bowZ,
-      directionX: direction.x,
-      directionZ: direction.z,
+      x: spawn.positionX,
+      y: spawn.positionY,
+      z: spawn.positionZ,
+      directionX: forward.x,
+      directionY: forward.y,
+      directionZ: forward.z,
       traveledMeters: 0,
       speedMetersPerSecond: profile.speedMetersPerSecond,
       damage: profile.damage,
@@ -204,6 +220,7 @@ export class StraightRunTorpedoSystem implements TorpedoSystem {
     for (const torpedo of this.active) {
       const step = torpedo.speedMetersPerSecond * deltaSeconds;
       torpedo.x += torpedo.directionX * step;
+      torpedo.y += torpedo.directionY * step;
       torpedo.z += torpedo.directionZ * step;
       torpedo.traveledMeters += step;
 
@@ -235,7 +252,12 @@ export class StraightRunTorpedoSystem implements TorpedoSystem {
   private tryHitTarget(torpedo: ActiveTorpedo): boolean {
     for (const target of this.targets.list) {
       if (this.overlapsTarget(torpedo, target)) {
-        target.onTorpedoHit(torpedo.x, torpedo.z, torpedo.damage);
+        // 공격 맥락은 **어뢰 1발 = 1건**이다 (B4 상관 id 정본). 명중한
+        // 어뢰는 즉시 제거되므로 같은 id로 두 번 통지될 수 없다.
+        target.onTorpedoHit(torpedo.x, torpedo.z, torpedo.damage, {
+          attackCorrelationId: torpedoAttackCorrelationId(torpedo.id),
+          attackerEntityId: PLAYER_ENTITY_ID,
+        });
         return true;
       }
     }

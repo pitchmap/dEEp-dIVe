@@ -25,7 +25,9 @@ import type {
   CurrencyBundle,
   MetaStateId,
   SortieReport,
+  PurchaseCost,
   SortieSessionPort,
+  WalletTransactionPort,
 } from '../contracts/meta';
 import type { EventBus, Unsubscribe } from '../core/EventBus';
 import type { GameSystem, SystemContext } from '../core/GameSystem';
@@ -33,11 +35,11 @@ import { META_TRANSITIONS } from './MetaState';
 import { computeSortieSettlement } from './settlement';
 
 export interface MetaLoopOptions {
-  /** 파괴 시 크레딧 손실률 0~1 (임시: provisionalEconomy — params 이관 대기) */
+  /** 파괴 시 크레딧 손실률 0~1 — 공식 `params/economy.json` 주입값 (조립부 1회) */
   creditLossOnDestroyedRatio: number;
 }
 
-export class MetaLoop implements GameSystem {
+export class MetaLoop implements GameSystem, WalletTransactionPort {
   readonly id = 'metaLoop';
 
   private readonly bus: EventBus;
@@ -72,6 +74,16 @@ export class MetaLoop implements GameSystem {
   /** 영구 지갑 스냅숏 (저장 시스템·기지 UI 소비용 — 읽기 전용) */
   get wallet(): CurrencyBundle {
     return { credits: this.walletCredits, rareParts: this.walletRareParts };
+  }
+
+  /** 이번 출항에서 획득했지만 아직 정산되지 않은 크레딧 (파괴 시 손실 대상 — UI 표시용) */
+  get sortieCreditsEarned(): number {
+    return this.tallyCredits;
+  }
+
+  /** 이번 출항에서 획득한 희귀 부품 수 (획득 즉시 지갑 확정 — 표시 구분용) */
+  get sortieRarePartsSecured(): number {
+    return this.tallyRareParts;
   }
 
   initialize(_context: SystemContext): void {
@@ -118,6 +130,30 @@ export class MetaLoop implements GameSystem {
     this.walletRareParts = Math.floor(wallet.rareParts);
   }
 
+  /* ── WalletTransactionPort (구매 트랜잭션 전용 — 지갑 소유자로서 구현) ── */
+
+  /** 트랜잭션 스냅샷용 — wallet getter와 동일한 복사본 */
+  snapshotWallet(): CurrencyBundle {
+    return this.wallet;
+  }
+
+  /**
+   * 구매 비용 차감 — 잔액 부족·유효하지 않은 비용·기지 밖이면 false·무변경
+   * (throw 금지 계약). 구매는 기지(BASE)에서만 일어난다 — 출항 중 차감은
+   * 출항 집계·정산과 충돌하므로 거부한다.
+   */
+  spendFromWallet(cost: PurchaseCost): boolean {
+    if (this.state !== 'BASE') return false;
+    const credits = Math.floor(cost.credits);
+    const rareParts = Math.floor(cost.rareParts);
+    if (!Number.isFinite(credits) || !Number.isFinite(rareParts)) return false;
+    if (credits < 0 || rareParts < 0) return false;
+    if (this.walletCredits < credits || this.walletRareParts < rareParts) return false;
+    this.walletCredits -= credits;
+    this.walletRareParts -= rareParts;
+    return true;
+  }
+
   /** 기지 → 출항 준비 */
   beginSortiePrep(): void {
     this.transition('SORTIE_PREP');
@@ -133,6 +169,9 @@ export class MetaLoop implements GameSystem {
    * 기지에서 출항하면 기존 전투 세션이 초기화되는 규칙의 진입점.
    */
   launchSortie(): void {
+    // 출항 확정 직전 저장은 여기서 하지 않는다 [INT-CORE-010 저장 책임
+    // 단일화] — Departure command(조립부)가 SavePort를 직접 호출해 저장
+    // 성공을 확인한 뒤에만 이 메서드를 부른다. 저장 실패 시 전환 없음.
     this.transition('SORTIE');
     this.sortieCount += 1;
     this.tallyCredits = 0;

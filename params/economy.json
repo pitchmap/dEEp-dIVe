@@ -1,0 +1,107 @@
+{
+  "$comment": "경제 공식 params — 드롭·손실·해저 재화 (사용자 승인, [ECON]). 기존 런타임 값(src/systems/economy/provisionalEconomy.ts)을 이관하고 승인된 결정을 반영한다. lossRate 0.5는 6차 결의 7 명시값이자 승인값 — 게임플레이 0.4와 메타 루프 0.5의 불일치를 0.5로 통일했다. salvageSpawns는 **MVP 확정 배치**(확률 아님): 한 출항에서 3개가 배치되며 그중 하나가 희귀 부품 1개를 확정 드롭한다. 배치 좌표는 그래픽스·월드 소유이므로 여기에는 spawnId·kind·보상·rarePartId만 두고, 위치는 게임플레이·통합 창이 layout/world에서 연결한다. 검증: src/tools/economyMath.ts.",
+  "creditLossOnDestroyedRatio": {
+    "value": 0.5,
+    "range": [0.3, 0.7],
+    "unit": "ratio",
+    "note": "파괴 시 이번 출항 일반 크레딧 손실률 [6차 결의 7]. 영구 업그레이드·희귀 부품·기구매 장비는 손실 대상 아님"
+  },
+  "pickupRadiusMeters": {
+    "value": 6,
+    "unit": "meters",
+    "note": "드롭 자동 회수('줍는다') 반경 — provisionalEconomy 승계"
+  },
+  "dropTables": {
+    "cargo-standard": {
+      "credits": 120,
+      "rareParts": 0,
+      "note": "적대 수송선 격침 — provisionalEconomy 승계"
+    },
+    "salvage-chest": {
+      "credits": 60,
+      "rareParts": 0,
+      "note": "해저 보물 상자 파괴 — provisionalEconomy 승계"
+    },
+    "salvage-container": {
+      "credits": 40,
+      "rareParts": 0,
+      "note": "컨테이너 파괴 — provisionalEconomy 승계"
+    },
+    "salvage-mineral": {
+      "credits": 25,
+      "rareParts": 0,
+      "note": "광물 파괴 — provisionalEconomy 승계. 희귀 부품은 salvageSpawns에서 rarePartId로 확정 배치"
+    }
+  },
+  "salvageSpawns": [
+    {
+      "spawnId": "salvage-1",
+      "kind": "chest",
+      "dropTableId": "salvage-chest",
+      "rarePartId": null,
+      "note": "위치는 월드·그래픽스 소유 — 통합 창이 spawnId로 좌표를 연결한다"
+    },
+    {
+      "spawnId": "salvage-2",
+      "kind": "container",
+      "dropTableId": "salvage-container",
+      "rarePartId": null,
+      "note": "위치는 월드·그래픽스 소유"
+    },
+    {
+      "spawnId": "salvage-3",
+      "kind": "mineral",
+      "dropTableId": "salvage-mineral",
+      "rarePartId": "rare-alloy-core",
+      "note": "MVP 유일 희귀 부품 획득 경로 — 확률이 아니라 확정 배치. 위치는 월드·그래픽스 소유"
+    }
+  ],
+  "sortieIncomeReference": {
+    "cargoCredits": 120,
+    "salvageCredits": 125,
+    "totalCredits": 245,
+    "rareParts": 1,
+    "note": "출항 1회 최대 수입 참조값 — 위 dropTables·salvageSpawns에서 파생되며 검증기가 합계 일치를 확인한다(수치 중복 정의가 아니라 회귀 방지용 기대값)"
+  },
+  "factionRewards": {
+    "$comment": "세력별 격침 보상 **정책**만 둔다. 세력→드롭 테이블 매핑의 정본은 계약 src/contracts/faction.ts의 FACTION_RULES이며 여기에 복제하지 않는다(CLAUDE.md 규칙 6). 검증기가 계약과 이 정책의 일치를 기계적으로 대조한다 — 어긋나면 로드 거부. policy 의미: dropTable = 계약이 가리키는 공식 테이블로 보상 / none = **확정된 무보상**(0은 결정된 값) / pending = **공식 결정 없음**(값 없음 — 0이 아니라 미정. 발명 금지). null과 0을 구분하기 위해 none만 명시적 0을 싣고 pending은 수치 필드 자체를 갖지 않는다.",
+    "hostile": {
+      "policy": "dropTable",
+      "note": "적대 수송선 — 계약 FACTION_RULES.hostile.dropTableId(cargo-standard)가 dropTables에 실재해야 통과 [B3]"
+    },
+    "neutral": {
+      "policy": "none",
+      "credits": 0,
+      "rareParts": 0,
+      "note": "중립 격침 — 크레딧 미지급 [12차 B3·6차 결의]. 0은 미정이 아니라 확정값이다. 일반 드롭 테이블을 갖지 않으며 지갑은 불변"
+    },
+    "patrol": {
+      "policy": "pending",
+      "note": "경비함 격침 보상 — 공식 결정 없음. 수치 필드를 두지 않는다(0으로 확정하지도 않는다). 기획 결정 도착 시 policy를 dropTable 또는 none으로 바꾸고 계약 FACTION_RULES를 함께 개정한다"
+    }
+  },
+  "highValueTransport": {
+    "$comment": "B6 고가치 수송선 — 보상 배율은 12차 결의 3의 '배율은 튜닝표' 항목이라 공식 수치가 아직 없다. rewardMultiplier는 null(미확정)이며 임의 확정하지 않는다. 제안은 docs/SPRINT_B_B6_PROPOSAL.md. B1~B5는 이 블록에 의존하지 않는다.",
+    "archetypeId": "highValueTransport",
+    "baseDropTableId": "cargo-standard",
+    "rewardMultiplier": null,
+    "rewardMultiplierRange": null,
+    "escortMaximumDistanceMeters": null,
+    "note": "rewardMultiplier는 확정 시 1보다 커야 한다 — 12차 B6 '고가치 수송선 격침 보상 > 일반 수송선'에서 파생된 구조 조건이며 발명한 수치가 아니다. 상한은 튜닝표 도착 후 rewardMultiplierRange로 함께 싣는다"
+  },
+  "guardSpawn": {
+    "$comment": "B4·B5 경비함 스폰 위치 파라미터 — **저장소·회의록 어디에도 공식 수치가 없다.** 전 항목 null(미확정)이며 추정값을 넣지 않는다. 검증기는 이 블록이 미확정인 동안 GuardSpawnLocationStrategy를 '사용 가능'으로 보고하지 않는다(리드 결정 B-3: 위치 전략 미연결 = noSpawnLocation, 임의 좌표 생성 금지와 같은 태도). 재사용 가능한 기존 수상함 스폰 규칙도 저장소에 없어 승계 대상이 없다.",
+    "minDistanceFromPlayerMeters": null,
+    "maxDistanceFromIncidentMeters": null,
+    "candidateCount": null,
+    "worldBoundsPaddingMeters": null,
+    "spawnRetryCount": null
+  },
+  "bossReadinessReference": {
+    "upgradeIds": ["hullIntegrity", "torpedoDamage", "reloadSpeed"],
+    "upgradeLevel": 2,
+    "equipmentIds": ["heavyTorpedo"],
+    "expectedSortieRange": [4, 6],
+    "note": "보스 준비 최소 사양 [승인] — 핵심 3종 2단계 + 중어뢰. 7차 결의 8의 '출항 4~6회' 판정 입력"
+  }
+}

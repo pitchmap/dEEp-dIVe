@@ -52,6 +52,16 @@ export class CameraRig {
   }
 
   /**
+   * 외부 카메라 모드(조준 카메라 등)가 끝난 뒤 자연 복귀 시작점 지정 —
+   * 마지막 외부 카메라 위치에서 후방 뷰로 지수 감쇠 보간해 돌아온다
+   * (순간이동 없는 3인칭 복귀).
+   */
+  beginReturnFrom(cameraPosition: THREE.Vector3): void {
+    this.currentPosition.copy(cameraPosition);
+    this.initialized = true;
+  }
+
+  /**
    * 매 프레임 호출. 대상 포즈는 게임플레이 시스템의 읽기 전용 상태에서 온다 —
    * 렌더는 위치·방향을 소비만 한다.
    */

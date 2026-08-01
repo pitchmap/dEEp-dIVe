@@ -22,7 +22,7 @@
 - **프로펠러:** signed speed(`forwardSpeedMetersPerSecond`) 연동
   정/역회전, 정지 시 8% 공회전(`propellerIdleSpinRatio` 단일 소스),
   A/D 단독 입력 무영향
-- **전투:** `AimSystem` 단일 진입점 — 우클릭 조준(잠망경 심도 전용)·좌클릭
+- **전투:** `AimSystem` 단일 진입점 — 우클릭 조준(전 심도 조준(구 심도 전용 규칙 폐기))·좌클릭
   발사, PC 화면 조준·발사 버튼(마우스와 동일 인스턴스·동등 판정),
   직선 어뢰(사거리·명중 1회)
 - **화물선:** 직선 왕복 항행, `torpedoHit` 이벤트, `sinkProgress` 기반

@@ -14,7 +14,7 @@ export function computeSortieSettlement(input: {
   outcome: SortieOutcome;
   creditsEarned: number;
   rarePartsSecured: number;
-  /** 파괴 시 크레딧 손실률 0~1 — 튜닝값 (임시: provisionalEconomy.ts) */
+  /** 파괴 시 크레딧 손실률 0~1 — 공식 `params/economy.json`에서 주입된 값 */
   creditLossOnDestroyedRatio: number;
 }): SortieSettlement {
   const { outcome, creditsEarned, rarePartsSecured, creditLossOnDestroyedRatio } = input;

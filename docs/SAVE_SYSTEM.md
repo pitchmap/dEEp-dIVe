@@ -21,13 +21,70 @@
 (`progress` — 단서 수·보스 개방·격파) / 저장 필요 설정
 (`settings.keyboardLockNoticeShown` — 입력 안내 1회 플래그).
 
-## 저장 시점 [확정 — 6차 결의 7]
+## 부팅 복원 (저장의 역방향 — 조립부 1회)
 
-1. **기지 귀환 정산 확정 시** — 메타 루프(리드)가 `defaultSaveStore.save()` 호출
-2. **희귀 부품 획득 즉시** — 획득 판정 측이 즉시 저장 (귀환길 사망 분노 방지)
+`SaveStore.load()`는 `{ data, source, recovered }`를 돌려주며, `source`가
+복원 규칙을 가른다. composition root에서 **부팅 1회씩만** 수행한다:
 
-그 외 주기적 자동 저장은 **하지 않는다** — '귀환이냐 한 탕 더냐'의 긴장이
-기획 의도다. 배선 요청: `docs/INTEGRATION_NOTES.md` INT-TOOL-007.
+| 대상 | 복원 |
+|---|---|
+| 지갑 | `MetaLoop.restoreWallet({ credits, rareParts })` |
+| 업그레이드 단계 | `UpgradePurchaseSystem.restoreLevels(upgradeLevels)` (단일 저장소) → `UpgradeState`는 파생 뷰 |
+| 장착 장비 | `GameplaySystems.restoreSavedLoadout(...)` — 아래 규칙 |
+
+**`equippedGear` 복원 규칙 (혼동 금지):**
+
+| `source` | 넘기는 값 | 결과 |
+|---|---|---|
+| `'fresh'` (저장 데이터 자체가 없음) | `null` | 공식 시작 장비(`startingItem: true` = `standardTorpedo`) 부여 |
+| `'current'` / `'backup'` + `equippedGear: []` | `[]` | **빈 상태 그대로 유지** — 기본 어뢰를 되돌려 주지 않는다 |
+| `'current'` / `'backup'` + 값 있음 | 그 배열 | 저장된 장비 복원 (공식 4종 외 id는 조립부에서 제거) |
+
+빈 배열을 '저장 없음'으로 오인하면 사용자가 전부 해제한 상태가 **새로고침마다
+되살아난다.** 이 구분은 `SaveStore.load()`의 `source` 하나로만 판정한다 —
+배열 길이로 추론하지 않는다.
+
+## 저장 시점 5종 [확정 — 6차 결의 7 + 소회의(13) 결의 4 개정]
+
+> **저장 책임 단일화 [INT-CORE-010, 리드 결정]:** 한 사용자 명령 = SavePort
+> 최대 1회. 이벤트(`saveRequested`) 경로는 1·2뿐이며 3~5는 트랜잭션·command가
+> SavePort를 **직접** 호출한다(결과 동기 확인·실패 롤백). UI는 저장하지 않고
+> saveRequested도 발행하지 않는다. 구 `sortieLaunch` cause는 폐기.
+> 상세: INTERFACES §2d 저장 책임 표.
+
+1. **기지 귀환 정산 확정 시** — 메타 루프(리드)가 `saveRequested('settlement')` 발행
+2. **희귀 부품 획득 즉시** — `saveRequested('rarePart')` (귀환길 파괴로도 잃지 않음)
+3. **업그레이드 구매 성공 직후** — `meta/PurchaseTransaction`이 SavePort 직접 호출 *(소회의 13 결의 4)*
+4. **장비 장착·교체·해제 직후** — `meta/EquipmentTransaction`이 SavePort 직접 호출 (EquipmentSystem 내부 저장 경로는 production 미연결)
+5. **출항 확정 직전** — Departure command(조립부)가 SavePort 직접 호출, **저장 실패 시 해역 전환 없음** *(출항 시점의 최종 상태 봉인)*
+
+3~5는 A7('저장 후 재접속 시 구매·장착 상태 유지')이 통과 가능하려면 필수다 —
+기지에서 사고 출항하지 않은 채 새로고침하면 구 규격(2종)에서는 구매가 증발한다.
+**dirty 플래그 방식은 기각**(새로고침·탭 닫기 미포착 — 결의 4).
+**해역 내 자동 저장은 없음** — '귀환이냐 한 탕 더냐'의 긴장이 기획 의도다.
+
+## 원자적 변경 + 즉시 저장 [보완분 결의 7]
+
+구매·장비 변경은 **크레딧 차감·상태 변경·저장을 하나의 트랜잭션**으로 처리한다
+(`src/meta/save/atomicSave.ts`):
+
+```text
+구매 전 스냅샷 → 조건 검증(판정: 게임플레이) → 변경 적용 → 저장 시도
+  ├ 저장 성공 → 구매 확정
+  └ 저장 실패 → 크레딧·단계 전부 롤백 + 저장 실패 안내 (부분 성공 금지)
+```
+
+- 저장 실패는 일반 불가 사유(5종)와 **타입 수준에서 구분**한다:
+  `kind: 'saveFailed'` vs `kind: 'rejected'`.
+- 사용자 문구는 고정값(`SAVE_FAILURE_MESSAGE`) — 내부 예외 문자열 비노출,
+  원인은 개발 로그에만.
+
+## 저장 실패 주입 (테스트 전용)
+
+`src/meta/save/FaultInjectingStorage.ts` — 쓰기 실패 / 백업 쓰기 실패 /
+quota 유사 실패 / 직렬화 실패를 결정적으로 재현한다. `SaveStore`가 주입
+가능한 `StorageLike`를 받으므로 **프로덕션 기본 경로(`defaultSaveStore` =
+실제 localStorage)는 이 어댑터를 거치지 않는다.**
 
 ## 쓰기 절차
 

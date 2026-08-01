@@ -53,8 +53,23 @@ export interface CombatTarget {
   /**
    * 어뢰 명중 통지 — 어뢰 1발당 정확히 1회만 호출된다 (중복 명중 없음).
    * damage = 장비·업그레이드 반영 피해량 (1발 격침 함선은 무시 가능).
+   *
+   * `attack`은 **한 번의 공격**을 식별하는 맥락이다 (스프린트 B — B4).
+   * 유효 피해 판정 결과를 사건으로 발행하는 표적이 상관 id·공격자를 알아야
+   * 하므로 전달한다. 선택적이므로 기존 구현·호출을 깨지 않는다.
    */
-  onTorpedoHit(hitX: number, hitZ: number, damage: number): void;
+  onTorpedoHit(hitX: number, hitZ: number, damage: number, attack?: TorpedoAttackContext): void;
+}
+
+/**
+ * 공격 1회의 맥락 (어뢰 1발 = 1건). 발행측(어뢰 시스템)이 만들고 표적이
+ * 유효 피해 사건에 그대로 실어 보낸다 — 표적이 상관 id를 만들지 않는다.
+ */
+export interface TorpedoAttackContext {
+  /** 같은 공격의 중복 처리를 막는 키 — 어뢰 1발당 고유 */
+  readonly attackCorrelationId: string;
+  /** 공격자 엔티티 id (플레이어는 계약 `PLAYER_ENTITY_ID`) */
+  readonly attackerEntityId: number;
 }
 
 export class TargetRegistry {

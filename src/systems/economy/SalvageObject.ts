@@ -50,7 +50,7 @@ export class SalvageObject implements CombatTarget {
     return 'object';
   }
 
-  /** 드롭 테이블 참조 (provisionalEconomy — kind별 크레딧) */
+  /** 드롭 테이블 참조 — 공식 `params/economy.json`의 dropTables 키 (kind별) */
   get dropTableId(): string {
     return `salvage-${this.kind}`;
   }

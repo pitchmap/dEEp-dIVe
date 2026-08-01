@@ -29,6 +29,11 @@ import type {
   MetaStateId,
   SortieSettlement,
 } from './meta';
+import type {
+  GuardShipRequestPayload,
+  NeutralShipHitPayload,
+  TransportAttackedPayload,
+} from './guard';
 
 /** 폭뢰 피해 구분 (마스터 플랜 §5.13) */
 export type DamageCause = 'direct' | 'near';
@@ -110,13 +115,32 @@ export interface GameEvents {
    *  UI(획득 표시), 렌더·오디오(픽업 연출) */
   lootDropped: { source: LootSource; credits: number; rareParts: number; x: number; z: number };
 
-  /** 경비함 출현 요청 — 중립 선박 공격 불이익 단일 [확정 6차 결의 3]
-   *  (발행: 게임플레이 판정). 구독: 경비함 AI(리드 — 구축함 AI 재활용 스폰) */
-  guardShipRequested: { x: number; z: number };
+  /** 중립 선박 **유효 피격** — 실제 피해가 적용된 뒤 1회 (발행: 게임플레이
+   *  판정 소유). 조준·발사·빗나감으로는 발행하지 않으며, 같은 공격
+   *  (attackCorrelationId)·파괴 이후 중복 발행도 금지 [INT-CORE-012].
+   *  연출용 `torpedoHit`과 역할이 다르다(세력·피해량·공격자·상관 id 포함).
+   *  구독: composition 중복 방지 경계 → guardShipRequested */
+  neutralShipHit: NeutralShipHitPayload;
+
+  /** 경비함 출현 요청 — 중립 선박 공격 불이익 단일 [확정 6차 결의 3].
+   *  **기존 계약 재사용**(신규 이벤트 없음): 구 `{ x, z }`는
+   *  `incidentPosition`으로 흡수됐다 [INT-CORE-012]. 발행은 composition의
+   *  중복 방지 경계 1곳(같은 correlationId 1회).
+   *  구독: GuardSpawnPort 배선(리드 — 구축함 AI 재활용 스폰) */
+  guardShipRequested: GuardShipRequestPayload;
+
+  /** 고가치 수송선 유효 피격 (B6 — 발행: 게임플레이). 구독: 호위 교전 판정.
+   *  B1~B5 핵심 게이트 경로는 이 이벤트에 의존하지 않는다 */
+  transportAttacked: TransportAttackedPayload;
 
   /** 저장 요청 (발행: meta/MetaLoop). cause:
-   *  'settlement' = 귀환 정산 확정 후 / 'rarePart' = 희귀 부품 획득 즉시
-   *  [확정 6차 결의 9 — 그 외 자동 저장 없음]. 구독: SaveSystem(툴링) */
+   *  'settlement' = 귀환 정산 확정 후 / 'rarePart' = 희귀 부품 획득 즉시.
+   *  [저장 책임 단일화 — INT-CORE-010] 저장 시점 5종 중 이벤트 경로는 이
+   *  2종뿐이다. 구매 성공·장비 변경 직후는 각 트랜잭션이, 출항 확정 직전은
+   *  Departure command가 SavePort를 **직접** 호출해 결과를 동기 확인한다 —
+   *  같은 사용자 명령에서 이벤트를 중복 발행하지 않는다(이중 저장 금지,
+   *  구 'sortieLaunch' cause 폐기). 그 외 자동·주기 저장 없음.
+   *  구독: SaveSystem(툴링) */
   saveRequested: { cause: 'settlement' | 'rarePart' };
 
   /** 보스 단계 전환 (발행: 보스 AI — 리드). 구독: 렌더(단계 연출),
