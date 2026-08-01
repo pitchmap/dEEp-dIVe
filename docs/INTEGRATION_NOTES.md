@@ -56,6 +56,20 @@
 
 ## 제안 목록
 
+### INT-GAME-008 — PvE 경제·전투 계약 패키지 (이벤트·params·EffectiveParams·보스 포트)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 (PvE 전환 1·2단계 작업 창 — 회의 09·11 반영) |
+| 대상 시스템 | `src/contracts/events.ts`, `src/contracts/params.ts`+`/params/economy.json`·`/params/upgrades.json`(신설 — 회의 11 결의 7), `src/contracts/systems.ts`(EffectiveParams·보스 단계 포트·Faction 승격) |
+| 필요한 변경 | ① **이벤트 신설**: `aimRequired`(비조준 발사 시도 안내 — 결의 2), `creditsChanged { total, sortie }`, `guardSpawnRequested { x, z, provokedByTargetId }`, `rarePartAcquired { partId }`(즉시 저장 트리거 — 툴링 저장 소비), `bossWeakPointHit { kind, appliedDamage }` — 현재는 게임플레이 읽기 전용 상태·consume API·콜백(aimRequiredCount / consumeGuardSpawnRequests / RunEconomy.onRarePartAcquired / BossWeakPointTarget.onHit)으로 선진행 ② **경제·장비 params 이관** (기획 수치표 D+3 병목): 드롭 테이블·픽업 반경(6m)·손실률(0.4) → `src/systems/economy/provisionalEconomy.ts`, 장비 4종 수치·슬롯 수(2)·디코이 → `src/systems/provisionalEquipment.ts`, 보스 약점 배율(2.0/0.25) → `BossWeakPointTarget.provisionalBossWeakPointConfig` — 전부 R7 선진행 중 ③ **EffectiveParams 계약**: 업그레이드 합연산 배율 레이어(회의 11 결의 4)의 공급 측 계약 — 게임플레이는 `EquipmentSystem.setUpgradeModifiers(UpgradeModifiers)` 동등 주입점으로 선진행, 계약 확정 시 소비 경로 교체 ④ **보스 단계 포트**: `BossPhasePort { phase, weakPointOpen }` — 리드 보스 AI가 공급(게임플레이는 AI 내부 접근 없음) ⑤ CombatTarget의 `faction`·`dropTableId`·`hullBox`(어뢰·잠수함 충돌 공유 박스 — 5차 결의 1) 계약 승격 검토 |
+| 변경 이유 | D+4(재화 획득)·D+9(성장 루프) 게임플레이 로직 구현 완료 — 표현·저장·AI 계층과의 정식 연결점과 수치 단일 소스만 남음 |
+| 관련 게이트 | [ECON][LOOP][BOSS] 전반, G3(비조준 발사 차단) |
+| 영향을 받는 파일 | 계약 3파일, params 2종(신설), `src/systems/economy/*`, `EquipmentSystem.ts`, `BossWeakPointTarget.ts`, `PeriscopeAimSystem.ts`, 툴링 저장·오디오 배관, 렌더 연출 |
+| 하위 호환 여부 | 깨짐 없음 — 전부 추가. 선진행 상태·콜백은 이벤트 확정 후에도 폴링 경로로 유지 가능 |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
+
 ### INT-CORE-005 — D+10 통합 배선·검증 핸들 (통합 담당 기록)
 
 | 필드 | 내용 |
