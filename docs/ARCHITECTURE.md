@@ -287,6 +287,61 @@ settlement·rarePart·sortieLaunch) + 트랜잭션 직접 저장 2종(구매·�
 게임플레이의 localStorage 직접 접근 / UI의 params 직접 변경 / any 캐스팅
 계약 우회 / 전역 싱글턴 추가.
 
+### production 기지 경제 조립 (INT-CORE-010 — 스프린트 A 마감)
+
+```
+[UI — 그래픽스]                    [조립 — PveIntegration/Game]        [판정·상태]
+EconomyHud ─┐                      createMetaUiPorts ── BaseScreenPort  MetaLoop(실지갑·집계)
+SortiePrep ─┴─ 포트 소비만  ──────▶  ├ purchaseUpgrade → PurchaseTransaction → UpgradePurchaseSystem(판정)
+ControlsHud 출항 버튼 ────────────▶  ├ equip/replace/unequip → EquipmentTransaction → EquipmentJudgeAdapter → EquipmentSystem
+                                    └ confirmDeparture → DepartureCommand
+                                          모든 저장 = CountingSavePort(계측) → SaveBridge.writeSnapshot → SaveStore
+```
+
+- **단계의 단일 저장소** = `UpgradePurchaseSystem.levelSnapshot` — 저장·UI·
+  유효 파라미터가 전부 여기서 파생. `UpgradeState`는 파생 뷰(보정·외형 단계)로
+  구매 확정 후에만 동기화된다.
+- 경제 데이터 미확정(공식 params null)은 `economyDataUnavailable`로
+  **트랜잭션 진입 전 차단** — 상태·저장 0회, null→0 변환·provisional 대입 금지.
+- QA 데모(`econUiQaDemo`)는 `?econdemo` 플래그 전용 — production composition
+  (Game·PveIntegration)에 포함되지 않는다 (verify:meta 정적 검사).
+- 저장 책임 표는 INTERFACES §2d — 한 사용자 명령 = SavePort 최대 1회,
+  `CountingSavePort.callCount`로 계측 가능.
+
+### 공식 런타임 params·해저 재화 결합 (INT-CORE-011 — 공식 경제 연결)
+
+```
+loadEconomyParams() ┐  (툴링 로더 — composeSystems에서 각 1회)
+loadAimingParams()  ┘
+        │
+        ▼
+OfficialRuntimeParams (contracts/officialParams.ts)
+  ├─ economy.creditLossOnDestroyedRatio → MetaLoop (provisional 삭제됨)
+  ├─ upgrades → UpgradePurchaseSystem·UpgradeState·BaseScreenPort·UI 포트
+  ├─ equipment → BaseScreenPort
+  ├─ economy.salvageSpawns ─┐
+  └─ aiming·cargo → 게임플레이 주입 API 도착 대기 (적용 지침)
+                            │ spawnId 결합 (composeSalvageSpawnPlan)
+SalvagePlacementSource ─────┘   좌표 = 월드·그래픽스 소유 (미도착 = unwired)
+        │
+        ▼
+SortieSalvageSpawner.beginSortie()  ← sessionPort.start() (출항당 1회 가드)
+        │
+        ▼
+gameplay.economy.spawnSalvage(kind, x, y, z, rarePartId)
+```
+
+- 공식 로더 호출은 composition root **각 1회** — 시스템·UI의 JSON·로더
+  직접 호출 금지 (verify:meta 정적 검사 ②·③).
+- 보상은 economy params에서만, 좌표는 SalvagePlacementSource에서만 파생.
+  누락·중복·미지 spawnId는 **거부**(무시 금지) — 거부 시 부분 생성 없음.
+- 같은 출항 중복 생성·파괴분 재생성 금지(출항당 플래그 가드), 새 출항 시
+  재생성 (`resetSortieSession` 직후 `beginSortie`).
+- 배치 미도착 상태는 명시적 unwired — 임시 좌표를 만들지 않는다.
+- `src/meta/provisionalEconomy.ts` 삭제 완료 (손실률 0.5는 economy.json이
+  정본). 게임플레이 `systems/economy/provisionalEconomy.ts`의 주입 교체는
+  게임플레이 소유 (INT-CORE-011 소비 지침).
+
 ## 게임 상태 전환과 장면 전환의 분리
 
 - **게임 상태(국면)** — `GameStateMachine`이 소유. 전환은 허용표 검증 후

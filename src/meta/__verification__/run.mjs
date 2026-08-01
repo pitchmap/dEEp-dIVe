@@ -31,6 +31,102 @@ try {
   process.exit(1);
 }
 
+// QA 데모 분리 정적 검사 (§6) — production composition(Game·PveIntegration)이
+// QA 데모 객체(econUiQaDemo)를 import하지 않아야 한다. QA 데모는
+// ?econdemo 플래그 경로(CanyonScene) 전용이다.
+{
+  const { readFileSync } = await import('node:fs');
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const compositionFiles = ['src/core/Game.ts', 'src/core/PveIntegration.ts'];
+  const importPattern = /from\s+['"][^'"]*econUiQaDemo['"]/;
+  const offenders = compositionFiles.filter((file) =>
+    importPattern.test(readFileSync(path.join(root, file), 'utf8')),
+  );
+  results.push({
+    name: 'production composition에 QA 데모 미포함 (Game·PveIntegration에 econUiQaDemo import 없음)',
+    passed: offenders.length === 0,
+    detail: offenders.length === 0 ? '정적 검사 통과' : `위반: ${offenders.join(', ')}`,
+  });
+}
+
+// 공식 params 소비 검사 (INT-CORE-011).
+{
+  const { readFileSync } = await import('node:fs');
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const read = (file) => readFileSync(path.join(root, file), 'utf8');
+
+  // ① 실제 economy.json → 검증 → 가짜 배치와 결합: 보상값이 economy params
+  //    에서만 파생되는지 실파일로 확인한다 (픽스처 아님 — 60/40/25+희귀 1).
+  {
+    const { validateEconomyParams } = await import('../../tools/economyMath.ts');
+    const { composeSalvageSpawnPlan } = await import('../../core/PveIntegration.ts');
+    const economy = validateEconomyParams(JSON.parse(read('params/economy.json')));
+    const placements = {
+      placements: economy.salvageSpawns.map((spawn, index) => ({
+        spawnId: spawn.spawnId,
+        worldPosition: { x: index * 10, y: -3, z: -20 },
+      })),
+    };
+    const plan = composeSalvageSpawnPlan(economy, placements);
+    const credits = plan.map((entry) => entry.credits);
+    const rare = plan.filter((entry) => entry.rarePartCount === 1);
+    const passed =
+      plan.length === 3 &&
+      credits.join(',') === '60,40,25' &&
+      rare.length === 1 &&
+      rare[0].rarePartId === 'rare-alloy-core' &&
+      plan.every((entry, index) => entry.worldPosition.x === index * 10);
+    results.push({
+      name: '공식 economy.json 결합: 보상 60/40/25 + 희귀 1 (economy 파생)·좌표는 placement 파생',
+      passed,
+      detail: passed ? `plan=${plan.map((e) => `${e.spawnId}:${e.credits}`).join(' ')}` : JSON.stringify(plan),
+    });
+  }
+
+  // ② Game.ts 정적 검사: provisionalEconomy import 0건, 공식 로더는
+  //    composition root에서 각 1회, 구 카탈로그 로더 미사용.
+  {
+    const game = read('src/core/Game.ts');
+    const count = (pattern) => (game.match(pattern) ?? []).length;
+    const noProvisional = !game.includes('provisionalEconomy');
+    const economyLoaderOnce = count(/loadEconomyParams\(/g) === 1;
+    const aimingLoaderOnce = count(/loadAimingParams\(/g) === 1;
+    const noLegacyCatalogLoader =
+      !game.includes('loadUpgradeCatalog') && !game.includes('loadEquipmentCatalog');
+    const passed = noProvisional && economyLoaderOnce && aimingLoaderOnce && noLegacyCatalogLoader;
+    results.push({
+      name: 'Game.ts 정적 검사: provisionalEconomy 0건·공식 로더 각 1회·구 카탈로그 로더 미사용',
+      passed,
+      detail: passed
+        ? '통과'
+        : `provisional=${!noProvisional}, econLoader=${count(/loadEconomyParams\(/g)}, aimLoader=${count(/loadAimingParams\(/g)}, legacy=${!noLegacyCatalogLoader}`,
+    });
+  }
+
+  // ③ UI 정적 검사: 그래픽스 UI(src/ui)가 공식 경제·조준 로더나 해당 JSON을
+  //    직접 호출·import하지 않음 — UI는 주입된 포트·값만 소비한다.
+  //    (params/ui.json 로더 uiParams.ts는 툴링 소유 HUD 전용 로더로 허용 —
+  //     INT-CORE-011 대상은 upgrades·equipment·economy·cargo·aiming 5종이다.)
+  {
+    const { readdirSync } = await import('node:fs');
+    const uiDir = path.join(root, 'src', 'ui');
+    const loaderPattern =
+      /loadEconomyParams|loadAimingParams|loadUpgradeCatalog|loadEquipmentCatalog|loadParams\(|params\/(upgrades|equipment|economy|cargo|aiming)\.json/;
+    const offenders = readdirSync(uiDir)
+      .filter((file) => file.endsWith('.ts'))
+      .filter((file) => loaderPattern.test(read(path.join('src', 'ui', file))));
+    results.push({
+      name: 'UI 정적 검사: src/ui가 params 로더·JSON을 직접 호출하지 않음',
+      passed: offenders.length === 0,
+      detail: offenders.length === 0 ? '통과' : `위반: ${offenders.join(', ')}`,
+    });
+  }
+}
+
 let failures = 0;
 for (const { name, passed, detail } of results) {
   if (!passed) failures += 1;
