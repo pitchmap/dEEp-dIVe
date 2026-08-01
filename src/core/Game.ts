@@ -8,6 +8,12 @@
 
 import { loadParams, onParamsReloaded } from '../config/ParamLoader';
 import type { GameParams } from '../contracts/params';
+import type {
+  BaseScreenPort,
+  EquipmentId,
+  TransactionResult,
+} from '../contracts/meta';
+import type { TransactionResult as GameplayTxResult } from '../systems/economy/purchaseTypes';
 import { Renderer } from '../render/Renderer';
 import { CanyonScene } from '../render/CanyonScene';
 import { CameraInputAdapter } from '../render/CameraInputAdapter';
@@ -19,8 +25,13 @@ import { LoadingTimer } from '../tools/LoadingTimer';
 import { STARTING_CANYON_LAYOUT } from '../world/startingCanyonLayout';
 import { MetaLoop } from '../meta/MetaLoop';
 import { PROVISIONAL_CREDIT_LOSS_ON_DESTROYED_RATIO } from '../meta/provisionalEconomy';
+import { PurchaseTransaction } from '../meta/PurchaseTransaction';
 import { defaultSaveStore } from '../meta/save/SaveStore';
-import { loadUpgradeCatalog } from '../tools/upgradeCalculator';
+import { UpgradePurchaseSystem } from '../systems/economy/UpgradePurchaseSystem';
+import { OFFICIAL_EQUIPMENT_IDS } from '../tools/economyMath';
+import { loadEquipmentCatalog, loadUpgradeCatalog } from '../tools/upgradeCalculator';
+import { EconomyHud } from '../ui/EconomyHud';
+import { SortiePrepScreen } from '../ui/SortiePrepScreen';
 import { WebAudioSystem } from '../audio/WebAudioSystem';
 import { AudioCueRouter } from '../audio/AudioCueRouter';
 import {
@@ -121,13 +132,17 @@ export class Game {
       setPaused: (paused) => (paused ? this.loop.stop() : this.loop.start()),
       combat: { aim: gameplay.aim, torpedo: gameplay.torpedo },
       bus: this.bus,
-      // 기지 → 출항. 상태 전이는 상위 메타 루프 소유이며 HUD는 요청만 한다
-      // (기지 화면 UI가 도입되면 그 화면의 출항 버튼으로 대체된다).
-      launchSortie: () => {
-        if (this.metaLoop?.metaState !== 'BASE') return;
-        this.metaLoop.beginSortiePrep();
-        this.metaLoop.launchSortie();
-      },
+      // 출항 진입점은 기지 화면(SortiePrepScreen → BaseScreenPort.launchSortie)
+      // **하나만** 노출한다 (스프린트 A 마감 §6 — 중복 진입점 정리).
+      // launchSortie 미주입 → HUD의 구 출항 버튼은 항상 숨김.
+    });
+
+    // 부팅 시 초기 메타 상태 방송 (previous=null 규약) — 최초 전이 전에는
+    // metaStateChanged가 발행되지 않으므로 기지 화면·HUD 버튼 표시를 여기서
+    // 동기화한다 (자동 출항 제거 후 게임은 기지에서 시작한다).
+    this.bus.emit('metaStateChanged', {
+      previous: null,
+      next: this.metaLoop?.metaState ?? 'BASE',
     });
 
     window.addEventListener('resize', this.handleResize);
@@ -283,23 +298,37 @@ export class Game {
     //     주기 저장 없음: 정산 확정·희귀 부품 획득 두 시점만.
     const metaLoop = this.metaLoop;
     const upgrades = this.upgrades;
-    this.registry.register(
-      new SaveBridge(
-        defaultSaveStore,
-        {
-          get wallet() {
-            return metaLoop.wallet;
-          },
-          get upgradeLevels() {
-            return upgrades.currentLevels;
-          },
-          get equippedGear() {
-            return gameplay.equipment.slots.filter((slot) => slot !== null);
-          },
+    const saveBridge = new SaveBridge(
+      defaultSaveStore,
+      {
+        get wallet() {
+          return metaLoop.wallet;
         },
-        loaded.data,
-      ),
+        get upgradeLevels() {
+          return upgrades.currentLevels;
+        },
+        get equippedGear() {
+          return gameplay.equipment.slots.filter((slot) => slot !== null);
+        },
+      },
+      loaded.data,
     );
+    this.registry.register(saveBridge);
+
+    // ②-c 저장된 장비 loadout 복원 (부팅 1회 — 저장 스냅샷의 역방향).
+    //     저장 포트 연결 전이라 이 복원은 저장을 트리거하지 않는다.
+    //     빈 저장(신규 세이브)은 EquipmentSystem 기본값(표준 어뢰)을 유지한다.
+    const savedGear = loaded.data.equippedGear.filter((id): id is EquipmentId =>
+      (OFFICIAL_EQUIPMENT_IDS as readonly string[]).includes(id),
+    );
+    if (savedGear.length > 0) {
+      for (let i = 0; i < gameplay.equipment.slotCount; i += 1) {
+        gameplay.equipment.unequipItem(i);
+      }
+      savedGear.slice(0, gameplay.equipment.slotCount).forEach((id, index) => {
+        gameplay.equipment.equip(index, id);
+      });
+    }
 
     // ④ 표현 연동 — 렌더 소유 카메라 입력(회전·리센터). 이동키와 중복 없음.
     this.registry.register(new CameraInputAdapter(scene.cameraRig));
@@ -341,6 +370,178 @@ export class Game {
       }),
     );
 
+    // ⑤ 기지 화면 production 배선 (INT-CORE-009 배선 스니펫 적용 — 스프린트 A
+    //    마감 A4·A5·A6). UI(그래픽스)는 공통 계약 BaseScreenPort 하나만
+    //    소비한다: 지갑·단계·loadout 직접 수정 없음, 저장은 SaveBridge 경유.
+    const savePort = {
+      save: (): boolean => {
+        saveBridge.writeSnapshot();
+        return saveBridge.lastSaveSucceeded;
+      },
+    };
+
+    // ⑤-a 구매 판정(게임플레이 소유 내용) — 가격은 **공식 경제 params만**
+    //     읽는다 (provisional 기본 가격 미사용). null(수치표 미도착)은 어떤
+    //     지갑도 충족할 수 없는 거부 값으로 매핑해 0원 구매를 봉쇄한다 —
+    //     UI가 트랜잭션 진입 전에 '경제 데이터 미확정'으로 먼저 차단하므로
+    //     이 값은 표시·차감 어디에도 나타나지 않는 방어선이다.
+    const purchaseJudge = new UpgradePurchaseSystem(
+      catalog.map((entry) => ({
+        id: entry.id,
+        maxLevel: entry.maxLevel,
+        bonusPerLevel: entry.effectBonus[0] ?? 0,
+      })),
+      {
+        get credits() {
+          return metaLoop.wallet.credits;
+        },
+        get rareParts() {
+          return metaLoop.wallet.rareParts;
+        },
+        applyDelta: () => {
+          // 판정 전용 배선 — 차감·롤백은 WalletTransactionPort(MetaLoop)가 수행
+        },
+      },
+      (statId, nextLevel) => {
+        const entry = catalog.find((candidate) => candidate.id === statId);
+        const credits = entry?.costCredits[nextLevel - 1] ?? null;
+        const rareParts = entry?.costRareParts[nextLevel - 1] ?? null;
+        return {
+          credits: credits ?? Number.POSITIVE_INFINITY,
+          rareParts: rareParts ?? Number.POSITIVE_INFINITY,
+        };
+      },
+    );
+    purchaseJudge.restoreLevels(loaded.data.upgradeLevels);
+    gameplay.attachBaseEconomy(purchaseJudge, savePort);
+    const purchaseTx = new PurchaseTransaction(purchaseJudge, metaLoop, upgrades, savePort);
+
+    // ⑤-b 구매 확정 후 파생값 갱신 — 유효 파라미터 재주입 + 장비 배율 + 외형 단계
+    const refreshGrowthDerived = (): void => {
+      const derived = deriveEffectiveParams(params, upgrades.modifiers);
+      this.effectiveParams = derived;
+      gameplay.applyParams(derived);
+      gameplay.equipment.setUpgradeModifiers({
+        torpedoSpeedBonus: 0,
+        torpedoDamageBonus: upgrades.modifiers.torpedoDamage ?? 0,
+      });
+      const grownTiers = upgrades.visualTiers;
+      scene.setSubmarineVisualTiers(grownTiers.hull, grownTiers.weapon);
+    };
+
+    // ⑤-c′ 게임플레이 로컬 결과({ok,category,reason}) → 공식 계약
+    //      TransactionResult 매핑. 사유 이름 차이는 slotFull→noFreeSlot 하나.
+    //      (게임플레이 타입의 계약 승격은 INT-GAME-009 — 승격 시 이 매핑 삭제)
+    const toContractResult = (result: GameplayTxResult): TransactionResult => {
+      if (result.ok) return { status: 'success' };
+      if (result.category === 'save' || result.reason === 'saveFailed') {
+        return { status: 'saveFailedRolledBack' };
+      }
+      return {
+        status: 'denied',
+        reason: result.reason === 'slotFull' ? 'noFreeSlot' : result.reason,
+      };
+    };
+
+    // ⑤-c 표시 loadout 위치 ↔ 실제 슬롯 배열(null 포함) 변환 — 계약
+    //     EquipmentLoadout.equipped는 빈 슬롯이 압축된 목록이므로, UI의
+    //     n번째 표시 슬롯 = n번째 비어있지 않은 실제 슬롯으로 해석한다.
+    const realSlotIndex = (visibleIndex: number): number => {
+      let seen = -1;
+      const slots = gameplay.equipment.slots;
+      for (let i = 0; i < slots.length; i += 1) {
+        if (slots[i] !== null) {
+          seen += 1;
+          if (seen === visibleIndex) return i;
+        }
+      }
+      return -1;
+    };
+
+    const baseScreen: BaseScreenPort = {
+      get wallet() {
+        return metaLoop.wallet;
+      },
+      get upgradeLevels() {
+        return upgrades.currentLevels;
+      },
+      get loadout() {
+        return gameplay.equipment.loadout;
+      },
+      get canLaunchSortie() {
+        return metaLoop.metaState === 'BASE';
+      },
+      // 출항 단일 진입점 (지시 §6 — HUD 자동 출항 경로 대체).
+      // 출항 확정 직전 저장이 실패하면 해역 전환 없이 기지로 되돌린다.
+      launchSortie: (): boolean => {
+        if (metaLoop.metaState !== 'BASE') return false;
+        metaLoop.beginSortiePrep();
+        if (!savePort.save()) {
+          metaLoop.cancelSortiePrep();
+          return false;
+        }
+        // launchSortie 내부의 saveRequested('sortieLaunch')는 방금 성공한
+        // 스냅샷의 재기록(멱등) — 이중 상태 변경 없음.
+        metaLoop.launchSortie();
+        return true;
+      },
+      purchaseUpgrade: (id) => {
+        // 판정 시스템의 단계 뷰를 정본(UpgradeState)과 동기화한 뒤 실행
+        purchaseJudge.restoreLevels(upgrades.currentLevels);
+        const result = purchaseTx.run(id);
+        if (result.status === 'success') refreshGrowthDerived();
+        return result;
+      },
+      changeEquipment: (request) => {
+        if (request.kind === 'unequip') {
+          const slot = realSlotIndex(request.slotIndex);
+          if (slot < 0) return { status: 'success' }; // 이미 빈 위치 — 멱등
+          return toContractResult(gameplay.equipment.unequipItem(slot));
+        }
+        if (request.kind === 'replace') {
+          const slot = realSlotIndex(request.slotIndex);
+          if (slot < 0) {
+            return toContractResult(gameplay.equipment.equipItem(request.equipmentId));
+          }
+          return toContractResult(
+            gameplay.equipment.replaceItem(slot, request.equipmentId),
+          );
+        }
+        return toContractResult(gameplay.equipment.equipItem(request.equipmentId));
+      },
+    };
+
+    // ⑤-d UI 마운트 (그래픽스 소유 컴포넌트 — production 기본 URL 상시).
+    //     QA 데모(?econdemo — CanyonScene 격리 경로)와 별개의 실배선이다.
+    const economyHud = new EconomyHud(this.container);
+    economyHud.attachSource({
+      get metaState() {
+        return metaLoop.metaState;
+      },
+      get wallet() {
+        return metaLoop.wallet;
+      },
+      get sortieEarnings() {
+        return metaLoop.sortieEarnings;
+      },
+    });
+    const prepScreen = new SortiePrepScreen(this.container);
+    prepScreen.attachBaseScreen(baseScreen);
+    prepScreen.attachUpgradeCatalog(() => loadUpgradeCatalog());
+    prepScreen.attachEquipmentCatalog(loadEquipmentCatalog());
+    this.registry.register({
+      id: 'baseScreenUi',
+      initialize: () => {},
+      update: () => {
+        economyHud.update();
+        prepScreen.update();
+      },
+      dispose: () => {
+        economyHud.dispose();
+        prepScreen.dispose();
+      },
+    });
+
     // HUD 전투 버튼 배선(start()에서 수행)을 위해 gameplay를 돌려준다.
     return gameplay;
   }
@@ -381,11 +582,9 @@ export class Game {
     if (!this.firstRenderDone) {
       this.firstRenderDone = true;
       this.loadingTimer.markFirstRender();
-      // 부트 완료 — 세션 시작은 상위 메타 루프를 경유한다 (BOOT→DEPARTURE
-      // 전환은 SortieSessionPort 어댑터가 수행). 기지 화면(그래픽·UI) 도입
-      // 전까지는 자동 출항 — 도입 시 이 두 줄이 기지 UI 트리거로 대체된다.
-      this.metaLoop?.beginSortiePrep();
-      this.metaLoop?.launchSortie();
+      // 부트 완료 — 게임은 기지(BASE)에서 시작한다. 출항은 기지 화면의
+      // 출항 버튼(BaseScreenPort.launchSortie — 확정 직전 저장 포함)이
+      // 유일한 진입점이다 (구 자동 출항 2줄은 스프린트 A 마감 §6로 대체).
     }
   }
 

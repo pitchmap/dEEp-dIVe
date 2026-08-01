@@ -76,6 +76,17 @@ export class MetaLoop implements GameSystem, WalletTransactionPort {
     return { credits: this.walletCredits, rareParts: this.walletRareParts };
   }
 
+  /**
+   * 이번 출항 집계 스냅숏 (읽기 전용 — 해역 재화 HUD 소비용).
+   * 정산 전 미확정 값이다: 크레딧은 파괴 시 일부 손실 대상, 희귀 부품은
+   * 이미 지갑에 즉시 확정 반영된 획득량 표시다. wallet getter와 같은
+   * 복사본 반환 관례 — 내부 집계 필드는 노출·수정 경로가 없다.
+   * (그래픽스 production 배선 선반영 — INT-RENDER-009, 리드 확인 대기)
+   */
+  get sortieEarnings(): CurrencyBundle {
+    return { credits: this.tallyCredits, rareParts: this.tallyRareParts };
+  }
+
   initialize(_context: SystemContext): void {
     // 드롭 집계 — 발행은 게임플레이 economy, 집계·확정은 메타 계층 소유
     this.unsubscribes.push(

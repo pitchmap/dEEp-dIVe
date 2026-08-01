@@ -90,6 +90,56 @@
 
 ## 제안 목록
 
+### INT-RENDER-009 — [LOOP][ECON] 경제·성장 UI production 배선 적용 (스프린트 A 마감 — A4·A5-ui·A6-ui 해소)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스 (스프린트 A 마감 작업 지시 — 기준 통합 커밋 `ebea23b`) |
+| 대상 시스템 | src/ui/*(재작성 — BaseScreenPort 소비), src/core/Game.ts(INT-CORE-009 배선 스니펫 적용·확장), src/meta/MetaLoop.ts(읽기 전용 getter 1개 선반영), scripts/verify-hud.mjs(기지 시작 대응 최소 수정) |
+| 필요한 변경 | 아래 적용 내역 — 전부 반영 완료, 리드 확인 대기 항목 2건(⚠) |
+| 변경 이유 | Acceptance A4 실패(경제 UI 미배선) 해소 — production 기본 URL에서 재화·업그레이드·장비·출항 UI가 실상태로 동작해야 함 |
+| 관련 게이트 | A4·A5(ui)·A6(ui)·A7(출항 확정 직전 저장) |
+| 하위 호환 여부 | 계약 파일 무변경. 동작 변경 1건: **자동 출항 제거 — 게임이 기지(BASE)에서 시작** (Game.ts 주석의 예정된 대체) |
+| 개발 리드 결정 | **확인 대기** (선반영 ⚠ 2건 포함) |
+| 적용 커밋 | (이 브랜치 production 배선 커밋) |
+
+**적용 내역:**
+
+1. **UI 재작성 (그래픽스 소유)** — `SortiePrepScreen`·`EconomyHud`의 명령·상태
+   진입점을 공통 계약 `BaseScreenPort`로 교체 (구 구조적 포트 삭제). 결과
+   표시는 계약 `TransactionResult` + UI 전용 `economyDataUnavailable`(가격
+   null — 트랜잭션 미진입) 구분. 카탈로그는 economyMath 검증 결과의 읽기
+   전용 뷰 — null은 '경제 데이터 미확정' 비활성으로 표기하고 **임의 가격을
+   만들지 않는다**. params에 숫자가 오면 코드 변경 없이 활성화된다.
+2. **Game 조립 (INT-CORE-009 스니펫 적용)** — savePort(SaveBridge 어댑터),
+   구매 판정 `UpgradePurchaseSystem`(가격 resolver = **공식 catalog만**,
+   null→어떤 지갑도 충족 불가한 거부 값·provisional 가격 미사용) +
+   `PurchaseTransaction`, 장비는 게임플레이 원자 경로(equipItem/replaceItem/
+   unequipItem)를 계약 결과로 매핑(slotFull→noFreeSlot), `BaseScreenPort`
+   조립 + `EconomyHud`/`SortiePrepScreen` 마운트(registry 시스템
+   `baseScreenUi`). 구매 확정 시 유효 파라미터·장비 배율·외형 단계 재파생.
+3. **출항 단일 진입점 (§6)** — ControlsHud `launchSortie` 미주입(구 HUD 출항
+   버튼 상시 숨김) + render()의 자동 출항 2줄 제거 → **기지 시작**.
+   `BaseScreenPort.launchSortie` = beginSortiePrep → 확정 직전 저장 →
+   실패 시 cancelSortiePrep(**해역 전환 금지·기지 유지**) / 성공 시
+   launchSortie. 부팅 시 `metaStateChanged {previous:null}` 1회 방송으로
+   기지 화면·HUD 표시 동기화.
+4. **⚠ 선반영(리드 확인 대기) — MetaLoop.sortieEarnings** 읽기 전용 getter
+   (이번 출항 집계 스냅숏, wallet getter와 동일 복사본 관례) — 해역 재화
+   HUD의 '이번 출항 획득(미확정)' 표시 소스.
+5. **⚠ 선반영(툴링 확인 대기) — scripts/verify-hud.mjs** 도입부에 기지 화면
+   출항 버튼 클릭 추가 (기지 시작 대응, 34/34 통과 확인).
+6. **저장된 장비 loadout 부팅 복원** — 저장 스냅샷(equippedGear)의 역방향이
+   조립부에 없어 추가 (비어 있지 않은 저장만 복원 — 신규 세이브는
+   EquipmentSystem 기본 표준 어뢰 유지).
+
+**검증:** typecheck/build/check:size(4.4%)/게임플레이 128/메타 35/툴링 26/
+verify:hud 34 전부 통과. Production URL(플래그 없음) Playwright 실측:
+기지 화면·재화 HUD(초기 0/0 실지갑 일치)·업그레이드 7종 전항 '경제 데이터
+미확정' 비활성·장비 장착/해제/롤백(저장 결함 주입 시 지정 문구 + loadout
+무변경)·저장 실패 중 출항 거부(기지 유지)·정상 출항 후 해역 HUD 미확정 줄.
+스크린샷: docs/screenshots/sprintA_*_production.png 외.
+
 ### INT-TOOL-008 — [LOOP][ECON] 스프린트 A 툴링 산출물 + 이관·문서 회귀 차단 요청
 
 | 필드 | 내용 |
