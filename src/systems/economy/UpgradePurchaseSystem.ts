@@ -20,12 +20,13 @@
  *    않는다** — 이 시스템은 카탈로그를 읽기만 한다.
  */
 
-import type { CurrencyBundle, UpgradeModifiers, UpgradeStatId } from '../../contracts/meta';
-import {
-  conditionFailure,
-  saveFailure,
-  type UpgradePurchaseResult,
-} from './purchaseTypes';
+import type {
+  CurrencyBundle,
+  PurchaseCost,
+  PurchaseDenialReason,
+  UpgradeModifiers,
+  UpgradeStatId,
+} from '../../contracts/meta';
 import { provisionalUpgradeCost } from './provisionalUpgradeCost';
 
 /** 공식 업그레이드 항목 7종 — 계약 UpgradeStatId와 1:1 (8번째 금지) */
@@ -71,18 +72,19 @@ export class UpgradePurchaseSystem {
   // 검증 러너(run.mjs) Node 타입 스트리핑 호환 — 매개변수 프로퍼티 미사용
   private readonly catalog: readonly UpgradeCatalogEntry[];
   private readonly wallet: PurchaseWalletPort;
-  private readonly save: PurchaseSavePort;
   private readonly costOf: UpgradeCostResolver;
 
+  /**
+   * 저장 포트를 받지 않는다 — 저장·롤백 순서는 리드 정본 트랜잭션 소유이며
+   * **게임플레이는 저장소에 접근하지 않는다** (스프린트 A 정규화).
+   */
   constructor(
     catalog: readonly UpgradeCatalogEntry[],
     wallet: PurchaseWalletPort,
-    save: PurchaseSavePort,
     costOf: UpgradeCostResolver = (_id, nextLevel) => provisionalUpgradeCost(nextLevel),
   ) {
     this.catalog = catalog;
     this.wallet = wallet;
-    this.save = save;
     this.costOf = costOf;
   }
 
@@ -128,66 +130,48 @@ export class UpgradePurchaseSystem {
    * 구매 가능 여부만 검사 (상태 변경 없음) — UI 비활성·사유 표시용.
    * 성공 시 null, 불가 시 사유를 반환한다.
    */
-  checkPurchasable(statId: string): UpgradePurchaseResult | null {
-    const entry = this.entryOf(statId);
-    if (!entry) return conditionFailure('maxLevelReached'); // 미등록·8번째 항목은 구매 불가
-
-    const nextLevel = this.levelOf(statId) + 1;
-    if (nextLevel > entry.maxLevel) return conditionFailure('maxLevelReached');
-
-    const cost = this.costOf(statId, nextLevel);
-    if (this.wallet.credits < cost.credits) return conditionFailure('insufficientCredits');
-    if (this.wallet.rareParts < cost.rareParts) return conditionFailure('insufficientRareParts');
-    return null;
+  checkPurchasable(statId: string): PurchaseDenialReason | null {
+    return this.evaluateUpgradePurchase(statId as UpgradeStatId).denial;
   }
 
   /**
-   * 구매 실행 — 원자적 트랜잭션. 저장까지 성공해야 확정된다.
-   * 실패 시 지갑·단계는 호출 전과 **완전히 동일**하며, 실패 직후 조건이
-   * 충족되면 재구매가 가능하다.
+   * 공식 판정 포트 `UpgradePurchaseJudgePort`(contracts/meta.ts) 구현.
+   * **상태를 바꾸지 않고 판정만** 한다 — 차감·적용·저장·롤백의 순서(틀)는
+   * 리드 정본 `src/meta/PurchaseTransaction.ts`가 소유한다 [14차 결의 2].
+   * throw 금지: 불가 시 사유, 가능 시 denial=null을 반환한다.
    */
-  purchase(statId: string): UpgradePurchaseResult {
-    // 1) 구매 전 상태 스냅샷
-    const snapshotLevel = this.levelOf(statId);
-    const snapshotCredits = this.wallet.credits;
-    const snapshotRareParts = this.wallet.rareParts;
-
-    // 2) 구매 가능 여부 재검증
-    const rejection = this.checkPurchasable(statId);
-    if (rejection) return rejection;
-
-    const entry = this.entryOf(statId);
-    if (!entry) return conditionFailure('maxLevelReached');
-    const nextLevel = snapshotLevel + 1;
-    const cost = this.costOf(statId, nextLevel);
-
-    // 3~4) 크레딧 차감 + 단계 변경 (아직 '후보' 상태 — 저장 성공 전)
-    this.wallet.applyDelta(-cost.credits, -cost.rareParts);
-    this.levels.set(statId, nextLevel);
-
-    // 5) 저장 시도
-    let saved = false;
-    try {
-      saved = this.save.save();
-    } catch (error) {
-      // 내부 예외 문자열은 사용자에게 노출하지 않는다 — 개발 로그만
-      console.warn('[UpgradePurchaseSystem] 저장 실패로 구매를 롤백합니다.', error);
-      saved = false;
+  evaluateUpgradePurchase(id: UpgradeStatId): {
+    readonly denial: PurchaseDenialReason | null;
+    readonly cost: PurchaseCost;
+  } {
+    const entry = this.entryOf(id);
+    const nextLevel = this.levelOf(id) + 1;
+    // 카탈로그 밖·최대 단계는 비용을 산출할 수 없다 — 0 비용으로 거부만 알린다
+    if (!entry || nextLevel > entry.maxLevel) {
+      return { denial: 'maxLevelReached', cost: { credits: 0, rareParts: 0 } };
     }
-
-    if (!saved) {
-      // 6) 롤백 — 지갑·단계 모두 구매 전 값으로 복원 (부분 성공 없음)
-      this.wallet.applyDelta(
-        snapshotCredits - this.wallet.credits,
-        snapshotRareParts - this.wallet.rareParts,
-      );
-      if (snapshotLevel === 0) this.levels.delete(statId);
-      else this.levels.set(statId, snapshotLevel);
-      return saveFailure();
+    const cost = this.costOf(id, nextLevel);
+    if (this.wallet.credits < cost.credits) {
+      return { denial: 'insufficientCredits', cost };
     }
+    if (this.wallet.rareParts < cost.rareParts) {
+      return { denial: 'insufficientRareParts', cost };
+    }
+    return { denial: null, cost };
+  }
 
-    // 7) 구매 확정
-    return { ok: true, statId, level: nextLevel, spent: cost };
+  /* ── 공식 단계 포트 `UpgradeLevelsPort` 구현 (롤백용 스냅샷·복원) ── */
+
+  snapshotLevels(): Readonly<Record<string, number>> {
+    return this.levelSnapshot;
+  }
+
+  /** 구매 확정 후보 적용 — 해당 항목 단계 +1 (트랜잭션만 호출) */
+  applyPurchasedLevel(id: UpgradeStatId): void {
+    const entry = this.entryOf(id);
+    if (!entry) return;
+    const next = Math.min(this.levelOf(id) + 1, entry.maxLevel);
+    this.levels.set(id, next);
   }
 
   private entryOf(statId: string): UpgradeCatalogEntry | undefined {

@@ -34,6 +34,8 @@ import { aimForwardVector, clampAimAngles } from '../aimGeometry';
 import { BASE_CAMERA_RADIANS_PER_PIXEL, PROVISIONAL_AIMING_PARAMS } from '../provisionalAiming';
 import { TORPEDO_COLLISION_RADIUS } from '../collision/torpedoTubeSocket';
 import { TorpedoTubeSocketRig } from '../../core/TorpedoTubeSocketRig';
+import { PurchaseTransaction } from '../../meta/PurchaseTransaction';
+import type { CurrencyBundle, PurchaseCost } from '../../contracts/meta';
 import { UpgradePurchaseSystem, type PurchaseWalletPort, type PurchaseSavePort } from '../economy/UpgradePurchaseSystem';
 import { provisionalUpgradeCost } from '../economy/provisionalUpgradeCost';
 import { StraightRunTorpedoSystem } from '../StraightRunTorpedoSystem';
@@ -1895,15 +1897,47 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       },
     });
 
+    /**
+     * 구매 실행 = **리드 정본 트랜잭션**(src/meta/PurchaseTransaction) +
+     * 게임플레이 판정 포트. 스프린트 A 통합에서 게임플레이 자체 트랜잭션이
+     * 제거되어, 이 헬퍼가 실제 프로덕션 배선과 같은 조합을 만든다.
+     * 검증 의도(A5-T1~T6)는 그대로다.
+     */
+    const runPurchase = (
+      purchase: UpgradePurchaseSystem,
+      wallet: ReturnType<typeof makeWallet>,
+      save: PurchaseSavePort,
+      id: string,
+    ) =>
+      new PurchaseTransaction(
+        purchase,
+        {
+          snapshotWallet: () => ({ credits: wallet.credits, rareParts: wallet.rareParts }),
+          spendFromWallet: (cost: PurchaseCost) => {
+            if (wallet.credits < cost.credits || wallet.rareParts < cost.rareParts) return false;
+            wallet.applyDelta(-cost.credits, -cost.rareParts);
+            return true;
+          },
+          restoreWallet: (snapshot: CurrencyBundle) =>
+            wallet.applyDelta(
+              snapshot.credits - wallet.credits,
+              snapshot.rareParts - wallet.rareParts,
+            ),
+        },
+        purchase,
+        save,
+      ).run(id as never);
+
     // A5-T1 구매·저장 성공
     {
       const wallet = makeWallet(1000, 0);
-      const purchase = new UpgradePurchaseSystem(catalog, wallet, makeSave({ ok: true }));
+      const save = makeSave({ ok: true });
+      const purchase = new UpgradePurchaseSystem(catalog, wallet);
       const cost = provisionalUpgradeCost(1);
-      const result = purchase.purchase('maxSpeed');
+      const result = runPurchase(purchase, wallet, save, 'maxSpeed');
       check(
         '[ECON] A5-T1 구매 성공 — 크레딧 차감·단계 증가·보정 반영',
-        result.ok &&
+        result.status === 'success' &&
           purchase.levelOf('maxSpeed') === 1 &&
           wallet.credits === 1000 - cost.credits &&
           purchase.modifiers.maxSpeed === 0.1,
@@ -1914,48 +1948,50 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     // A5-T2 크레딧 부족 — 상태 변경 없이 거부
     {
       const wallet = makeWallet(10, 0);
-      const purchase = new UpgradePurchaseSystem(catalog, wallet, makeSave({ ok: true }));
-      const result = purchase.purchase('maxSpeed');
+      const save = makeSave({ ok: true });
+      const purchase = new UpgradePurchaseSystem(catalog, wallet);
+      const result = runPurchase(purchase, wallet, save, 'maxSpeed');
       check(
         '[ECON] A5-T2 크레딧 부족 — insufficientCredits, 상태 변경 없음',
-        !result.ok &&
+        result.status === 'denied' &&
           result.reason === 'insufficientCredits' &&
-          result.category === 'condition' &&
           wallet.credits === 10 &&
           purchase.levelOf('maxSpeed') === 0,
-        `reason=${result.ok ? 'ok' : result.reason}`,
+        `status=${result.status}`,
       );
     }
 
     // 희귀 부품 부족 (4단계부터 요구)
     {
       const wallet = makeWallet(100000, 0);
-      const purchase = new UpgradePurchaseSystem(catalog, wallet, makeSave({ ok: true }));
+      const save = makeSave({ ok: true });
+      const purchase = new UpgradePurchaseSystem(catalog, wallet);
       purchase.restoreLevels({ maxSpeed: 3 });
       const creditsBefore = wallet.credits;
-      const result = purchase.purchase('maxSpeed');
+      const result = runPurchase(purchase, wallet, save, 'maxSpeed');
       check(
         '[ECON] 희귀 부품 부족 — insufficientRareParts, 크레딧 차감 없음',
-        !result.ok &&
+        result.status === 'denied' &&
           result.reason === 'insufficientRareParts' &&
           wallet.credits === creditsBefore &&
           purchase.levelOf('maxSpeed') === 3,
-        `reason=${result.ok ? 'ok' : result.reason}`,
+        `status=${result.status}`,
       );
     }
 
     // 최대 단계
     {
       const wallet = makeWallet(100000, 10);
-      const purchase = new UpgradePurchaseSystem(catalog, wallet, makeSave({ ok: true }));
+      const save = makeSave({ ok: true });
+      const purchase = new UpgradePurchaseSystem(catalog, wallet);
       purchase.restoreLevels({ sonarRange: 1 });
-      const result = purchase.purchase('sonarRange');
-      const unknown = purchase.purchase('eighthUpgrade');
+      const result = runPurchase(purchase, wallet, save, 'sonarRange');
+      const unknown = runPurchase(purchase, wallet, save, 'eighthUpgrade');
       check(
         '[ECON] 최대 단계 도달 — maxLevelReached (+ 8번째 항목 구매 불가)',
-        !result.ok &&
+        result.status === 'denied' &&
           result.reason === 'maxLevelReached' &&
-          !unknown.ok &&
+          unknown.status === 'denied' &&
           unknown.reason === 'maxLevelReached' &&
           wallet.credits === 100000,
         `level=${purchase.levelOf('sonarRange')}/1`,
@@ -1965,17 +2001,16 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     // A5-T3·T4·T5·T7 저장 실패 롤백 (반환값 false / 예외 둘 다)
     for (const mode of [{ ok: false }, { ok: false, throws: true }]) {
       const wallet = makeWallet(1000, 5);
-      const purchase = new UpgradePurchaseSystem(catalog, wallet, makeSave(mode));
+      const save = makeSave(mode);
+      const purchase = new UpgradePurchaseSystem(catalog, wallet);
       purchase.restoreLevels({ maxSpeed: 2 });
       const creditsBefore = wallet.credits;
       const rareBefore = wallet.rareParts;
       const levelBefore = purchase.levelOf('maxSpeed');
 
-      const result = purchase.purchase('maxSpeed');
+      const result = runPurchase(purchase, wallet, save, 'maxSpeed');
       const rolledBack =
-        !result.ok &&
-        result.category === 'save' &&
-        result.reason === 'saveFailed' &&
+        result.status === 'saveFailedRolledBack' &&
         wallet.credits === creditsBefore &&
         wallet.rareParts === rareBefore &&
         purchase.levelOf('maxSpeed') === levelBefore &&
@@ -1987,7 +2022,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       );
 
       // A5-T5: 재로드(스냅샷 = 저장된 상태)에서도 구매 전 상태 유지
-      const reloaded = new UpgradePurchaseSystem(catalog, makeWallet(creditsBefore, rareBefore), makeSave({ ok: true }));
+      const reloaded = new UpgradePurchaseSystem(catalog, makeWallet(creditsBefore, rareBefore));
       reloaded.restoreLevels(purchase.levelSnapshot);
       check(
         `[ECON] A5-T5 저장 실패 후 재로드 — 구매 전 단계 유지 (${mode.throws ? '예외' : 'false'})`,
@@ -2005,18 +2040,20 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
           return failing.ok;
         },
       };
-      const purchase = new UpgradePurchaseSystem(catalog, wallet, save);
-      const failed = purchase.purchase('maxSpeed');
-      const poor = new UpgradePurchaseSystem(catalog, makeWallet(1, 0), save).purchase('maxSpeed');
-      const distinct =
-        !failed.ok && !poor.ok && failed.category === 'save' && poor.category === 'condition';
+      const purchase = new UpgradePurchaseSystem(catalog, wallet);
+      const failed = runPurchase(purchase, wallet, save, 'maxSpeed');
+      const poorWallet = makeWallet(1, 0);
+      const poorSystem = new UpgradePurchaseSystem(catalog, poorWallet);
+      const poor = runPurchase(poorSystem, poorWallet, save, 'maxSpeed');
+      // 저장 실패는 '불가 사유'가 아니라 별도 결과 상태다 (계약 TransactionResult)
+      const distinct = failed.status === 'saveFailedRolledBack' && poor.status === 'denied';
 
       failing.ok = true; // 저장 복구 후 재구매
-      const retry = purchase.purchase('maxSpeed');
+      const retry = runPurchase(purchase, wallet, save, 'maxSpeed');
       check(
         '[ECON] A5-T6 저장 실패·조건 실패 안내 구분 + 롤백 뒤 재구매 성공',
-        distinct && retry.ok && purchase.levelOf('maxSpeed') === 1,
-        `save=${failed.ok ? '-' : failed.category}, condition=${poor.ok ? '-' : poor.category}, retry=${retry.ok}`,
+        distinct && retry.status === 'success' && purchase.levelOf('maxSpeed') === 1,
+        `save=${failed.status}, condition=${poor.status}, retry=${retry.status}`,
       );
     }
   }

@@ -60,12 +60,20 @@ export class PurchaseTransaction {
     const levelsSnapshot = this.levels.snapshotLevels();
 
     const rollback = (): void => {
+      // 두 복원은 **서로 독립**이어야 한다 — 하나가 실패해도 나머지는 반드시
+      // 되돌린다. (스프린트 A 통합 기술 검토: 공통 try에 묶여 있어
+      // restoreWallet이 던지면 restoreLevels가 건너뛰어지고 '크레딧 차감 +
+      // 단계 적용'이 남는 부분 상태가 발생했다. 실제로 MetaLoop.restoreWallet은
+      // BASE 밖·비정상값에서 throw하는 구현이다.)
       try {
         this.wallet.restoreWallet(walletSnapshot);
+      } catch (restoreError) {
+        console.error('[PurchaseTransaction] 지갑 롤백 중 오류:', restoreError);
+      }
+      try {
         this.levels.restoreLevels(levelsSnapshot);
       } catch (restoreError) {
-        // 복원 실패는 계약 위반 수준의 사고 — 로그만 남긴다 (throw 금지)
-        console.error('[PurchaseTransaction] 롤백 중 오류:', restoreError);
+        console.error('[PurchaseTransaction] 업그레이드 단계 롤백 중 오류:', restoreError);
       }
     };
 
