@@ -51,6 +51,8 @@ import { LeadShotIndicator } from './LeadShotIndicator';
 import { PeriscopeView } from './PeriscopeView';
 import { Propeller } from './Propeller';
 import { SeaSurface } from './SeaSurface';
+import type { SalvageStateSource } from './SalvageVisuals';
+import { SalvageVisuals } from './SalvageVisuals';
 import { SubmarineVisual } from './SubmarineVisual';
 import type { TorpedoStateSource } from './TorpedoVisuals';
 import { TorpedoVisuals } from './TorpedoVisuals';
@@ -107,6 +109,7 @@ export class CanyonScene implements ManagedScene {
   private readonly seaSurface: SeaSurface;
   private readonly torpedoVisuals = new TorpedoVisuals();
   private readonly leadIndicator = new LeadShotIndicator();
+  private readonly salvageVisuals = new SalvageVisuals();
   private readonly environment: EnvironmentDressing;
   private periscope: PeriscopeView | null = null;
   private readonly disposables: Array<{ dispose(): void }> = [];
@@ -195,6 +198,7 @@ export class CanyonScene implements ManagedScene {
     this.scene.add(this.environment.root);
     this.scene.add(this.torpedoVisuals.root);
     this.scene.add(this.leadIndicator.root);
+    this.scene.add(this.salvageVisuals.root);
 
     this.rig = new CameraRig(this.renderer.camera);
     // 렌더 검증용: ?lookup 플래그 시 카메라를 아래로 내려 해수면·실루엣 확인
@@ -306,6 +310,16 @@ export class CanyonScene implements ManagedScene {
    */
   attachTorpedoSource(source: TorpedoStateSource): void {
     this.torpedoSource = source;
+  }
+
+  /**
+   * 해저 재화 상태 연결점 — 게임플레이 `EconomySystem.salvageObjects`
+   * 읽기 전용 스냅샷을 소비만 한다 (파괴 판정·보상은 게임플레이 소유).
+   * 회수 반경도 게임플레이 값을 그대로 받는다 — 렌더가 정의하지 않는다.
+   */
+  attachSalvageSource(source: SalvageStateSource, pickupRadiusMeters: number): void {
+    this.salvageVisuals.setPickupRadiusMeters(pickupRadiusMeters);
+    this.salvageVisuals.attachSource(source);
   }
 
   /**
@@ -454,6 +468,7 @@ export class CanyonScene implements ManagedScene {
     this.seaSurface.update(deltaSeconds);
     this.environment.update(deltaSeconds);
     this.torpedoVisuals.update(deltaSeconds, this.torpedoSource);
+    this.salvageVisuals.update(deltaSeconds);
     this.periscope?.update(deltaSeconds);
     this.updateLeadIndicator();
     this.updateCargoShip(deltaSeconds);
@@ -574,6 +589,7 @@ export class CanyonScene implements ManagedScene {
     this.cargoShip?.removeAndDispose();
     this.cargoShip = null;
     this.torpedoVisuals.dispose();
+    this.salvageVisuals.dispose();
     this.leadIndicator.dispose();
     this.environment.dispose();
     this.submarine.dispose();

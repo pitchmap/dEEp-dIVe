@@ -26,7 +26,9 @@
 | `sortieEnded` | meta/MetaLoop | sortieNumber, settlement(정산 데이터) | 기지·정산 UI, 오디오 | 귀환 정산 확정 시 (② 세션 결과) | 파괴 시 크레딧 손실 반영·희귀 부품 보존 |
 | `returnToBaseRequested` | UI/입력 | (없음) | meta/MetaLoop | 중도 귀환 입력 시 (③) | SORTIE 상태 밖 요청은 무시 |
 | `lootDropped` | 게임플레이 economy | source, credits, rareParts, x, z | meta(집계·희귀 즉시 확정), UI, 렌더·오디오 | 드롭 발생 시 | 음수 금지(발행측 책임) |
-| `guardShipRequested` | 게임플레이 판정 | x, z | 경비함 AI(리드 — 구축함 AI 재활용) | 중립 선박 공격 시 | MVP 불이익 단일 [6차 결의 3] |
+| `neutralShipHit` | 게임플레이 유효 피해 판정 | targetEntityId, attackerEntityId, targetFaction, attackWorldPosition, damageAmount, attackCorrelationId, timestamp, firstValidNeutralHit | composition 중복 방지 경계 → guardShipRequested | 중립 선박에 **실제 피해 적용 후 1회** | 조준·발사·빗나감으로 발행 금지. 같은 attackCorrelationId·파괴 이후 재발행 금지 [INT-CORE-012] |
+| `guardShipRequested` | composition 중복 방지 경계 (리드) | requestId, sourceNeutralEntityId, attackerEntityId, incidentPosition, spawnReason, requestedFaction, correlationId | GuardSpawnPort → GuardShipAdapter → 기존 구축함 AI | 중립 유효 피격 1건당 1회 | payload v2 [INT-CORE-012] — 기존 이벤트 재사용(신규 이벤트 없음), 구 `{x,z}`는 incidentPosition으로 흡수. 같은 correlationId 중복 금지 |
+| `transportAttacked` | 게임플레이 (B6) | transportEntityId, attackerEntityId, attackWorldPosition, attackCorrelationId | 호위 교전 판정 | 고가치 수송선 유효 피격 시 | B1~B5 핵심 게이트 경로는 이 이벤트에 의존하지 않는다 |
 | `saveRequested` | meta/MetaLoop | cause('settlement'/'rarePart') | SaveSystem(툴링, src/meta/save) | 정산 확정·희귀 획득 즉시 | **이벤트 경로는 2종뿐** [INT-CORE-010 저장 책임 단일화] — 구매·장비·출항 저장은 트랜잭션·Departure command의 SavePort 직접 호출(동일 명령 이중 저장 금지). 구 'sortieLaunch' cause 폐기 |
 | `bossPhaseChanged` | 보스 AI (리드) | phase(1/2/3) | 렌더(단계 연출), 오디오(침묵 전환·음정 하강), UI | 단계 전환 시 | — |
 | `bossWeakPointChanged` | 게임플레이 약점 판정 | active | 렌더(발광·개방 연출), UI | 약점 활성/해제 시 | 판정=게임플레이 / 연출=렌더 경계 [소회의 결의 5] |
@@ -84,6 +86,47 @@
 | 출항 확정 직전 | Departure command (조립부) | SavePort 직접 호출 — 실패 시 **해역 전환 없음**. MetaLoop.launchSortie는 저장하지 않음 |
 | 귀환 정산 확정 | MetaLoop → `saveRequested('settlement')` | SaveBridge 구독 기록 |
 | 희귀 부품 획득 즉시 | MetaLoop → `saveRequested('rarePart')` | SaveBridge 구독 기록 |
+
+## 2f. 스프린트 B 세력·식별·경비 계약 (INT-CORE-012 — 선행개발, B 미발효)
+
+> 흐름 정본: 게임플레이 유효 피해 → `neutralShipHit` → **composition 중복
+> 방지 경계(정본 1곳)** → `guardShipRequested` → `GuardSpawnPort` →
+> `GuardShipAdapter` → 기존 `DestroyerAI`. 신규 경비함 AI 코어는 만들지 않는다.
+
+| 계약 | 내용 | 소유 |
+|---|---|---|
+| `FactionId` | 정의 정본은 `contracts/meta.ts` — hostile·neutral·**patrol**. 경비 세력 별칭 `guard` 추가 금지(스폰 절차 이름에만 잔존). `'object'`는 세력이 아니라 표적 분류(`CombatTargetClass`) | 리드 (계약) |
+| `FACTION_RULES` | 세력별 규칙표: 공격 허용·중립 사건 발생·드롭 테이블 참조·식별 분류·표시 라벨 id·AI 초기 태도. **색·문구 없음** | 리드 |
+| `ShipIdentificationView` / `Source` | B2 조준경 식별 read model — 미식별 시 라벨 null(세력 비노출). 엔티티 이름·모델로 세력 추측 금지 | 판정=게임플레이 / 표시=그래픽스 |
+| `NeutralShipHitPayload` | 유효 피해 적용 후 1회. 조준·발사·빗나감·중복·파괴 후 금지 | 게임플레이 (발행) |
+| `GuardShipRequestPayload` | requestId·sourceNeutralEntityId·attackerEntityId·incidentPosition·spawnReason·requestedFaction(`patrol`)·correlationId | composition 경계 (발행) |
+| `GuardSpawnPort` | 결과 5종 spawned/duplicateRequest/invalidRequest/noSpawnLocation/spawnFailed. 예외·내부 문자열 비노출 | 게임플레이 또는 composition |
+| `GuardShipAdapter` / `DestroyerAIFactory` | 기존 AI에 세력·초기 표적·스폰 이유·identity 주입만. AI 판단 로직 0 | 리드 |
+| 보상 규칙 `rewardDropTableIdFor` | hostile=공식 적대 테이블 / neutral=null(크레딧 0·지갑 불변) / patrol=null(수치표 전 발명 금지). 평판·도덕성 금지 | 리드(규칙) / 기획·툴링(수치) |
+| B6 호위 계약 | HighValueTransport archetype·배율 **참조 키**·EscortBinding·transportAttacked·EscortEngagementRequest — 핵심 게이트 비의존 | 리드(계약) |
+| B7 로깅 계약 | `IdentificationOpportunityLog` 8항목 + 결과 분류 5종, `IdentificationLogSink`. 집계·판정은 툴링 | 리드(계약) / 툴링(판정) |
+
+## 2e. 공식 런타임 params 소비 계약 (INT-CORE-011 — contracts/officialParams.ts)
+
+> 원칙: **공식 로더 호출은 composition root 1회.** 시스템·UI는 params
+> JSON을 직접 import하거나 툴링 로더를 직접 호출하지 않고, 주입된 값만
+> 소비한다 (JSON → 시스템 단방향).
+
+| 계약 | 내용 | 소유 |
+|---|---|---|
+| `OfficialRuntimeParams` | `loadEconomyParams()`(upgrades·equipment·economy·cargo) + `loadAimingParams()` 각 1회 호출 번들. 소비자: MetaLoop(손실률)·GameplaySystems(경제·조준)·BaseScreenPort(카탈로그)·Purchase/EquipmentTransaction·DepartureCommand | 로더·타입 = 툴링, 조립 = 리드 |
+| `SalvagePlacementSource` | salvage 배치의 **월드 좌표 소유** — spawnId·worldPosition·(선택)orientation. 경제 params(`economy.salvageSpawns`)는 spawnId·kind·dropTableId(credits)·rarePartId 소유. composition이 동일 spawnId로 결합 | 좌표 = 월드·그래픽스, 보상 = 기획(economy.json), 결합 = 리드 |
+| `SalvageSpawnPlanEntry` | 결합 결과 — 보상은 economy에서, 좌표는 placement에서만 파생. 누락·중복·미지 spawnId·미지 dropTableId·미지 kind = **거부**(무시 금지) | 리드 (`composeSalvageSpawnPlan`) |
+| production spawn 규칙 | 출항 월드 초기화 시 salvageSpawns 전체(MVP 3개) 1회 생성. 같은 출항 중복·파괴분 재생성 금지(출항당 1회 가드). 새 출항 시 재생성(resetSortieSession 규칙). 배치 미도착 시 임시 좌표 금지 — 명시적 unwired | 스포너 = 리드, 드롭 런타임 = 게임플레이 |
+| `SalvageSpawnAdapter` | 스포너 → 게임플레이 진입점. **결합 entry를 통째로** 넘긴다: `spawnSalvageFromPlan(entry)`. 좌표만 넘기던 구 시그니처는 `spawnId`·확정 `credits`를 잃어 게임플레이 측 중복·회수 후 재생성 거부가 성립하지 않으므로 **폐기**. 스포너의 출항당 1회 가드와 게임플레이의 spawnId 가드가 이중 방어 | 어댑터 정의 = 리드, 구현 = 게임플레이 `GameplaySystems.spawnSalvageFromPlan` |
+
+### 주입 지점 (composition root 1회씩)
+
+| 대상 | 호출 | 규칙 |
+|---|---|---|
+| 공식 params | `new GameplaySystems(bus, params, subscribe, layout, official)` | 생성자 1회 주입. `attachOfficialParams(official)`는 생성자에서 못 받은 경우의 대체 경로 — **둘을 함께 쓰지 않는다** |
+| 저장 loadout | `gameplay.restoreSavedLoadout(saved)` | `saved === null`(SaveStore `source: 'fresh'`) → 공식 시작 장비 부여 / `saved === []`(명시적 전부 해제) → **그대로 유지**. 두 경우를 섞으면 '전부 해제'가 새로고침마다 무효가 된다 |
+| salvage 배치 | `salvageSpawner.attachPlacementSource(STARTING_AREA_SALVAGE_PLACEMENTS)` | 좌표 소유는 `src/world/salvagePlacements.ts`. 미연결이면 unwired(임시 좌표 금지) |
 
 ## 3. 파라미터 계약
 

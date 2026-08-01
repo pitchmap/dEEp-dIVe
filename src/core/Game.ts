@@ -12,6 +12,8 @@ import { Renderer } from '../render/Renderer';
 import { CanyonScene } from '../render/CanyonScene';
 import { CameraInputAdapter } from '../render/CameraInputAdapter';
 import { GameplaySystems } from '../systems/GameplaySystems';
+import type { EquipmentId } from '../systems/EquipmentSystem';
+import { OFFICIAL_EQUIPMENT_IDS } from '../systems/economy/officialEconomyCatalog';
 import { UpgradePurchaseSystem } from '../systems/economy/UpgradePurchaseSystem';
 import { PurchaseTransaction } from '../meta/PurchaseTransaction';
 import { EquipmentTransaction } from '../meta/EquipmentTransaction';
@@ -22,10 +24,13 @@ import { SortiePrepScreen } from '../ui/SortiePrepScreen';
 import { GateMetricRecorder } from '../tools/GateMetricRecorder';
 import { LoadingTimer } from '../tools/LoadingTimer';
 import { STARTING_CANYON_LAYOUT } from '../world/startingCanyonLayout';
+import { STARTING_AREA_SALVAGE_PLACEMENTS } from '../world/salvagePlacements';
 import { MetaLoop } from '../meta/MetaLoop';
-import { PROVISIONAL_CREDIT_LOSS_ON_DESTROYED_RATIO } from '../meta/provisionalEconomy';
 import { defaultSaveStore } from '../meta/save/SaveStore';
-import { loadEquipmentCatalog, loadUpgradeCatalog } from '../tools/upgradeCalculator';
+import { loadEconomyParams } from '../tools/economyParams';
+import { loadAimingParams } from '../tools/aimingParams';
+import type { OfficialRuntimeParams } from '../contracts/officialParams';
+import { GuardShipAdapter } from './GuardShipAdapter';
 import { WebAudioSystem } from '../audio/WebAudioSystem';
 import { AudioCueRouter } from '../audio/AudioCueRouter';
 import {
@@ -34,11 +39,15 @@ import {
   DepartureCommand,
   EquipmentJudgeAdapter,
   MetaUiAdapter,
+  GuardIncidentLedger,
+  GuardSpawnBridge,
+  GuardSpawnCoordinator,
+  NeutralIncidentBoundary,
   SaveBridge,
   SortieEconomyBridge,
+  SortieSalvageSpawner,
   UpgradeState,
   createBaseScreenPort,
-  createMetaUiPorts,
   deriveEffectiveParams,
 } from './PveIntegration';
 import type { BaseScreenPort } from '../contracts/meta';
@@ -82,6 +91,16 @@ export class Game {
   private baseScreen: BaseScreenPort | null = null;
   /** 계측 가능한 저장 포트 — 명령당 호출 횟수 검증용 (저장 책임 표) */
   private savePort: CountingSavePort | null = null;
+  /** 공식 런타임 params 번들 — 로더 호출은 composeSystems 1회뿐 (INT-CORE-011) */
+  private officialParams: OfficialRuntimeParams | null = null;
+  /** 출항당 1회 salvage 스포너 — 좌표는 SalvagePlacementSource 전용 */
+  private salvageSpawner: SortieSalvageSpawner | null = null;
+  /** 경비 사건 중복 방지 원장 — 요청·스폰 공용 단일 저장소 (INT-CORE-012) */
+  private guardLedger: GuardIncidentLedger | null = null;
+  /** 경비함 어댑터 — 기존 구축함 AI 위임 (신규 AI 코어 없음) */
+  private guardAdapter: GuardShipAdapter | null = null;
+  /** 경비함 생성 포트 — 위치 전략·AI 팩토리 연결 지점 */
+  private guardSpawn: GuardSpawnCoordinator | null = null;
   /** 조립부가 건 EventBus 구독 해제 함수 — stop()에서 전부 해제한다 */
   private readonly unsubscribes: Array<() => void> = [];
 
@@ -137,14 +156,19 @@ export class Game {
       setPaused: (paused) => (paused ? this.loop.stop() : this.loop.start()),
       combat: { aim: gameplay.aim, torpedo: gameplay.torpedo },
       bus: this.bus,
-      // 기지 → 출항. 상태 전이는 상위 메타 루프 소유이며 HUD는 요청만 한다
-      // (기지 화면 UI가 도입되면 그 화면의 출항 버튼으로 대체된다).
-      launchSortie: () => {
-        // 출항의 유일한 경로 = Departure command (출항 확정 직전 저장 포함,
-        // 저장 실패 시 전환 없음 — INT-CORE-010 저장 책임 표). 결과 표시는
-        // SortiePrepScreen이 같은 baseScreen 포트로 수행한다.
-        this.baseScreen?.confirmDeparture();
-      },
+      // 출항 진입점은 기지 화면(SortiePrepScreen → BaseScreenPort.
+      // confirmDeparture) **하나만** 노출한다 — 기지 화면 UI가 production에
+      // 마운트됐으므로 HUD의 구 출항 버튼은 대체 완료 (INT-RENDER-010 §6
+      // 중복 진입점 정리, 리드 주석의 예정된 대체 조건 충족).
+      // launchSortie 미주입 → HUD 출항 버튼 항상 숨김.
+    });
+
+    // 부팅 시 초기 메타 상태 방송 (previous=null 규약) — 최초 전이 전에는
+    // metaStateChanged가 발행되지 않으므로 기지 화면·HUD 버튼 표시를 여기서
+    // 동기화한다 (자동 출항 없이 게임은 기지에서 시작한다).
+    this.bus.emit('metaStateChanged', {
+      previous: null,
+      next: this.metaLoop?.metaState ?? 'BASE',
     });
 
     window.addEventListener('resize', this.handleResize);
@@ -172,6 +196,11 @@ export class Game {
         tubeSockets: this.tubeSockets,
         baseScreen: this.baseScreen,
         savePort: this.savePort,
+        officialParams: this.officialParams,
+        salvageSpawner: this.salvageSpawner,
+        guardAdapter: this.guardAdapter,
+        guardSpawn: this.guardSpawn,
+        guardLedger: this.guardLedger,
       };
     }
 
@@ -207,6 +236,20 @@ export class Game {
   }
 
   private composeSystems(params: GameParams, scene: CanyonScene): GameplaySystems {
+    // ⓪-pre 공식 런타임 params (INT-CORE-011) — 툴링 로더를 **여기서만,
+    //   각 1회** 호출해 번들을 만들고 아래 소비자에 주입한다. 시스템·UI가
+    //   JSON이나 로더를 직접 호출하는 것은 계약 위반이다
+    //   (contracts/officialParams.ts — JSON → 시스템 단방향 주입).
+    const official: OfficialRuntimeParams = {
+      ...loadEconomyParams(),
+      aiming: loadAimingParams(),
+    };
+    this.officialParams = official;
+    console.info(
+      '[Game] 공식 경제 params 로드·검증 완료 (upgrades/equipment/economy/cargo + aiming) — ' +
+        `손실률 ${official.economy.creditLossOnDestroyedRatio} · salvage 배치 ${official.economy.salvageSpawns.length}건`,
+    );
+
     // ⓪ 상위 메타 루프 (리드 소유, src/meta — INT-CORE-006·007).
     //    하위 해역 세션은 SortieSessionPort 어댑터로만 접촉한다 (통신 3종 제한).
     //    이 어댑터가 계층 경계의 유일한 구현 지점이다 — 상위는 하위 내부 상태를
@@ -220,6 +263,24 @@ export class Game {
         // 잔탄·드롭이 이월되지 않게). 초회 출항에서는 갓 생성된 상태라 무해.
         const gameplay = this.gameplay;
         if (gameplay) gameplay.resetSortieSession(this.effectiveParams ?? params);
+        // 출항 월드 초기화 — salvage 확정 배치 (INT-CORE-011 production spawn
+        // 규칙: 출항당 1회, 보상=economy params·좌표=SalvagePlacementSource.
+        // 배치 미연결이면 임시 좌표를 만들지 않고 unwired로 기록만 한다).
+        // 경비 사건 원장은 출항 경계에서 비운다 — 이전 출항의 상관 id가
+        // 새 출항의 같은 표적 사건을 삼키지 않게 한다 (INT-CORE-012).
+        this.guardLedger?.resetForNewSortie();
+        const spawnReport = this.salvageSpawner?.beginSortie();
+        if (spawnReport) {
+          if (spawnReport.status === 'spawned') {
+            console.info(`[Game] salvage ${spawnReport.count}개 배치 완료 (economy.salvageSpawns)`);
+          } else if (spawnReport.status === 'unwired') {
+            console.warn(
+              '[Game] SalvagePlacementSource 미연결 — salvage 미생성 (그래픽스 배치 대기, INT-CORE-011)',
+            );
+          } else if (spawnReport.status === 'rejected') {
+            console.error(`[Game] salvage 결합 거부 — 생성 0건: ${spawnReport.message}`);
+          }
+        }
         if (this.stateMachine.state === 'BOOT') {
           // 첫 렌더 완료 후 호출됨 — 부트 완료 전환을 상위 루프가 소유한다
           this.stateMachine.transition('DEPARTURE');
@@ -235,15 +296,15 @@ export class Game {
       },
     };
     this.metaLoop = new MetaLoop(this.bus, sessionPort, {
-      // ⚠ R7 임시값 — params/economy.json 이관 대기 (INT-CORE-007)
-      creditLossOnDestroyedRatio: PROVISIONAL_CREDIT_LOSS_ON_DESTROYED_RATIO,
+      // 공식 params 소비 (INT-CORE-011) — provisional 이관 완료 [6차 결의 7: 0.5]
+      creditLossOnDestroyedRatio: official.economy.creditLossOnDestroyedRatio,
     });
     this.registry.register(this.metaLoop);
 
     // ⓪-b 저장 복원 — 부팅 시 1회, BASE 상태에서만. 저장 코드가 메타 상태
     //     머신을 조작하지 않도록 복원은 여기(조립부)에서만 수행한다.
     const loaded = defaultSaveStore.load();
-    const catalog = loadUpgradeCatalog();
+    const catalog = official.upgrades;
     this.upgrades = new UpgradeState(catalog, loaded.data.upgradeLevels);
     this.metaLoop.restoreWallet({
       credits: loaded.data.credits,
@@ -264,6 +325,10 @@ export class Game {
     //    협곡 레이아웃은 장면과 같은 STARTING_CANYON_LAYOUT 단일 인스턴스 주입.
     //    업그레이드 반영 유효 파라미터를 주입한다 — 핫리로드 시에도 같은
     //    파생 규칙을 다시 적용해야 하므로 구독을 감싼다.
+    //    공식 경제·화물선·장비 params는 위에서 1회 로드한 번들을 **생성자 1회
+    //    주입**으로 넘긴다 (INT-CORE-011 단일 진입점 — 시스템이 JSON이나 툴링
+    //    로더를 직접 부르지 않는다. `attachOfficialParams()`는 생성자에서 못
+    //    받은 경우의 대체 경로이며, 여기서 이중 주입하지 않는다).
     const gameplay = new GameplaySystems(
       this.bus,
       effectiveParams,
@@ -272,9 +337,24 @@ export class Game {
           listener(deriveEffectiveParams(reloaded, this.upgrades?.modifiers ?? {})),
         ),
       STARTING_CANYON_LAYOUT,
+      official,
     );
     this.registry.register(gameplay);
     this.gameplay = gameplay;
+
+    // ①-a1 저장 loadout 복원 (부팅 1회 — 저장 책임 표).
+    //     'fresh' = 저장 데이터 자체가 없음 → null을 넘겨 공식 시작 장비를
+    //     부여한다. 저장이 있으면 배열을 그대로 넘긴다 — **빈 배열은 '전부
+    //     해제'라는 명시적 저장**이므로 기본 어뢰를 되돌려 주지 않는다
+    //     (새로고침마다 장비가 되살아나던 문제의 원인). 공식 4종에 없는 id는
+    //     여기서 걸러 낸다 (5번째 장비 금지).
+    gameplay.restoreSavedLoadout(
+      loaded.source === 'fresh'
+        ? null
+        : loaded.data.equippedGear.filter((id): id is EquipmentId =>
+            (OFFICIAL_EQUIPMENT_IDS as readonly string[]).includes(id),
+          ),
+    );
 
     // ①-a2 선수 발사관 소켓 (INT-CORE-008·009 — 스프린트 A 최종 조립 기준).
     //     조준 카메라(그래픽스)와 어뢰 생성(게임플레이)이 **하나의 인스턴스**를
@@ -297,6 +377,40 @@ export class Game {
     // ②-a 경제 → 공식 이벤트 브리지 (lootDropped·guardShipRequested).
     //     게임플레이 뒤에 등록해 같은 프레임의 드롭·요청을 흘린다.
     this.registry.register(new SortieEconomyBridge(gameplay.economy));
+
+    // ②-a2 해저 재화 스포너 (INT-CORE-011) — economy.salvageSpawns(보상)와
+    //     SalvagePlacementSource(좌표, 월드·그래픽스 소유)를 spawnId로 결합해
+    //     게임플레이 spawn 어댑터를 호출한다. 좌표는 여기서 만들지 않는다 —
+    //     그래픽스 배치 구현체 도착 시 attachPlacementSource로 연결한다
+    //     (그 전까지 명시적 unwired: 출항 시 경고 로그, salvage 미생성).
+    //     결합 entry는 **통째로** 게임플레이 진입점에 넘긴다 — spawnId가
+    //     넘어와야 게임플레이 측 중복·회수 후 재생성 거부가 작동한다.
+    this.salvageSpawner = new SortieSalvageSpawner(official.economy, {
+      spawnSalvageFromPlan: (entry) => gameplay.spawnSalvageFromPlan(entry),
+    });
+    //     월드·그래픽스 배치 연결 (INT-RENDER-010): 좌표 전용 소스 —
+    //     보상(credits·rareParts)은 economy params에만 있고 배치에는 없다.
+    //     spawnId 결합·검증은 composeSalvageSpawnPlan이 수행한다.
+    this.salvageSpawner.attachPlacementSource(STARTING_AREA_SALVAGE_PLACEMENTS);
+
+    // ②-a3 중립 사건 → 경비함 스폰 경계 (INT-CORE-012 — 스프린트 B 선행개발).
+    //     중복 방지 저장소는 이 원장 **하나뿐**이다: 경비 요청(상관 id)과
+    //     스폰(요청 id)이 같은 원장을 공유한다. 시스템 내부에 별도 중복
+    //     표를 두지 않는다.
+    //     경비함 AI는 **기존 구축함 AI 재사용**이며 신규 AI 코어는 없다 —
+    //     A 스택에 DestroyerAI 구현체가 아직 없으므로 팩토리·위치 전략
+    //     모두 명시적 미연결 상태다(임의 좌표·대체 AI 생성 금지). 각각
+    //     `attachFactory` / `attachLocationStrategy` 한 줄로 연결된다.
+    const guardLedger = new GuardIncidentLedger();
+    this.guardLedger = guardLedger;
+    const guardAdapter = new GuardShipAdapter(null);
+    this.guardAdapter = guardAdapter;
+    const guardSpawn = new GuardSpawnCoordinator(guardLedger, guardAdapter, null);
+    this.guardSpawn = guardSpawn;
+    this.registry.register(new NeutralIncidentBoundary(guardLedger));
+    this.registry.register(new GuardSpawnBridge(guardSpawn));
+    // ③ AI 그룹 — 스폰된 기존 구축함 AI들의 수명주기 전달만 담당한다.
+    this.registry.register(guardAdapter);
 
     // ①-c 업그레이드 구매 판정 시스템 (게임플레이 소유 — 조립부가 공식
     //     카탈로그와 실지갑 읽기 단면을 주입한다). **단계의 단일 저장소** —
@@ -380,7 +494,7 @@ export class Game {
     const baseScreen = createBaseScreenPort({
       meta: metaLoop,
       upgradeCatalog: catalog,
-      equipmentCatalog: loadEquipmentCatalog(),
+      equipmentCatalog: official.equipment,
       levelsOf: () => upgradePurchase.levelSnapshot,
       loadoutOf: () => gameplay.equipment.loadout,
       purchaseTx,
@@ -404,19 +518,19 @@ export class Game {
     // ②-d production 경제 UI 마운트 (그래픽스 소유 컴포넌트 — 조립부는 포트만
     //     주입한다. DOM·스타일 무접촉). QA 데모(econUiQaDemo)는 ?econdemo
     //     플래그 전용이며 이 production 경로에 포함되지 않는다.
-    const uiPorts = createMetaUiPorts({
-      baseScreen,
-      rawCatalog: catalog,
-      slotsOf: () => gameplay.equipment.slots,
-    });
+    //     UI는 **BaseScreenPort v2 하나만** 소비한다 (읽기 모델·명령·lastResult
+    //     전부 포트 경유) — 구계약 변환 어댑터(createMetaUiPorts)는 UI v2
+    //     동기화로 불필요해져 제거했다 (INT-RENDER-010 §2).
     const economyHud = new EconomyHud(this.container);
-    economyHud.attachWalletSource(metaLoop);
-    economyHud.attachSortieEarningsSource(uiPorts.earningsSource);
+    economyHud.attachBaseScreen(baseScreen);
+    economyHud.attachMetaState(metaLoop);
     const prepScreen = new SortiePrepScreen(this.container);
-    prepScreen.attachWalletSource(metaLoop);
-    prepScreen.attachUpgradePort(uiPorts.upgradePort);
-    prepScreen.attachEquipmentPort(uiPorts.equipmentPort);
-    prepScreen.attachDeparturePort(uiPorts.departurePort);
+    prepScreen.attachBaseScreen(baseScreen);
+    //     슬롯 위치 뷰 — v2 loadout.equipped는 빈 슬롯이 압축돼 실제 슬롯
+    //     인덱스를 복원할 수 없다. 슬롯 지정 명령(equipItem·unequipItem)이
+    //     실제 인덱스를 받으므로 읽기 전용 위치 뷰를 함께 준다
+    //     (계약 편입 요청: INT-RENDER-010).
+    prepScreen.attachSlotPositions(gameplay.equipment);
     this.registry.register(new MetaUiAdapter([economyHud, prepScreen]));
 
     // ④ 표현 연동 — 렌더 소유 카메라 입력(회전·리센터). 이동키와 중복 없음.
@@ -441,6 +555,10 @@ export class Game {
     // 읽기만 하고 오프셋을 자체 계산하지 않는다 (2소켓 구조: aimCameraSocket /
     // torpedoSpawnSocket이 동일 앵커·동일 전방축, 안전 오프셋은 소켓 정의 1곳).
     scene.attachTorpedoTubeSocket(gameplay.torpedoTubeSocket);
+    // 해저 재화 시각 — 게임플레이 배치 상태(읽기 전용)와 실제 회수 반경을
+    // 그대로 넘긴다. 렌더는 판정·보상을 계산하지 않으며, 희귀 부품 포함
+    // 여부를 사전에 노출하지 않는다 (INT-RENDER-010 §5).
+    scene.attachSalvageSource(gameplay.economy, gameplay.economy.pickupRadiusMeters);
     // 성장 외형 — 렌더에는 계산된 단계(1~3)만 전달한다. 렌더가 업그레이드
     // 수치·저장 데이터를 읽지 않는다 (INT-RENDER-007).
     const tiers = this.upgrades.visualTiers;
@@ -499,11 +617,9 @@ export class Game {
     if (!this.firstRenderDone) {
       this.firstRenderDone = true;
       this.loadingTimer.markFirstRender();
-      // 부트 완료 — 세션 시작은 상위 메타 루프를 경유한다 (BOOT→DEPARTURE
-      // 전환은 SortieSessionPort 어댑터가 수행). 기지 화면(그래픽·UI) 도입
-      // 전까지는 자동 출항 — 도입 시 이 두 줄이 기지 UI 트리거로 대체된다.
-      this.metaLoop?.beginSortiePrep();
-      this.metaLoop?.launchSortie();
+      // 부트 완료 — 게임은 기지(BASE)에서 시작한다. 출항의 유일한 경로는
+      // 기지 화면 출항 버튼 → BaseScreenPort.confirmDeparture(확정 직전
+      // 저장 포함)다. 자동 출항 재도입 금지 (INT-RENDER-010 §6).
     }
   }
 

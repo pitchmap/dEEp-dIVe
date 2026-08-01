@@ -90,6 +90,200 @@
 
 ## 제안 목록
 
+### INT-CORE-012 — 스프린트 B 선행 계약: Faction 정본·식별 read model·중립 유효 피격·경비함 스폰
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (스프린트 B **선행개발** — 15차 결의 2 창1 범위. B 공식 발효 = A 통합 PR 병합이며 아직 미발효) |
+| 대상 시스템 | `src/contracts/faction.ts`·`identification.ts`·`guard.ts`(신규), `src/contracts/events.ts`(neutralShipHit 신설·guardShipRequested payload v2·transportAttacked), `src/core/PveIntegration.ts`(중복 방지 경계·GuardShipAdapter·스폰 포트 배선) |
+| 필요한 변경 | ① **Faction 정본** — `FactionId` 정의 정본은 `contracts/meta.ts` 유지(재정의 없음), 규칙표 `FACTION_RULES`(공격 허용·중립 사건 발생·드롭 테이블 참조·식별 분류·표시 라벨 id·AI 초기 태도) 신설. 경비 세력 공식 이름은 **`patrol`** — 같은 의미의 `guard` 추가 금지(코드의 'guard' 표기는 스폰 절차 이름일 뿐). `'object'`는 세력이 아니므로 `CombatTargetClass`(= FactionId \| 'object')로 승격만 하고 FactionId에 넣지 않는다 ② **식별 read model** — `ShipIdentificationView`(entityId·faction·identificationState·displayLabelId·distanceMeters·isTargetable·isAlive·worldPosition·tagDisplayable) + `ShipIdentificationSource`. 미식별 동안 라벨은 null이며 그래픽스는 모델·이름으로 세력을 추측하지 않는다. 색·문구는 계약에 없음 ③ **`neutralShipHit`** — 실제 유효 피해 적용 후 1회. 조준·발사·빗나감·같은 correlationId 재발행·파괴 후 재발행 금지. `torpedoHit`(연출용, 세력·피해량·공격자·상관 id 없음)과 중복 아님 ④ **`guardShipRequested` payload v2** — 기존 이벤트 **재사용**(신규 이벤트 없음), 구 `{x,z}` → `incidentPosition` 흡수 + requestId·sourceNeutralEntityId·attackerEntityId·spawnReason·requestedFaction·correlationId ⑤ **GuardSpawnPort** — 결과 5종(spawned/duplicateRequest/invalidRequest/noSpawnLocation/spawnFailed), 예외·내부 문자열 비노출 ⑥ **GuardShipAdapter** — 기존 `DestroyerAI` 계약에 주입만(세력 patrol·초기 표적=공격자·스폰 이유·표시 identity), 신규 AI 코어 0 ⑦ **보상 계약** — hostile=공식 적대 드롭 테이블 / neutral=`null`(크레딧 0·지갑 불변) / patrol=`null`(공식 params 없이 발명 금지). 평판·도덕성 도입 금지 ⑧ B6 호위 계약(고가치 수송선 archetype·배율 **참조 키**·EscortBinding·transportAttacked·EscortEngagementRequest) — 핵심 게이트 경로가 의존하지 않음 ⑨ B7 로깅 계약 8항목 + 결과 분류 5종(판정·집계는 툴링) |
+| 변경 이유 | B1~B5 흐름(적대·중립 배치 → 조준경 식별 → 중립 유효 피격 → 경비 요청 → 기존 구축함 AI 재사용 스폰 → 공격자 초기 표적)을 창 4개가 병렬로 구현할 수 있게 경계를 먼저 고정. 기존 `guardShipRequested`가 `{x,z}`뿐이라 스폰 판정에 필요한 출처·공격자·중복 방지 키가 없었다 |
+| 관련 게이트 | B1·B2·B3·B4·B5 (+ B6·B7 계약 선반영) |
+| 하위 호환 여부 | `guardShipRequested` 소비자는 **현재 0** — payload 확장으로 깨지는 코드 없음(발행측 1곳은 리드가 동시 갱신). `FactionId`·`torpedoHit`·A 스택 계약은 무변경 |
+| 개발 리드 결정 | 승인 — 단, **B 공식 발효 전 선행개발**이며 dev/main·통합 브랜치 병합은 A+B 최종 통합 브랜치 검증 이후. `DestroyerAI` 구현체가 A 스택에 없으므로 어댑터는 `DestroyerAIFactory` 포트로 위임하고 미연결 시 `spawnFailed`로 끝낸다 — 대체 AI를 만들지 않는다 |
+| 적용 커밋 | (본 브랜치 선행 계약 커밋) |
+
+**각 창 소비 지침 (스프린트 B):**
+- **게임플레이**: ① 선박에 `faction` 태그 부여 — 현재 화물선은 `'hostile'` 고정이며 중립 선박이 없어 B1이 성립하지 않는다(적대·중립 동시 배치 필요). ② 유효 피해 적용 지점에서 `neutralShipHit` 발행 — 어뢰 1발 = `attackCorrelationId` 1개, 첫 유효 피격에 `firstValidNeutralHit: true`. 기존 `consumeGuardSpawnRequests` 큐는 이행 완료 시 제거(그때까지 레거시 경로 병존, 중복은 composition 경계가 흡수) ③ `ShipIdentificationSource` 구현 — 거리·식별 성립 조건은 판정측 소유 ④ 중립 격침 시 드롭 0 유지(`rewardDropTableIdFor` 규칙과 동일) ⑤ `GuardSpawnLocationStrategy` 구현(월드 지식 필요) — 없으면 스폰은 `noSpawnLocation`
+- **그래픽스**: 조준경 태그는 `ShipIdentificationView`만 소비 — 엔티티 이름·모델 종류로 세력 추측 금지. `identificationState === 'unidentified'`면 라벨 없음(세력 노출 금지). 색·실루엣·항해등은 그래픽스 소유이며 계약에 문구·색을 요청하지 않는다. 경비함 등장 방향 연출은 `guardShipRequested.incidentPosition` 구독
+- **툴링**: `economy.json`에 세력별 드롭 테이블·고가치 배율 확장(validator 포함) — **patrol 보상은 수치표가 오기 전까지 null 유지**. B7 로깅은 `IdentificationLogSink` 구현·집계·판정 담당(오인율 계산식·최소 표본 5명·50회는 툴링 소유). B1~B5 자동 검증 스크립트 신설은 툴링 몫 — 리드는 존재하지 않는 script를 실행하지 않는다
+- **통합**: B 범위표는 **A 통합 PR 병합 시 발효**(15차 결의 1). 본 계약은 그 전 선행개발분이며, A+B 최종 통합 브랜치에서 전체 검증 전까지 B 완료·발효로 보고하지 않는다
+
+### INT-GAME-011 — INT-CORE-011 적용 완료 + production 주입 3줄 배선 요청 (조립부)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 (창 2 — 공식 경제 params production 소비 전환) |
+| 대상 시스템 | `src/core/Game.ts`(조립 배선 3줄) — 계약·리드 구현 변경 요청 **없음** |
+| 필요한 변경 | INT-CORE-011의 게임플레이 소비 지침을 전부 이행했다(아래 '적용 완료'). production에서 실제로 값이 흐르려면 조립부에서 **3줄**이 필요하다: ① `gameplay.attachOfficialParams(official)` — 경제(드롭·픽업·손실)·화물선(항행·명중·침몰)·장비(성능·가격·슬롯)를 한 번에 배선한다. `OfficialRuntimeParams`가 그대로 대입되는 구조 단면(`GameplayOfficialParams`)을 받으므로 캐스팅이 필요 없다. `new GameplaySystems(bus, params, subscribe, layout, official)` 5번째 인자로 주는 것도 동일 ② `gameplay.restoreSavedLoadout(loaded.source === 'fresh' ? null : (loaded.data.equippedGear as EquipmentId[]))` — **저장 없음(null)과 저장이 명시한 빈 로드아웃([])의 구분**이 핵심이다. 현재 조립부는 `equippedGear`를 저장만 하고 복원하지 않아, 전부 해제한 세이브도 재부팅 시 기본 어뢰로 되돌아간다 ③ `SortieSalvageSpawner` 어댑터를 `spawnSalvage` 대신 **plan 전달** 경로로: `{ spawnSalvage: ... }` → 결합 plan 항목을 그대로 넘기는 `gameplay.spawnSalvageFromPlan(entry)`. spawnId가 넘어와야 게임플레이 측 중복·재생성 거부가 작동한다(현 시그니처는 spawnId를 잃는다). 리드 스포너의 출항당 1회 가드는 그대로 두고 **이중 방어**가 된다 |
+| 변경 이유 | 주입 없이는 경제·화물선·장비가 **명시적 unwired**로 남는다(설계된 상태 — 임시 수치를 만들지 않는다). 조립 1지점에서만 값이 흐르는 INT-CORE-011 원칙을 지키면서 배선을 완성하는 최소 변경 |
+| 관련 게이트 | A8(공식 수치 소비)·A7(저장 유지)·MVP 재화 루프 |
+| 영향을 받는 파일 | `src/core/Game.ts` 3줄. 게임플레이 측은 이미 완료 |
+| 하위 호환 여부 | 깨짐 없음 — `attachBaseEconomy(purchase, null)`·`UpgradePurchaseSystem(축약 카탈로그, wallet, costResolver)` 등 조립부의 **기존 호출 형태를 전부 유지**하도록 게임플레이 API를 넓혔다(타입체크 통과 확인). `EquipmentSystem`은 개정 `EquipmentChangeJudgePort`(판정+적용 결합·`snapshotSlots`/`restoreSlots`)를 직접 구현하며, 리드 `EquipmentJudgeAdapter`가 쓰는 `replaceItem`/`unequipItem` 단면도 그대로 제공한다 |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
+
+**게임플레이 적용 완료 (INT-CORE-011 지침 이행):**
+- `systems/economy/provisionalEconomy.ts`·`systems/provisionalCargo.ts`·`systems/provisionalEquipment.ts` **삭제**. production 소비 0건(검증 러너 정적 검사 — `__verification__` 픽스처는 제외 대상으로 구분)
+- 경제: `EconomySystem(targets, player, ships, economyParams)` + `attachEconomyParams()`. 손실률 0.5·픽업 6m·드롭 120/60/40/25 전부 주입값. 미주입이면 드롭 0·회수 0·손실 0(**손실을 발명하지 않는다**)이며 `economyParamsWired === false`로 드러난다
+- 화물선: `cargoShipConfigFromOfficial(cargo, surfaceY)` — 해수면만 레이아웃(월드 소유), 나머지는 `params/cargo.json`. **이관 전 런타임 값과 동일함을 회귀 테스트로 고정**(속력 4·반경 9·침몰 6s·경로 ±30/−40·선체 10/2.5/4/3). 미주입이면 표적 미등록(유령선 금지)
+- 장비: 성능·가격·슬롯이 전부 `params/equipment.json`. 게임플레이 내부 성능 상수 0. 슬롯 수는 카탈로그 값을 그대로 따른다(3 주입 시 3 — 하드코딩 아님을 테스트로 증명). 미주입이면 어뢰 프로파일 없음 = 발사 불성립
+- salvage: `spawnSalvageFromPlan(entry)` — spawnId 키, 같은 출항 중복·회수 후 재생성 **거부**, `resetForNewSortie()`에서만 기록 해제. 보상은 plan(경제 params 파생), 좌표는 placement에서만 온다
+- 업그레이드: 공식 가격 배열·희귀 부품·effectBonus 누적·`paramRef` 소비. 가격 미확정은 **`economyDataUnavailable`**(INT-CORE-010 신설 사유 — INT-GAME-010의 결정 요청은 이것으로 해소, `maxLevelReached` 대용 표기 폐기). provisional 비용 경로 0
+- **효과 소비자 조사**(`economy/upgradeEffectConsumers.ts`): wired 4 — maxSpeed·turnRate(→`SubmarinePlayerController`), reloadSpeed(→`StraightRunTorpedoSystem`), torpedoDamage(→`EquipmentSystem.setUpgradeModifiers`). **`deferred consumer` 3 — hullIntegrity·maxDepth·sonarRange**(기준값 파라미터·소비 시스템 부재. 기준값 발명·체력 시스템 개발·C 내구도 선구현 전부 하지 않음, 스텁도 만들지 않음)
+- 게임플레이 SavePort 직접 호출 **0건** (러너 정적 검사 + 판정 포트 표면 검사 2중)
+
+### INT-RENDER-010 — [LOOP][ECON] BaseScreenPort v2 동기화·공식 가격 활성화·해저 salvage 월드 배치
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스·월드 (기준 `492d1bf` + 리드 소비 계약 `ffa945a`·툴링 params `2a89400` 병합) |
+| 대상 시스템 | `src/ui/*`(v2 소비로 재작성), `src/world/salvagePlacements.ts`(신규 — 좌표 소유), `src/render/SalvageVisuals.ts`(신규), `src/render/CanyonScene.ts`, `src/core/Game.ts`·`PveIntegration.ts`(구계약 어댑터 제거·배치 연결), `src/systems/economy/EconomySystem.ts`(읽기 전용 getter 1개) |
+| 관련 게이트 | A4·A5-ui·A6-ui·A8(공식 가격 활성) + salvage 배치 |
+| 하위 호환 여부 | 계약 파일 무변경. 동작 변경: 자동 출항 제거(기지 시작)·HUD 출항 버튼 미노출 |
+| 개발 리드 결정 | **확인 대기** (아래 ⚠ 2건 + v2 보완 요청 2건) |
+| 적용 커밋 | (이 브랜치 v2 동기화·salvage 배치 커밋) |
+
+**① BaseScreenPort v2 동기화 (§2).** UI가 v2를 직접 소비한다 — 읽기 모델
+9종(wallet·sortieCreditsEarned·sortieRarePartsSecured·upgradeCatalog·
+upgradeLevels·equipmentCatalog·loadout·canLaunchSortie·lastResult)과 명령
+5종(purchaseUpgrade·equipItem·replaceItem·unequipItem·confirmDeparture),
+결과 8종(success·불가 5종·economyDataUnavailable·saveFailedRolledBack)을
+그대로 쓴다. **게임플레이 로컬 결과 타입(purchaseTypes) 참조는 0건**이다.
+
+**제거한 구계약 어댑터:** `createMetaUiPorts`·`toUiCommandResult`·
+`isOfficialUpgradeStatId`(src/core/PveIntegration.ts) + 구 UI 포트 타입
+일습(`UpgradePurchasePort`·`EquipmentUiPort`·`DeparturePort`·
+`SortieEarningsSource`·`UpgradeOfferView`·`MetaCommandResult`·
+`MetaCommandFailure`·`UiActionResult`, src/ui/metaEconomyPorts.ts). v2
+직결로 전부 무참조가 됐다 — 다른 소비자·테스트 참조 없음을 확인 후 삭제.
+`MetaUiAdapter`(수명주기 래퍼)는 유지.
+
+**② v2 보완 요청 (그래픽스 → 리드).**
+
+- **slotPositions (필수)**: `loadout.equipped`는 빈 슬롯이 압축된 목록이라
+  **실제 슬롯 인덱스를 복원할 수 없다.** 그런데 명령 3종은 실제 인덱스를
+  받는다(`equipItem(id, slotIndex)`·`unequipItem(slotIndex)` →
+  `EquipmentSystem.replaceItem/unequipItem`). 슬롯 2개에서 슬롯 1을 해제하면
+  실제 배열은 `[null, X]`인데 압축 뷰는 `[X]`라 UI가 X를 슬롯 1로 표시하고,
+  이후 '빈 슬롯 장착'이 X를 덮어쓴다. **재현되는 오조작**이라 임시로
+  읽기 전용 위치 뷰(`readonly (EquipmentId|null)[]`)를 조립부가 UI에 주입해
+  해소했다(`SortiePrepScreen.attachSlotPositions`, 리드가 이미 갖고 있던
+  `slotsOf`와 같은 값). **BaseScreenPort v2에 `slotPositions` 추가**를
+  요청한다 — 채택 시 이 주입은 삭제된다.
+- **startingItem (권장)**: `EquipmentCatalogItem`이 `{id,label,cost}`뿐이라
+  params의 `startingItem` 플래그가 UI에 도달하지 않는다. 현재는 공식 비용이
+  0/0인 항목을 '시작 보유 (구매 비용 없음)'로 **해석만** 한다(수치 발명
+  없음). 플래그가 뷰에 포함되면 해석 대신 플래그를 쓴다.
+
+**③ 공식 가격 활성화 (§3).** production 기본 URL 실측: 업그레이드 7종 전부
+가격 표시(1단계 크레딧 100 — 공식 upgrades.json), 지갑 부족 시 '✕ 크레딧
+부족' 비활성. 장비 4종 — 기본 어뢰 '시작 보유', 고속 260, 중어뢰 420+희귀 1,
+디코이 340+희귀 1. QA 데모(`?econdemo`) 가격은 production 경로에 없음(플래그
+없으면 DOM 미생성 확인).
+
+**④ salvage 월드 배치 (§4·§5).** `src/world/salvagePlacements.ts`가
+`SalvagePlacementSource`를 구현한다 — **spawnId·worldPosition·orientation만**
+정의하고 credits·rareParts·dropTableId·kind는 두지 않는다(코드부 보상 키워드
+0건). 좌표는 현 `STARTING_CANYON_LAYOUT` 실측 기준:
+
+| spawnId | worldPosition | 지형 여유 | 스폰 거리 |
+|---|---|---|---|
+| salvage-1 (chest) | (-3.83, -4.5, -30) | 8.21m | 30.6m |
+| salvage-2 (container) | (5.62, -4.5, 16) | 8.61m | 17.5m |
+| salvage-3 (mineral) | (2.65, -4.5, 42) | 8.31m | 42.3m |
+
+바닥면이 해저(floorY -6)에 닿고 상단 -3m — 해수면(+12) 부양 없음, 잠수함
+하한(y=-5)에서 회수 반경(6m) 안. 상호 최소 26.2m, 화물선 항로(z=-40 해수면)
+최단 3D 19.7m. 개발 서버 실측: 출항 시 3개 생성(kind·좌표 일치, salvage-3만
+`rare-alloy-core` — 보상은 economy params에서만 파생됨을 확인).
+
+시각은 `SalvageVisuals`(회색 박스 3종 + 회수 범위 링) — **rarePartId를 읽지
+않는다**(희귀 부품 사전 노출 금지). 탐지 UI(C 범위) 미추가.
+
+**⑤ ⚠ 조립부 최소 변경 (리드 확인 요청).**
+- `Game.ts`: HUD `launchSortie` 미주입 + `render()` 자동 출항 2줄 제거 →
+  출항 진입점 1개(기지 화면). 리드 주석의 '기지 화면 UI 도입 시 대체' 조건이
+  충족된 시점의 반영이다. 부팅 시 `metaStateChanged {previous:null}` 1회
+  방송으로 초기 표시를 동기화한다.
+- `EconomySystem.pickupRadiusMeters` 읽기 전용 getter 1개 추가 — 렌더 회수
+  범위 링이 **게임플레이 실제 판정값**을 소비하도록. 판정 경로 무변경이며,
+  Game.ts가 provisionalEconomy를 import하지 않게 하는 목적도 겸한다(리드
+  정적 검사 통과 유지).
+
+**검증:** typecheck·build·check:size(4.5%)·게임플레이 128/128·메타 58/58
+(리드 정적 검사 2종 포함)·툴링 26/26·verify:hud 34/34. production 브라우저
+실측에서 콘솔 오류 0건.
+
+### INT-RENDER-009 — [LOOP][ECON] 경제·성장 UI production 배선 적용 (스프린트 A 마감 — A4·A5-ui·A6-ui 해소)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스 (스프린트 A 마감 작업 지시 — 기준 통합 커밋 `ebea23b`) |
+| 대상 시스템 | src/ui/*(재작성 — BaseScreenPort 소비), src/core/Game.ts(INT-CORE-009 배선 스니펫 적용·확장), src/meta/MetaLoop.ts(읽기 전용 getter 1개 선반영), scripts/verify-hud.mjs(기지 시작 대응 최소 수정) |
+| 필요한 변경 | 아래 적용 내역 — 전부 반영 완료, 리드 확인 대기 항목 2건(⚠) |
+| 변경 이유 | Acceptance A4 실패(경제 UI 미배선) 해소 — production 기본 URL에서 재화·업그레이드·장비·출항 UI가 실상태로 동작해야 함 |
+| 관련 게이트 | A4·A5(ui)·A6(ui)·A7(출항 확정 직전 저장) |
+| 하위 호환 여부 | 계약 파일 무변경. 동작 변경 1건: **자동 출항 제거 — 게임이 기지(BASE)에서 시작** (Game.ts 주석의 예정된 대체) |
+| 개발 리드 결정 | **확인 대기** (선반영 ⚠ 2건 포함) |
+| 적용 커밋 | (이 브랜치 production 배선 커밋) |
+
+**적용 내역:**
+
+1. **UI 재작성 (그래픽스 소유)** — `SortiePrepScreen`·`EconomyHud`의 명령·상태
+   진입점을 공통 계약 `BaseScreenPort`로 교체 (구 구조적 포트 삭제). 결과
+   표시는 계약 `TransactionResult` + UI 전용 `economyDataUnavailable`(가격
+   null — 트랜잭션 미진입) 구분. 카탈로그는 economyMath 검증 결과의 읽기
+   전용 뷰 — null은 '경제 데이터 미확정' 비활성으로 표기하고 **임의 가격을
+   만들지 않는다**. params에 숫자가 오면 코드 변경 없이 활성화된다.
+2. **Game 조립 (INT-CORE-009 스니펫 적용)** — savePort(SaveBridge 어댑터),
+   구매 판정 `UpgradePurchaseSystem`(가격 resolver = **공식 catalog만**,
+   null→어떤 지갑도 충족 불가한 거부 값·provisional 가격 미사용) +
+   `PurchaseTransaction`, 장비는 게임플레이 원자 경로(equipItem/replaceItem/
+   unequipItem)를 계약 결과로 매핑(slotFull→noFreeSlot), `BaseScreenPort`
+   조립 + `EconomyHud`/`SortiePrepScreen` 마운트(registry 시스템
+   `baseScreenUi`). 구매 확정 시 유효 파라미터·장비 배율·외형 단계 재파생.
+3. **출항 단일 진입점 (§6)** — ControlsHud `launchSortie` 미주입(구 HUD 출항
+   버튼 상시 숨김) + render()의 자동 출항 2줄 제거 → **기지 시작**.
+   `BaseScreenPort.launchSortie` = beginSortiePrep → 확정 직전 저장 →
+   실패 시 cancelSortiePrep(**해역 전환 금지·기지 유지**) / 성공 시
+   launchSortie. 부팅 시 `metaStateChanged {previous:null}` 1회 방송으로
+   기지 화면·HUD 표시 동기화.
+4. **⚠ 선반영(리드 확인 대기) — MetaLoop.sortieEarnings** 읽기 전용 getter
+   (이번 출항 집계 스냅숏, wallet getter와 동일 복사본 관례) — 해역 재화
+   HUD의 '이번 출항 획득(미확정)' 표시 소스.
+5. **⚠ 선반영(툴링 확인 대기) — scripts/verify-hud.mjs** 도입부에 기지 화면
+   출항 버튼 클릭 추가 (기지 시작 대응, 34/34 통과 확인).
+6. **저장된 장비 loadout 부팅 복원** — 저장 스냅샷(equippedGear)의 역방향이
+   조립부에 없어 추가 (비어 있지 않은 저장만 복원 — 신규 세이브는
+   EquipmentSystem 기본 표준 어뢰 유지).
+
+**검증:** typecheck/build/check:size(4.4%)/게임플레이 128/메타 35/툴링 26/
+verify:hud 34 전부 통과. Production URL(플래그 없음) Playwright 실측:
+기지 화면·재화 HUD(초기 0/0 실지갑 일치)·업그레이드 7종 전항 '경제 데이터
+미확정' 비활성·장비 장착/해제/롤백(저장 결함 주입 시 지정 문구 + loadout
+무변경)·저장 실패 중 출항 거부(기지 유지)·정상 출항 후 해역 HUD 미확정 줄.
+스크린샷: docs/screenshots/sprintA_*_production.png 외.
+### INT-CORE-011 — 공식 런타임 params 소비 계약: OfficialRuntimeParams·SalvagePlacementSource·production spawn 규칙
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (스프린트 A 공식 경제 연결 — 툴링 승인 params `2a89400`·loader `60ece41` 소비) |
+| 대상 시스템 | `src/contracts/officialParams.ts`(신규), `src/core/Game.ts`(provisional 제거·loader 1회), `src/core/PveIntegration.ts`(spawnId 결합·출항당 spawn 가드) |
+| 필요한 변경 | ① **OfficialRuntimeParams** — composition root가 `loadEconomyParams()`(upgrades·equipment·economy·cargo) + `loadAimingParams()`를 **각 1회** 호출해 번들을 만들고 MetaLoop·GameplaySystems·BaseScreenPort·PurchaseTransaction·EquipmentTransaction·DepartureCommand에 주입. 시스템·UI의 JSON 직접 import·로더 직접 호출 금지 ② **SalvagePlacementSource** — 소유 분리: 경제 params가 spawnId·kind·dropTableId(credits)·rarePartId 소유, 월드·그래픽스가 spawnId·worldPosition·orientation 소유. composition이 동일 spawnId로 결합(`composeSalvageSpawnPlan`). 누락·중복·미지 spawnId·미지 dropTableId·미지 kind는 **거부**(무시 금지) ③ **production spawn 규칙** — 출항 월드 초기화 시 salvageSpawns 전체(MVP 3개) 생성, 같은 출항 중복 생성 금지(파괴분 재생성 금지 — 출항당 1회 가드), 새 출항 시 재생성(resetSortieSession 규칙과 일치), 보상=economy params만·좌표=placement만. 그래픽스 배치 미도착 시 임시 좌표 생성 금지 — 명시적 unwired 상태 유지 |
+| 변경 이유 | 승인된 공식 경제값을 production 런타임이 실제로 소비하게 하는 마지막 배선. provisional(Game.ts→meta/provisionalEconomy)의 production import 제거. 경제 수치와 월드 좌표의 소유 경계를 계약으로 고정 |
+| 관련 게이트 | A8(공식 수치 소비)·MVP 재화 루프 |
+| 영향을 받는 파일 | 계약 1파일 신규 + 리드 조립 2파일 + 문서(INTERFACES §2e) |
+| 하위 호환 여부 | 깨짐 없음 — 신규 계약 추가. 게임플레이 provisional 파일(`systems/economy/provisionalEconomy` 등)은 소유 역할이 주입 경로로 교체 후 삭제(아래 지침). `upgradeCalculator` 로더는 툴링 시뮬레이터 전용으로 존치(production composition은 economyParams 번들만) |
+| 개발 리드 결정 | 승인 — spawnId 결합 함수와 출항당 spawn 가드는 리드 소유(PveIntegration), 좌표 데이터는 월드·그래픽스 소유, 드롭 생성·회수 런타임은 게임플레이 소유 유지 |
+| 적용 커밋 | (본 브랜치 선행 계약 커밋) |
+
+**각 창 소비 지침:**
+- **게임플레이**: `EconomySystem`의 `PROVISIONAL_DROP_TABLES`·`PROVISIONAL_PICKUP_RADIUS_METERS`·`PROVISIONAL_DEFEAT_CREDIT_LOSS_RATIO` 직접 import를 **주입 경로로 교체**(생성자 또는 attach API — 조립부가 `official.economy`의 dropTables·pickupRadiusMeters·creditLossOnDestroyedRatio를 전달). 교체 후 `systems/economy/provisionalEconomy.ts` 삭제. `spawnSalvage(kind,x,y,z,rarePartId)` 시그니처는 그대로 — composition이 결합 plan으로 호출한다. 조준은 `loadAimingParams` 값(aimingMath 동일 함수)을 주입받는 구조 유지 — `provisionalAiming` 삭제 시점은 게임플레이 결정
+- **그래픽스**: `SalvagePlacementSource` 구현체 1개를 제공(레이아웃·씬 소유 — spawnId 3종 `salvage-1/2/3` 각 1개 좌표, 협곡 내 도달 가능 위치). credits·rareParts 값 정의 금지 — 시각 표현(chest/container/mineral 메시)은 `kind`로 분기. 조립부 연결점: `SortieSalvageSpawner.attachPlacementSource`
+- **툴링**: economyParams 번들이 production 유일 공급원임을 시뮬레이터 문서에 반영. `upgradeCalculator` 로더는 시뮬레이터 전용 — production 소비 금지 유지
+- **기획**: salvageSpawns 추가·변경은 economy.json에서만 — 좌표 필드를 economy.json에 넣지 않는다(소유 분리)
+
 ### INT-CORE-010 — 스프린트 A 마감 계약: BaseScreenPort v2·결과 계약·저장 책임 단일화·경제 미확정 처리
 
 | 필드 | 내용 |
@@ -109,6 +303,20 @@
 - **그래픽스**: production UI는 BaseScreenPort v2(또는 metaEconomyPorts 구조 단면)만 소비. 가격 null(nextCostPending) = 버튼 비활성 + '가격 데이터 대기'. `MetaCommandFailure`에 economyDataUnavailable 표기 추가분(조립부가 최소 반영)을 확인·수용할 것. DOM·스타일은 리드가 건드리지 않았음
 - **툴링**: SaveStore·SaveBridge 변경 불요. SAVE_SYSTEM.md 저장 시점 표가 §2d와 일치하는지 확인(sortieLaunch 이벤트 폐기 — Departure command 직접 저장으로 대체). A5-T 시나리오는 CountingSavePort 계측으로 호출 횟수 단언 가능
 - **기획**: A8 해소의 유일 입력 = 경제 수치표(114 null 필드 확정). null인 항목은 구매 자체가 economyDataUnavailable로 차단된다 — 임시값 선진행 없음(7차 결의 4 데이터→UI 순서)
+
+### INT-GAME-010 — 스프린트 A 마감: 기지 어댑터 배선 요청 + null 가격 거부 사유 결정
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 (창 2 — 스프린트 A production 배선 마감) |
+| 대상 시스템 | `src/core/Game.ts`(조립 배선), `src/contracts/meta.ts`(`PurchaseDenialReason` — 결정 요청만) |
+| 필요한 변경 | ① **조립 배선** — INT-CORE-009 스니펫의 게임플레이 측 진입점이 준비됐다: `gameplay.attachBaseEconomy({ upgradesParams, equipmentParams, wallet, restoredLevels })` → 공식 카탈로그를 읽어 `UpgradePurchaseSystem`(= `UpgradePurchaseJudgePort` + `UpgradeLevelsPort`)을 만들고 장비 카탈로그(가격·슬롯)를 적용한다. 이후 `new PurchaseTransaction(gameplay.purchaseJudge, metaLoop, gameplay.purchaseJudge, savePort)`·`new EquipmentTransaction(gameplay.equipmentJudge, savePort)`로 배선하면 된다 (단계 포트도 같은 인스턴스가 구현) ② **BaseScreenPort 재료** — `wallet`(리드), `upgradeLevels`=`gameplay.purchaseJudge.levelSnapshot`, `loadout`=`gameplay.equipment.loadout`, `canLaunchSortie`=`metaLoop.metaState === 'BASE' && gameplay.sortieReadiness(true).ready` ③ **EconomyHud 재료** — `gameplay.sortiePendingCredits`·`sortiePendingRareParts`(실제 회수·정산 파생, 임시 숫자 없음) ④ **null 가격 거부 사유 결정 요청** — 공식 params의 가격이 `null`(기획 수치표 미도착)인 항목은 구매 불가로 판정해야 하는데, 계약이 고정한 5종에 '가격 미확정'이 없다. 현재는 `maxLevelReached`('다음 단계가 정의되지 않음')로 거부하고 `nextCost=null`을 함께 노출해 UI가 '가격 미정'으로 표시하게 했다. 전용 사유(예: `priceUnavailable`) 신설 여부는 리드 결정 사항 — **게임플레이는 5종 밖 사유를 임의로 만들지 않았다** |
+| 변경 이유 | 스프린트 A A4·A5·A6·A7 미판정의 원인이 기지 UI ↔ 게임플레이 판정 사이의 배선 부재였음. 게임플레이 측 어댑터를 공식 params 기준으로 완성 |
+| 관련 게이트 | A4(재화 표시)·A5(구매 사유)·A6(장비)·A7(저장 유지)·A8(임시 수치) |
+| 영향을 받는 파일 | `src/systems/economy/{officialEconomyCatalog,UpgradePurchaseSystem,pendingOfficialData}.ts`, `src/systems/EquipmentSystem.ts`, `src/systems/GameplaySystems.ts`, 조립부 `src/core/Game.ts` |
+| 하위 호환 여부 | 계약 파일 무수정. `EquipmentSystem`의 자체 저장 포트(`attachSavePort`)·`economy/purchaseTypes.ts`·`economy/provisionalUpgradeCost.ts`는 **삭제**됐다 — 저장·롤백은 리드 트랜잭션 단일 소유(게임플레이 저장 직접 호출 0회). 기존 `equip/unequip` 단순 경로는 유지 |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
 
 ### INT-TOOL-008 — [LOOP][ECON] 스프린트 A 툴링 산출물 + 이관·문서 회귀 차단 요청
 
@@ -801,3 +1009,47 @@ scene.attachCargoShipSource(gameplay.cargoShipState); // CargoShipStateSource �
 | 하위 호환 여부 | 해당 없음 (최초 정의) |
 | 개발 리드 결정 | 승인 (부트스트랩 범위) |
 | 적용 커밋 | 부트스트랩 커밋 |
+
+### INT-INTEG-002 — [LOOP][ECON] A_STACK 통합 회차 처리 결과 (통합 관리자)
+
+| 필드 | 내용 |
+|---|---|
+| 처리자 | 통합 관리자 (세션 브랜치 `claude/deep-dive-d5-gray-box-integration-tree5i`) |
+| 대상 | 리드 `ffa945a` · 게임플레이 `4ea3542` · 그래픽스 `86f5ee5` · 툴링 `96af8bc` 병합 + 조립 배선 |
+| 관련 게이트 | A8(공식 수치·소비 배선) · A4/A5-ui/A6-ui(배선) · MVP 재화 루프 |
+
+**INT-GAME-011 요청 3건 — 전부 반영.**
+
+| 요청 | 처리 |
+|---|---|
+| ① `attachOfficialParams(official)` | **생성자 주입**으로 반영 (`new GameplaySystems(bus, params, subscribe, layout, official)`). 요청서가 동일 효과로 명시한 대안이며, 주입 시점 이전의 unwired 구간이 생기지 않는다. 이중 주입 없음 |
+| ② `restoreSavedLoadout` | 반영. `loaded.source === 'fresh' ? null : loaded.data.equippedGear` — 캐스팅 대신 공식 4종 필터를 써서 5번째 장비 유입을 조립부에서 차단 |
+| ③ salvage plan 전달 | 반영. 리드 `SalvageSpawnAdapter`를 `spawnSalvageFromPlan(entry)`로 개정 — 구 시그니처가 `spawnId`·확정 `credits`를 잃는다는 지적이 맞았다. 리드 스포너의 출항당 1회 가드는 유지(이중 방어), 검증 픽스처도 새 단면으로 갱신하고 **spawnId 유실 없음** 검사를 추가 |
+
+**INT-RENDER-010 — 병합 시 처리.**
+
+- `slotPositions` 읽기 전용 보완 뷰: **보존**. `BaseScreenPort` 정식 계약 승격은
+  이번 기술 통합의 조건이 아니며 후속 기술 부채로 기록(매니페스트 §A9).
+- `EconomySystem.pickupRadiusMeters`: 그래픽스가 추가한 `PROVISIONAL_PICKUP_RADIUS_METERS`
+  참조 getter가 게임플레이의 공식 params 기반 getter와 **중복 선언**되어
+  typecheck를 깨뜨렸다. 정본 우선순위표(EconomySystem params 소비 = 게임플레이)에
+  따라 공식 getter를 남기고, '렌더가 같은 값을 소비한다'는 그래픽스 의도는
+  정본 주석에 병합했다. 렌더 소비 경로는 변경 없음.
+- 자동 출항 제거·출항 진입점 1개(기지 화면)·QA 데모 production 분리: 그대로 채택.
+
+**계약 정규화 (소비자 0 확인 후):**
+
+- `src/tools/upgradeMath.ts` **삭제** — 정본은 `tools/economyMath.ts`.
+  툴링이 자기 브랜치에서 삭제하려다 `PveIntegration` 소비로 보류했던 항목이며,
+  이번 회차에 소비자 이관이 끝나 제거했다.
+- `MetaLoop`·`settlement`·`SalvageObject`의 '임시: provisionalEconomy' 주석을
+  공식 `params/economy.json` 출처 표기로 정정 (파일은 이미 삭제 상태였다).
+
+**남긴 결정 요청 (통합 창이 임의로 처리하지 않음):**
+
+1. **deferred upgrade consumer 3종** — `hullIntegrity`·`maxDepth`·`sonarRange`는
+   공식 가격이 붙어 **구매·결제·저장이 되지만 런타임 효과가 0**이다. UI에 이
+   상태를 표시하는 경로가 없다(`DEFERRED_UPGRADE_CONSUMERS` 소비 코드 0건).
+   **경고 표시 / 구매 차단** 중 무엇을 택할지는 기획·리드 결정 사항이며,
+   통합 창은 체력·소나 시스템을 만들지 않는다(스텁 포함 금지).
+2. `slotPositions`의 `BaseScreenPort` 계약 승격 여부.
