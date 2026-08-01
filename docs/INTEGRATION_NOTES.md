@@ -90,6 +90,25 @@
 
 ## 제안 목록
 
+### INT-CORE-012 — 스프린트 B 선행 계약: Faction 정본·식별 read model·중립 유효 피격·경비함 스폰
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (스프린트 B **선행개발** — 15차 결의 2 창1 범위. B 공식 발효 = A 통합 PR 병합이며 아직 미발효) |
+| 대상 시스템 | `src/contracts/faction.ts`·`identification.ts`·`guard.ts`(신규), `src/contracts/events.ts`(neutralShipHit 신설·guardShipRequested payload v2·transportAttacked), `src/core/PveIntegration.ts`(중복 방지 경계·GuardShipAdapter·스폰 포트 배선) |
+| 필요한 변경 | ① **Faction 정본** — `FactionId` 정의 정본은 `contracts/meta.ts` 유지(재정의 없음), 규칙표 `FACTION_RULES`(공격 허용·중립 사건 발생·드롭 테이블 참조·식별 분류·표시 라벨 id·AI 초기 태도) 신설. 경비 세력 공식 이름은 **`patrol`** — 같은 의미의 `guard` 추가 금지(코드의 'guard' 표기는 스폰 절차 이름일 뿐). `'object'`는 세력이 아니므로 `CombatTargetClass`(= FactionId \| 'object')로 승격만 하고 FactionId에 넣지 않는다 ② **식별 read model** — `ShipIdentificationView`(entityId·faction·identificationState·displayLabelId·distanceMeters·isTargetable·isAlive·worldPosition·tagDisplayable) + `ShipIdentificationSource`. 미식별 동안 라벨은 null이며 그래픽스는 모델·이름으로 세력을 추측하지 않는다. 색·문구는 계약에 없음 ③ **`neutralShipHit`** — 실제 유효 피해 적용 후 1회. 조준·발사·빗나감·같은 correlationId 재발행·파괴 후 재발행 금지. `torpedoHit`(연출용, 세력·피해량·공격자·상관 id 없음)과 중복 아님 ④ **`guardShipRequested` payload v2** — 기존 이벤트 **재사용**(신규 이벤트 없음), 구 `{x,z}` → `incidentPosition` 흡수 + requestId·sourceNeutralEntityId·attackerEntityId·spawnReason·requestedFaction·correlationId ⑤ **GuardSpawnPort** — 결과 5종(spawned/duplicateRequest/invalidRequest/noSpawnLocation/spawnFailed), 예외·내부 문자열 비노출 ⑥ **GuardShipAdapter** — 기존 `DestroyerAI` 계약에 주입만(세력 patrol·초기 표적=공격자·스폰 이유·표시 identity), 신규 AI 코어 0 ⑦ **보상 계약** — hostile=공식 적대 드롭 테이블 / neutral=`null`(크레딧 0·지갑 불변) / patrol=`null`(공식 params 없이 발명 금지). 평판·도덕성 도입 금지 ⑧ B6 호위 계약(고가치 수송선 archetype·배율 **참조 키**·EscortBinding·transportAttacked·EscortEngagementRequest) — 핵심 게이트 경로가 의존하지 않음 ⑨ B7 로깅 계약 8항목 + 결과 분류 5종(판정·집계는 툴링) |
+| 변경 이유 | B1~B5 흐름(적대·중립 배치 → 조준경 식별 → 중립 유효 피격 → 경비 요청 → 기존 구축함 AI 재사용 스폰 → 공격자 초기 표적)을 창 4개가 병렬로 구현할 수 있게 경계를 먼저 고정. 기존 `guardShipRequested`가 `{x,z}`뿐이라 스폰 판정에 필요한 출처·공격자·중복 방지 키가 없었다 |
+| 관련 게이트 | B1·B2·B3·B4·B5 (+ B6·B7 계약 선반영) |
+| 하위 호환 여부 | `guardShipRequested` 소비자는 **현재 0** — payload 확장으로 깨지는 코드 없음(발행측 1곳은 리드가 동시 갱신). `FactionId`·`torpedoHit`·A 스택 계약은 무변경 |
+| 개발 리드 결정 | 승인 — 단, **B 공식 발효 전 선행개발**이며 dev/main·통합 브랜치 병합은 A+B 최종 통합 브랜치 검증 이후. `DestroyerAI` 구현체가 A 스택에 없으므로 어댑터는 `DestroyerAIFactory` 포트로 위임하고 미연결 시 `spawnFailed`로 끝낸다 — 대체 AI를 만들지 않는다 |
+| 적용 커밋 | (본 브랜치 선행 계약 커밋) |
+
+**각 창 소비 지침 (스프린트 B):**
+- **게임플레이**: ① 선박에 `faction` 태그 부여 — 현재 화물선은 `'hostile'` 고정이며 중립 선박이 없어 B1이 성립하지 않는다(적대·중립 동시 배치 필요). ② 유효 피해 적용 지점에서 `neutralShipHit` 발행 — 어뢰 1발 = `attackCorrelationId` 1개, 첫 유효 피격에 `firstValidNeutralHit: true`. 기존 `consumeGuardSpawnRequests` 큐는 이행 완료 시 제거(그때까지 레거시 경로 병존, 중복은 composition 경계가 흡수) ③ `ShipIdentificationSource` 구현 — 거리·식별 성립 조건은 판정측 소유 ④ 중립 격침 시 드롭 0 유지(`rewardDropTableIdFor` 규칙과 동일) ⑤ `GuardSpawnLocationStrategy` 구현(월드 지식 필요) — 없으면 스폰은 `noSpawnLocation`
+- **그래픽스**: 조준경 태그는 `ShipIdentificationView`만 소비 — 엔티티 이름·모델 종류로 세력 추측 금지. `identificationState === 'unidentified'`면 라벨 없음(세력 노출 금지). 색·실루엣·항해등은 그래픽스 소유이며 계약에 문구·색을 요청하지 않는다. 경비함 등장 방향 연출은 `guardShipRequested.incidentPosition` 구독
+- **툴링**: `economy.json`에 세력별 드롭 테이블·고가치 배율 확장(validator 포함) — **patrol 보상은 수치표가 오기 전까지 null 유지**. B7 로깅은 `IdentificationLogSink` 구현·집계·판정 담당(오인율 계산식·최소 표본 5명·50회는 툴링 소유). B1~B5 자동 검증 스크립트 신설은 툴링 몫 — 리드는 존재하지 않는 script를 실행하지 않는다
+- **통합**: B 범위표는 **A 통합 PR 병합 시 발효**(15차 결의 1). 본 계약은 그 전 선행개발분이며, A+B 최종 통합 브랜치에서 전체 검증 전까지 B 완료·발효로 보고하지 않는다
+
 ### INT-GAME-011 — INT-CORE-011 적용 완료 + production 주입 3줄 배선 요청 (조립부)
 
 | 필드 | 내용 |

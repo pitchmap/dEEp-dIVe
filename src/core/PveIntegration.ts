@@ -46,6 +46,7 @@ import type {
   SalvagePlacementSource,
   SalvageSpawnPlanEntry,
 } from '../contracts/officialParams';
+import { PLAYER_ENTITY_ID } from '../contracts/guard';
 import type { SalvageKind } from '../systems/economy/SalvageObject';
 import type { WorldDrop } from '../systems/economy/CreditDropField';
 import type { EventBus, Unsubscribe } from './EventBus';
@@ -72,10 +73,15 @@ export interface SortieEconomyPort {
  *
  *  - 드롭 회수 → `lootDropped { source, credits, rareParts, x, z }`
  *    (메타 루프가 구독해 출항 재화로 집계한다)
- *  - 중립 공격 경비 요청 → `guardShipRequested { x, z }`
+ *  - 중립 공격 경비 요청 → `guardShipRequested`(payload v2 — INT-CORE-012)
  *    공식 이름은 `guardShipRequested`(리드 계약)이며, 게임플레이가 쓰던
- *    `guardSpawnRequested`는 채택하지 않는다. 유발 표적 id는 공식 payload에
- *    없어 전달되지 않는다 — 필요해지면 계약 보완 절차를 따른다.
+ *    `guardSpawnRequested`는 채택하지 않는다. 유발 표적 id는 v2에서
+ *    `sourceNeutralEntityId`로 정식 전달된다.
+ *
+ * 경비 요청 경로는 게임플레이가 `neutralShipHit`(유효 피격 이벤트)로
+ * 이행하기 전까지의 **레거시 큐 경로**다 — 상관 id를 만들 수 없으므로
+ * 표적 id 기반 `legacy:<targetId>` 키를 쓴다. 두 경로 모두 composition의
+ * 단일 중복 방지 경계를 지난다 (INT-CORE-012 §중복 방지 정본).
  */
 export class SortieEconomyBridge implements GameSystem {
   readonly id = 'sortieEconomyBridge';
@@ -107,7 +113,16 @@ export class SortieEconomyBridge implements GameSystem {
     // 않는다 (보스 AI와 함께 후속 단계 — docs/PVE_MVP_ACCEPTANCE.md).
     const requests = this.economy.consumeGuardSpawnRequests();
     for (const request of requests) {
-      this.bus?.emit('guardShipRequested', { x: request.x, z: request.z });
+      const correlationId = `legacy:${request.provokedByTargetId}`;
+      this.bus?.emit('guardShipRequested', {
+        requestId: correlationId,
+        sourceNeutralEntityId: request.provokedByTargetId,
+        attackerEntityId: PLAYER_ENTITY_ID,
+        incidentPosition: { x: request.x, z: request.z },
+        spawnReason: 'neutralAttack',
+        requestedFaction: 'patrol',
+        correlationId,
+      });
     }
   }
 
