@@ -17,6 +17,7 @@
     "check:scope": "node scripts/check-scope-guard.mjs",
     "verify:tooling": "node src/tools/__verification__/run.mjs",
     "verify:gameplay": "node src/systems/__verification__/run.mjs",
+    "verify:meta": "node src/meta/__verification__/run.mjs",
     "verify:hud": "node scripts/verify-hud.mjs"
   },
   "dependencies": {

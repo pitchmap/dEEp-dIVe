@@ -26,6 +26,23 @@
 | P15 | 비상 컷 R-P3: D+16 보스전 미완 시 패턴 6종 → **4종(돌진·투사체·약점·최종 가속)** 축소, 소환·회전 근접 컷. 발동 권한 리드 단독 | [확정 — 소회의] |
 | P16 | 디렉터리 `/src/meta`(메타 — save는 툴링)·`/src/systems/economy` 신설, `params/upgrades.json`·`params/economy.json` 기획 직접 커밋 확장, 커밋 태그 [LOOP][BOSS][ECON] 추가 | [확정 — 소회의] |
 
+## PvE MVP 1차 통합 — 계약 이름 확정 (통합 담당, 2026-08-01)
+
+> 동일 의미의 이벤트·타입을 여럿 두지 않는다. 아래 이름이 **유일한 공식
+> 이름**이며, 폐기된 대안은 구현 근거로 쓸 수 없다.
+> 근거·보완 사유: `docs/INTEGRATION_NOTES.md` '계약 이름 통합 결정'.
+
+| # | 영역 | 공식 이름 | 폐기된 대안 |
+|---|---|---|---|
+| I1 | 세력 태그 | `patrol` (경비) | `guard` |
+| I2 | 업그레이드 수식 | `meta/upgradeMath.effectiveValue` 단일 구현 | 툴링 자체 수식(위임 래퍼로 전환) |
+| I3 | 업그레이드 항목 id | `maxDepth` | `diveDepth` |
+| I4 | 경비 출현 요청 | `guardShipRequested` | `guardSpawnRequested` |
+| I5 | 재화 획득 통지 | `lootDropped` | `creditsChanged`·`creditsGained` |
+| I6 | 저장 트리거 | `saveRequested { cause }` | `rarePartAcquired` 별도 이벤트 |
+| I7 | 메타 상태 통지 | `metaStateChanged` | `baseStateChanged` |
+| I8 | 입력 규칙 | 우클릭=조준경 토글 / 조준 중 좌클릭=발사 / 비조준 좌클릭=카메라 / **Ctrl·E=상승** / **Shift=하강** | 우클릭 홀드 조준, Shift=상승 |
+
 ## 버티컬 슬라이스 트랙 유효 결정 (구현 기준 — PvE에서 이월·재편)
 
 | # | 결정 | 성격 |

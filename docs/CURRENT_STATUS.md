@@ -6,6 +6,49 @@
 
 ---
 
+## PvE MVP 1차 통합 결과 (통합 담당, 통합 커밋 `ee2022a` 이후)
+
+> 판정 근거: `docs/PVE_MVP_ACCEPTANCE.md` · 절차·충돌 기록:
+> `docs/PVE_MVP_INTEGRATION_MANIFEST.md` · 계약 이름 확정: `docs/DECISIONS.md` I1~I8.
+
+### 병합된 역할 브랜치
+
+| 역할 | 브랜치 | tip | 병합 순서 | 자동 검증(통합 후) |
+|---|---|---|---|---|
+| 개발 리드 | `claude/deep-dive-core-lead-uyg77p` | `187536e` | 1 | meta 19/19 |
+| 게임플레이 | `claude/submarine-controls-depth-3wi424` | `fa0dee6` | 2 | gameplay 100/100 |
+| 그래픽스 | `feat/render` | `66d6cbd` | 3 | (게임플레이 기준 100/100로 회귀 확인) |
+| 빌드·툴 | `claude/deep-dive-tooling-phase-0-cj6c49` | `5a3e5f9` | 4 | tooling 26/26 · HUD 33/33 |
+
+### 조립 배선 완료 (composition root + `src/core/PveIntegration.ts`)
+
+- **메타·경제**: 드롭 회수 → `lootDropped` → 메타 출항 재화 집계 →
+  귀환·파괴 정산. 중도 귀환은 `returnToBaseRequested` 경로. 크레딧 손실은
+  `destroyed`에만, 희귀 부품은 즉시 확정·보존
+- **저장**: `saveRequested`(리드) → `defaultSaveStore`(툴링) 어댑터.
+  부팅 시 지갑·업그레이드 복원(`MetaLoop.restoreWallet`). 주기 저장 없음.
+  저장 코드는 메타 상태 머신을 조작하지 않는다
+- **업그레이드**: 저장 단계 → 공식 `UpgradeModifiers` → 유효 파라미터 파생
+  복사본 주입(`params` 원본 불변) + 장비 배율 주입. 계산식은 리드 단일 구현
+- **렌더**: `attachTorpedoSource`(실제 어뢰), `setSubmarineVisualTiers`(계산된
+  단계만), `metaStateChanged` → 기지 화면. 조준경은 `aimModeChanged` 구독
+- **세션**: 재출항 시 `resetSortieSession` — 위치·잔탄·조준·화물선·드롭 초기화,
+  확정 재화·업그레이드는 유지
+- **오디오**: `WebAudioSystem`+`AudioCueRouter`를 GameSystem 어댑터로 등록
+
+### 미완료 (완료로 표시하지 않는다)
+
+| 항목 | 상태 |
+|---|---|
+| 보스 AI·포즈 연결 | **의도적 미구현** (지시). 분절 렌더는 `?bossSpike=1` QA 스파이크로 유지, 약점 판정(게임플레이)은 구현·검증됨 |
+| 경비함 스폰 | `guardShipRequested` 발행 경로만 완성 — **소비자(구축함 AI) 없음**. 새 경비함 AI 클래스는 복제하지 않는다 |
+| 중립 함선 배치 | 해역에 중립 세력 함선이 배치돼 있지 않아 경비 요청을 실제로 유발하지 못함 |
+| 업그레이드 구매 UI·장비 장착 UI | 미구현 — 단계는 저장 데이터 주입으로만 반영 |
+| 탐지·폭뢰·내구도 | 미착수 (버티컬 슬라이스 단계 2 잔여) |
+| R7 임시값 4종 | `provisionalEconomy`(메타·경제)·`provisionalEquipment`·`provisionalCombat`·`provisionalCargo` — `params/economy.json` 이관 대기 |
+
+---
+
 ## 역할별 작업표 — 다음 스프린트 (작업 관리자 갱신, 근거: docs/NEXT_SPRINT.md)
 
 > S번호는 `docs/NEXT_SPRINT.md` §1의 작업 ID. 각 역할은 작업 착수·완료 시

@@ -54,6 +54,40 @@
 결정만 잔여 — 백로그 이월 (R7 임시값 상태 유지, D+10 게이트 데이터에
 '임시 초기 테스트값' 표기). HUD·화물선·EventBus 배선은 D+10 통합에서 채택·적용 완료.
 
+## 계약 이름 통합 결정 (PvE MVP 1차 통합 — 통합 담당)
+
+> 우선순위: ① 개발 리드가 확정한 공식 계약 ② 기존 저장소 계약
+> ③ 게임플레이·툴링이 요청한 추가 payload.
+> **동일 의미의 이벤트·타입을 여럿 남기지 않는다.** 기능 삭제로 충돌을
+> 해결하지 않으며, 계약에 정보가 부족하면 이름은 유지하고 payload만 보완한다.
+> 상세 표: `docs/PVE_MVP_INTEGRATION_MANIFEST.md` §5.
+
+| # | 충돌한 이름 | 채택(공식) | 폐기·전환 | 근거 |
+|---|---|---|---|---|
+| 1 | `guard` / `patrol` (세력 태그) | **`patrol`** (`contracts/meta.ts`) | 게임플레이 로컬 `FactionId` 정의 삭제 → 공식 계약 재수출 | 우선순위 ① — 판정 로직·기능 변경 없음 |
+| 2 | `applyUpgradeBonus` / `effectiveValue` (동일 수식 이중 구현) | **`meta/upgradeMath.effectiveValue`** | 툴링 함수는 위임 래퍼로 잔존(호출부 이름 유지) | "계산식을 중복 구현하지 않는다" — 툴링의 카탈로그 검증·단계 합산은 보존 |
+| 3 | `diveDepth` / `maxDepth` (업그레이드 항목 id) | **`maxDepth`** | `params/upgrades.json` id 교정 | 우선순위 ① — `UpgradeStatId` 유니언과 일치시켜 기계 강제 가능 |
+| 4 | `guardSpawnRequested` / `guardShipRequested` | **`guardShipRequested`** | 게임플레이 큐 API(`consumeGuardSpawnRequests`)는 유지, 조립부 브리지가 공식 이름으로 발행 | 우선순위 ① — 기능 삭제 없이 이름만 단일화. `provokedByTargetId`는 공식 payload에 없어 미전달(필요 시 계약 보완 절차) |
+| 5 | `creditsChanged` / `creditsGained` / `lootDropped` | **`lootDropped`** | 신규 이벤트 미신설 | 우선순위 ① — 메타 루프가 이미 구독 중 |
+| 6 | `rarePartAcquired` / `saveRequested(cause='rarePart')` | **`saveRequested`** | 신규 이벤트 미신설 | 우선순위 ① — 저장 이벤트 단일화(cause 구분) 결정 유지 |
+| 7 | `baseStateChanged` / `metaStateChanged` | **`metaStateChanged`** | 신규 이벤트 미신설 | 우선순위 ① — 기지 화면·HUD 버튼 표시 모두 이 이벤트 소비 |
+
+### 계약 최소 보완 (기능 삭제 없이 추가만 — 보완 사유)
+
+| 보완 | 사유 |
+|---|---|
+| `MetaLoop.restoreWallet(CurrencyBundle)` | 지갑에 증가 경로만 있어 저장 데이터를 되돌릴 수 없었다. 저장 코드가 상태 머신을 직접 조작하지 않도록 **명시적 복원 API 하나**로 제한하고, BASE 상태에서만 허용한다 |
+| `WorldDrop.source: LootSource` + `CreditDropField.onCollected()` | 공식 `lootDropped` payload의 `source`를 회수 시점에 채울 수 없었다(회수 후 출처 소실). 경제 시스템은 이벤트를 직접 발행하지 않고 조립부 브리지가 발행한다 |
+| `GameplaySystems.resetSortieSession(params)` + 하위 리셋 4종 | 재출항 시 전투 세션 초기화 API가 없어 이전 출항의 위치·잔탄·드롭이 이월됐다. 확정 크레딧·희귀 부품·업그레이드는 유지한다 |
+| `ControlsHudOptions.launchSortie?` + 귀환/출항 버튼 | `returnToBaseRequested`는 **구독자만 있고 발행자가 없었다**. HUD가 요청만 발행하고 정산·전이는 상위 메타 루프가 소유한다 |
+| `CanyonScene.setMetaBaseActive()` | 기지 화면이 `?base=1` QA 플래그로만 도달 가능했다. 렌더가 메타 상태를 판정하지 않도록 조립부가 `metaStateChanged`로 호출한다 |
+
+### 미해소로 남긴 것 (후속)
+
+- `guardShipRequested` **소비자 없음** — 구축함/경비함 AI 미구현. 이벤트는 발행되지만 스폰은 일어나지 않는다. 새 경비함 AI 클래스를 복제하지 않는다는 원칙에 따라 기존 구축함 AI 도입 시 연결한다
+- 게임플레이 로컬 `UpgradeModifiers{torpedoSpeedBonus,torpedoDamageBonus}`는 공식 `UpgradeModifiers`(Partial\<Record\<UpgradeStatId,number\>\>)와 형태가 다르다. 조립부가 변환 주입하며, 어뢰 속도에 대응하는 공식 스탯이 7항목 상한 안에 없어 해당 보정은 0이다(장비 기능은 유지)
+- R7 임시값 4종 잔존: `meta/provisionalEconomy`(손실률), `systems/economy/provisionalEconomy`(드롭·픽업), `provisionalEquipment`, `provisionalCombat`/`provisionalCargo` — 기획 경제 수치표 도착 시 `params/economy.json` 이관
+
 ## 제안 목록
 
 ### INT-TOOL-007 — [LOOP][ECON] PvE 툴링 배선 요청: 저장 시점·경제/기지 이벤트 계약·병행 키 E·보스 오디오
