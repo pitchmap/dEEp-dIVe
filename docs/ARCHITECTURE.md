@@ -371,8 +371,9 @@ NeutralIncidentBoundary ── GuardIncidentLedger (중복 방지 정본 1곳)
 GuardSpawnBridge → GuardSpawnCoordinator (GuardSpawnPort)
       │   ├─ 위치: GuardSpawnLocationStrategy (게임플레이·월드 소유, 미연결 =
       │   │        noSpawnLocation — 임의 좌표 금지)
-      │   └─ AI : GuardShipAdapter → DestroyerAIFactory → **기존 DestroyerAI**
-      ▼                              (미연결 = spawnFailed — 대체 AI 금지)
+      │   └─ AI : GuardShipAdapter → production DestroyerAIFactory →
+      ▼           **범용 DestroyerAIController** → gameplay motion adapter
+                  (이동 포트 미연결 = spawnFailed — 대체 AI·가짜 이동 금지)
 world entity registration (attachSpawnListener 훅)
 
 식별: 게임플레이 ShipIdentificationSource → (조립부 주입) → 렌더 조준경 태그
@@ -384,8 +385,10 @@ world entity registration (attachSpawnListener 훅)
 
 1. `guardSpawn.attachLocationStrategy(gameplay.guardSpawnLocations)` — 게임플레이
    위치 전략 도착 시. 없으면 스폰은 `noSpawnLocation`으로 끝난다.
-2. `guardAdapter.attachFactory(destroyerAiFactory)` — 구축함 AI 구현(리드,
-   C 트랙) 도착 시. 없으면 `spawnFailed`.
+2. `surfaceMotionPorts` 교체 — **남은 유일한 연결**. `Game.composeSystems`의
+   `SurfaceShipMotionPortFactory`(현재 `create: () => null`)를 게임플레이
+   motion adapter로 바꾸면 스폰이 실제 개체를 만든다. 범용 AI 팩토리는 이미
+   `attachFactory`로 연결돼 있다.
 3. `guardSpawn.attachSpawnListener((handle) => …)` — 스폰된 개체의 표적
    등록·렌더 표시 배선.
 4. `scene.attachIdentificationSource(gameplay.identifications)` — 그래픽스
@@ -395,9 +398,27 @@ world entity registration (attachSpawnListener 훅)
 중복 방지 저장소는 `GuardIncidentLedger` **하나**이며, 게임플레이 시스템
 내부에 같은 목적의 표를 만들지 않는다 (원장은 출항 경계에서 리셋).
 
-**신규 AI 금지 구조:** 어댑터는 주입과 수명주기 전달만 한다. 경비 전용
-추적 상태 머신·공격 루틴·탐지·폭뢰는 만들지 않는다(탐지·폭뢰·내구도·침수는
-스프린트 C 범위). 정적 검사가 경비 관련 파일이 어댑터·계약 2개뿐임을 확인한다.
+**B5 규칙 개정 (INT-CORE-013 — 15차 diff-only 변경):** 조사 결과 production
+`DestroyerAI` 구현체가 **0개**(계약·어댑터·검증 더블만)여서 '기존 구현체
+재사용 / 신규 AI 0'은 성립 불가한 전제였다. 개정 후 구조:
+
+- **범용 `DestroyerAIController` 1개**(`src/core/`) — 이 저장소의 유일한
+  production `DestroyerAI` 구현체. 경비함(patrol)과 일반 적대 구축함이
+  **같은 구현체**를 소비한다(세력·초기 표적만 다름).
+- 어댑터는 여전히 주입과 수명주기 전달만 한다. 경비 전용 `GuardAI`·
+  `GuardBehavior`·`GuardStateMachine`은 **계속 금지**.
+- AI 책임: 초기 표적·마지막 확인 위치 보관, pose 읽기, 목표 방향 이동 명령,
+  수면 고도 유지, 월드 경계 이탈 방지, 표적 무효 시 안전 동작.
+  **미포함**: 탐지·시야/소나 게이지·폭뢰·무기 발사·선체 체력·침수(스프린트 C).
+- **이동은 게임플레이 소유** — `SurfaceShipMotionPort`(getPosition·getForward·
+  turnToward·moveForward·maintainSurfaceHeight·isWithinWorldBounds·
+  isTargetAlive·getTargetPosition). 리드는 계약만 제공하고 선박 transform을
+  직접 조작하지 않는다. 선회·속력·해수면·경계 **수치는 전부 구현측 소유**.
+- 정적 검사(개정): 범용 구현 **정확히 1개**(`implements DestroyerAI` 내용
+  기준 — 파일 이름으로 회피 불가) / Guard 전용 AI 0개 / 어댑터의 범용 factory
+  사용 / `CargoShipSystem` 위장 금지 / 검증 더블의 production 사용 금지 /
+  범용 AI의 C 기능 참조 0건. 렌더·UI 오버레이는 AI가 아니므로 허용하되
+  같은 내용 검사를 적용한다.
 
 ## 게임 상태 전환과 장면 전환의 분리
 
