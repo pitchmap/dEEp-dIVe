@@ -371,3 +371,98 @@ B 선행개발          = 가능 (선행개발 상태로만)
 5. **조준 기하 이중 구현** — `core/conventions` vs `systems/aimGeometry`.
 6. **`MetaLoop` 예외 전파** — `GameLoop`에 try/catch 없음.
 7. **툴링 공식 교차 승인** — 리드 최신 커밋 대상. dev PR 게이트는 여전히 차단.
+
+---
+
+# A+B 최종 기술 통합 (AB 회차)
+
+> 목적: 스프린트 B 역할 브랜치를 A 스택 통합 브랜치에 병합하고 B1~B5
+> production composition을 완성한 뒤, A+B 통합 빌드에서 자동 검증과 실제
+> 브라우저 검증을 수행한다. **dev/main 병합·직접 푸시 없음.**
+
+## AB1. 기준과 실제 원격 tip
+
+| 항목 | 값 |
+|---|---|
+| 통합 브랜치 | `claude/deep-dive-d5-gray-box-integration-tree5i` |
+| 작업 전 HEAD (A 스택 tip) | `8f40117` |
+| `A_STACK_BASE_COMMIT` | `85ec32b` |
+| Node / npm | v22.22.2 / 10.9.7 |
+
+| 역할 | 브랜치 | 보고 tip | 실제 원격 tip | 일치 |
+|---|---|---|---|---|
+| 개발 리드 | `claude/deep-dive-core-lead-uyg77p` | `5b443d5` | `5b443d5` | ✅ |
+| 게임플레이 | `claude/submarine-controls-depth-3wi424` | `a48dce5` | `a48dce5` | ✅ |
+| 그래픽스 | `feat/render` | `cc09fb9` | `cc09fb9` | ✅ |
+| 빌드·툴 | `claude/deep-dive-tooling-phase-0-cj6c49` | `2757a48` | `2757a48` | ✅ |
+
+**필수 커밋 ancestry 6건 전부 확인:** `5b443d5` · `b8ade9e`(B5 계약 개정) ·
+`c4026f1`(production DestroyerAI) · `a48dce5` · `cc09fb9` · `2757a48`.
+추측 해시 대체 병합 없음.
+
+## AB2. 병합 순서와 커밋
+
+| 순서 | 역할 | 병합 커밋 | 직후 검사 |
+|---|---|---|---|
+| 1 | 개발 리드 | `c738316` | typecheck ✅ / build ✅ (충돌 0) |
+| 2 | 게임플레이 | `480a99f` | typecheck ✅ / build ✅ (충돌 0) |
+| — | 조립 배선 | `529f5ee` | guard 위치 전략 · 이동 포트 팩토리 |
+| 3 | 그래픽스 | `4ca4f03` | 충돌 4건 해소 후 typecheck ✅ / build ✅ |
+| — | 조립 배선 | `76ec095` | 다중 선박 렌더 · 식별 · 호위 |
+| 4 | 빌드·툴 | `63a2549` | `npm ci` · 전체 스위트 |
+| — | 검증 정규화 | `93abe3e` | `verify:sprint-b` B4-port 실관측화 |
+
+전부 `--no-ff` tip merge. cherry-pick·squash·rebase·force push 없음.
+
+## AB3. 충돌과 해소
+
+| 파일 | 발생 | 해소 |
+|---|---|---|
+| `docs/INTEGRATION_NOTES.md` | 그래픽스 | INT-GAME-013(HEAD)·INT-RENDER-011(theirs) **양쪽 전문 보존** |
+| `src/core/Game.ts` | 그래픽스 | 상보적 배선 — 내 위치 전략·모션 팩토리 연결과 그래픽스의 `attachSpawnListener`(실제 spawnPosition만 마커로) **둘 다 채택** |
+| `src/core/GuardShipAdapter.ts` | 그래픽스 | 주석 차이만. **리드 정본(HEAD)** 채택 (§6 정본 우선순위) |
+| `src/meta/__verification__/run.mjs` | 그래픽스 | 리드의 B5 개정 검사(`implements DestroyerAI` **내용 기반** 판정 + 렌더 오버레이도 같은 AI 어휘 검사 대상에 포함)가 그래픽스의 구 allowlist 방식을 대체·포괄하므로 **리드 정본 채택**. 파일명 회피가 불가능한 쪽이 더 강한 가드레일이다 |
+
+## AB4. production composition 배선 (§7)
+
+| # | 항목 | 배선 |
+|---|---|---|
+| 7-1 | `SurfaceShipMotionPortFactory` | `{ create: () => null }` 더미 → **`gameplay.surfaceShipMotionPortFactory`**(`PatrolShipFleet`). 스폰마다 독립 `PatrolShipEntity`+포트 생성, AI는 transform 미소유(pose 정본 = 게임플레이 entity 1개), 테스트 더블 0, `create()`가 null 반환하지 않음 |
+| 7-2 | `GuardSpawnLocationStrategy` | `guardSpawn.attachLocationStrategy(gameplay.guardSpawnLocation)` **정확히 1회**. 원점·플레이어 위치 fallback 없음 — 자리를 못 찾으면 `noSpawnLocation` |
+| 7-3 | production `DestroyerAIFactory` | `createProductionDestroyerAIFactory(surfaceMotionPorts)`. production `DestroyerAIController` **1개**, Guard 전용 AI **0개**, 검증 더블 production import **0건** |
+| 7-4 | 다중 선박 렌더 source | 렌더에 소비 API가 없어 `CanyonScene.attachShipWorldSource` 추가 — 기존 `CargoShipVisual`+`factionVisuals` 3종을 entityId별로 관리하는 **얇은 바인딩**이며 새 비주얼을 설계하지 않았다. 주입 시 단일 화물선 경로를 **대체**해 적대 화물선 중복 렌더를 막는다. `Game`에서 `gameplay.shipWorldSource` 1회 연결 |
+| 7-5 | `ShipIdentificationSource` | `scene.attachIdentificationSource(gameplay.shipIdentification)` 1회. **`IdentificationExposureSink`는 미주입** — 사유는 `SPRINT_B_ACCEPTANCE.md` B7 구역 |
+| 7-6 | Guard spawn listener | 그래픽스 배선 유지 — `GuardShipHandle`의 `requestId`·실제 `spawnPosition`만 마커에 넘긴다. 요청의 `incidentPosition`을 스폰 위치로 위장하지 않으며, `spawnFailed`·`noSpawnLocation`이면 목록이 비어 마커가 뜨지 않는다 |
+| 7-7 | 출항 경계 reset | `GuardIncidentLedger`·`PatrolShipFleet`·`ShipIdentificationSystem`·salvage 전부 새 출항에서 초기화됨을 브라우저 실측으로 확인 |
+
+## AB5. 자동 검증 (A+B 통합 빌드)
+
+`npm ci` ✅ · typecheck ✅ · build ✅ · size ✅ **4.8%** · scope ✅ ·
+gameplay **213/213** · meta **88/88** · tooling **26/26** · hud **34/34** ·
+sprint-a 자동 전 항목 ✅ · sprint-b **자동 23/23 · 차단 0 · 보류 1 · 대기 4**.
+
+## AB6. 브라우저 실측
+
+B1~B5 전 항목 production 경로 실측 통과 + A 회귀 통과.
+상세 수치·증거는 `docs/SPRINT_B_ACCEPTANCE.md` 'A+B 최종 기술 통합 판정'.
+
+## AB7. 판정
+
+```
+B_CORE_COMPLETE  = true
+B_FINAL_COMPLETE = false   (B6 실기동 · B7 실측)
+C 기술 선행개발   = 가능
+C 공식 발효       = 불가 (A 통합 PR 미병합)
+B 공식 발효       = 불가 (발효 조건 = A 통합 PR 병합)
+```
+
+## AB8. 이번 회차 이후 남은 항목
+
+1. **B6 실제 호위 기동** — 공식 `rewardMultiplier`·`escortMaximumDistanceMeters`
+   승인 대기. 툴링 제안값을 params에 확정 입력하지 않았다.
+2. **B7 실측 세션** — 테스터 0명 / 유효 기회 0회. 도구는 완비.
+3. **`IdentificationExposureSink` 활성화 정책** — 측정 세션 운영 방식 확정 후.
+4. **`slotPositions` 계약 승격** (A 회차 이월).
+5. **비경제 provisional 4종** — `provisionalAiming`·`Combat`·`Movement`·`World`.
+6. **`MetaLoop` 예외 전파** — `GameLoop`에 try/catch 없음.
+7. **툴링 공식 교차 승인** — 리드 최신 커밋 대상 (상설 규칙 3).

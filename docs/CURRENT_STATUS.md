@@ -6,7 +6,72 @@
 
 ---
 
-## 스프린트 A 스택 통합 (A_STACK_BASE) — 통합 관리자, 최신
+## A+B 최종 기술 통합 — 통합 관리자, 최신
+
+> 상세: `docs/SPRINT_A_INTEGRATION_MANIFEST.md` §AB1~AB8 ·
+> `docs/SPRINT_B_ACCEPTANCE.md` 'A+B 최종 기술 통합 판정'.
+> 브랜치: `claude/deep-dive-d5-gray-box-integration-tree5i` (dev 미병합).
+
+### 병합된 역할 tip (원격 실측 = 보고값 일치)
+
+| 역할 | tip | 병합 커밋 | 충돌 |
+|---|---|---|---|
+| 개발 리드 | `5b443d5` | `c738316` | 없음 |
+| 게임플레이 | `a48dce5` | `480a99f` | 없음 |
+| 그래픽스 | `cc09fb9` | `4ca4f03` | 4건 |
+| 빌드·툴 | `2757a48` | `63a2549` | 없음 |
+
+필수 커밋 ancestry 6건(`5b443d5`·`b8ade9e`·`c4026f1`·`a48dce5`·`cc09fb9`·`2757a48`) 확인.
+
+### production composition 배선
+
+| 항목 | 상태 |
+|---|---|
+| `SurfaceShipMotionPortFactory` | ✅ `gameplay.surfaceShipMotionPortFactory` (null 더미 제거) |
+| `GuardSpawnLocationStrategy` | ✅ `gameplay.guardSpawnLocation` 1회 |
+| production `DestroyerAIFactory` | ✅ `DestroyerAIController` 1개 · Guard 전용 AI 0 |
+| 다중 선박 렌더 source | ✅ `gameplay.shipWorldSource` (단일 화물선 경로 대체 — 중복 렌더 없음) |
+| `ShipIdentificationSource` | ✅ 연결 / `IdentificationExposureSink` **미주입**(사유 기록) |
+| Guard spawn listener | ✅ 실제 `spawnPosition`만 마커에 전달 |
+| 출항 경계 reset | ✅ 원장·함대·식별·salvage 전부 초기화 실측 |
+
+### 자동 검증
+
+typecheck ✅ · build ✅ · size ✅ 4.8% · scope ✅ ·
+**gameplay 213/213 · meta 88/88 · tooling 26/26 · hud 34/34 ·
+sprint-a 자동 전 항목 · sprint-b 자동 23/23(차단 0)**
+
+### B1~B5 production 브라우저 실측 — 전 항목 통과
+
+| ID | 핵심 실측 |
+|---|---|
+| B1 | hostile 1 + neutral 1 동시 배치 · 렌더 변형이 실제 faction과 일치 · 사건 전 patrol 0 |
+| B2 | 조준 전 `unidentified`(세력 미노출) → 조준 후 `hostile`/`neutral`/`patrol` · 화면 태그 기호+문구+거리 |
+| B3 | hostile 격침 **+120** / neutral 격침 **0**(지갑·출항 재화·드롭 전부 불변) / patrol pending |
+| B4 | `neutralShipHit` 1건 · `attackCorrelationId="torpedo:1"` · `guardShipRequested` 1건(동일 id) · 중복 요청 `duplicateRequest` |
+| B5 | 경비함 1척 `patrol` 생성 · 초기 표적 `PLAYER_ENTITY_ID` · 수면 y=12 유지 · **거리 30.0 → 5.8 m 접근** · 방향 마커 실제 위치 |
+
+### A 회귀
+
+BASE 시작 · EconomyHud · 업그레이드 7/장비 4 · 공식 가격 · 출항 버튼 1개 ·
+구매(저장 1회) · 장비 4동작 · 저장 실패 rollback · 출항 저장 실패 시 기지 유지 ·
+새로고침 복원 · 명시적 빈 loadout 유지 · salvage 3종 · hostile 120 — 전부 통과.
+
+### 판정
+
+```
+B_CORE_COMPLETE  = true
+B_FINAL_COMPLETE = false   (B6 실기동 미완 · B7 실측 pending)
+C 기술 선행개발   = 가능
+C 공식 발효       = 불가 (A 통합 PR 미병합)
+B 공식 발효       = 불가 (발효 조건 = A 통합 PR 병합)
+```
+
+B6·B7 pending은 B1~B5 실패가 아니다 (15차 결의 1·3 병렬 최종 조건).
+
+---
+
+## 스프린트 A 스택 통합 (A_STACK_BASE) — 이전 회차
 
 > 상세: `docs/SPRINT_A_INTEGRATION_MANIFEST.md` §A1~A12 ·
 > `docs/SPRINT_A_ACCEPTANCE.md` 'A_STACK 회차'.

@@ -380,3 +380,60 @@
 | dev PR 생성 | ❌ **하지 않음** (이번 회차 범위 밖) |
 | dev/main 병합 | ❌ **하지 않음** |
 | B 선행개발 | ✅ **가능** — 선행개발 상태로만. A+B 최종 통합 검증 전까지 B 발효 아님 |
+
+---
+
+## A+B 통합 회차 — A 스프린트 회귀 결과
+
+> B 병합 후 A 기능이 깨지지 않았는지 **동일 production 빌드**에서 재확인한 결과다.
+> 실행 URL `http://localhost:5173/`, 쿼리 플래그 없음. 상세 판정·B 항목은
+> `docs/SPRINT_B_ACCEPTANCE.md` 'A+B 최종 기술 통합 판정'.
+
+### 자동 회귀
+
+| 검사 | A_STACK 회차 | A+B 회차 |
+|---|---|---|
+| typecheck / build | ✅ / ✅ | ✅ / ✅ |
+| check:size | ✅ 4.6% | ✅ 4.8% |
+| check:scope | ✅ | ✅ |
+| verify:gameplay | 167/167 | ✅ **213/213** |
+| verify:meta | 59/59 | ✅ **88/88** |
+| verify:tooling | 26/26 | ✅ **26/26** |
+| verify:hud | 34/34 | ✅ **34/34** |
+| verify:sprint-a | 자동 전 항목 | ✅ 자동 전 항목 |
+
+### 조준 회귀 (production 브라우저)
+
+| 항목 | 결과 |
+|---|---|
+| 수면 근처 / 순항 / 심해 조준 진입 | 3구간 실측 — 아래 표 |
+| 자동 부상 없음 | 조준 유지 중 Y 변화 `0.0e+0` |
+| 선수 카메라 = `aimCameraSocket` | 오차 `0.0e+0 m` |
+| 자기 선체 미표시 | 조준 중 `SELF_HULL_LAYER` 비활성, 해제 시 복원 |
+| 발사 후 조준 유지 | ✅ |
+
+### 경제·기지 UI 회귀
+
+| 항목 | 결과 |
+|---|---|
+| BASE에서 게임 시작 (자동 출항 없음) | ✅ `metaState='BASE'` |
+| EconomyHud 표시 | ✅ `"확정 자산 — 크레딧 0 · 희귀 부품 0"` |
+| Upgrade UI 7종 / Equipment UI 4종 | ✅ / ✅ |
+| SortiePrepScreen · 출항 버튼 1개 | ✅ |
+| 공식 가격 표시 | ✅ 1단계 `{credits:100, rareParts:0}` |
+| 구매 | ✅ `success` · 2000→1900 · 단계 1 · **저장 정확히 1회** |
+| 장비 장착·교체·해제·재장착 | ✅ `fastTorpedo → heavyTorpedo → null → fastTorpedo` |
+| 저장 실패 rollback | ✅ `saveFailedRolledBack` — 크레딧·단계 무변경 |
+| 출항 저장 실패 시 기지 유지 | ✅ `saveFailed` · `metaState='BASE'` |
+| 새로고침 복원 | ✅ 단계·슬롯·크레딧 유지 |
+| 명시적 빈 loadout 유지 | ✅ `[null,null]` → 새로고침 후 `[null,null]` |
+
+### 출항 경제 회귀
+
+| 항목 | 결과 |
+|---|---|
+| salvage 3종 배치 | ✅ `salvage-1/2/3` — 중복 생성 없음 |
+| hostile cargo 보상 | ✅ **120** (`lootDropped {credits:120, rareParts:0}`) |
+| 새 출항 재생성 | ✅ 3개 다시 배치, 원장·함대 초기화 |
+
+**A 회귀 결론: 이상 없음.** B 병합으로 깨진 A 항목 0건.

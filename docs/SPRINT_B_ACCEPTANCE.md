@@ -112,3 +112,186 @@ B5의 조건은 '경비함 = 기존 구축함 AI 재사용'이다. 재사용할 
 
 C params(탐지·폭뢰·내구도·침수) / 보스 경제 / 평판·도덕성 페널티 /
 추적 상태 머신 확장. C9 `[COMBAT]` 파이프라인은 C 발효 후 항목이다.
+
+---
+
+## A+B 최종 기술 통합 판정 (통합 관리자 창 — 실제 병합·브라우저 실측 후)
+
+> 판정은 통합 브랜치 실제 빌드에서만 한다 (상설 규칙 4).
+> 절차·충돌·배선은 `docs/SPRINT_A_INTEGRATION_MANIFEST.md` §AB.
+> **B는 여전히 공식 발효 전이다** — 발효 조건은 A 통합 PR 병합(15차 결의 1)이며
+> 이 회차는 그 PR을 만들 수 있는지 판정하는 단계다.
+
+### 병합된 역할 tip (원격 실측 = 보고값 일치)
+
+| 역할 | tip | 병합 커밋 |
+|---|---|---|
+| 개발 리드 | `5b443d5` (B5 계약 `b8ade9e` · production DestroyerAI `c4026f1` 포함) | `c738316` |
+| 게임플레이 | `a48dce5` | `480a99f` |
+| 그래픽스 | `cc09fb9` | `4ca4f03` |
+| 빌드·툴 | `2757a48` | `63a2549` |
+
+### 자동 검증 (A+B 통합 빌드)
+
+| 검사 | 결과 |
+|---|---|
+| `npm ci` / `typecheck` / `build` | ✅ / ✅ / ✅ |
+| `check:size` / `check:scope` | ✅ 4.8% / ✅ |
+| `verify:gameplay` | ✅ **213/213** |
+| `verify:meta` | ✅ **88/88** |
+| `verify:tooling` | ✅ **26/26** |
+| `verify:hud` | ✅ **34/34** |
+| `verify:sprint-a` | ✅ 자동 전 항목 |
+| `verify:sprint-b` | ✅ **자동 23/23** · 보류 1 · 차단 **0** · 대기 4 |
+
+`B4-port`는 관측 없이 `blocked`로 하드코딩돼 있던 항목이다. 조립 배선이
+실제로 생겼으므로 **정적 관측 항목으로 정규화**했다 — 관측 결과가 없으면
+여전히 `blocked`이며, 실제 개체 생성·이동은 아래 브라우저 실측이 판정한다.
+
+### B1~B5 — production 브라우저 실측
+
+> 실행 URL `http://localhost:5173/` · 쿼리 플래그 없음 · `?bdemo` fixture 미장착
+> (`scene.sprintBFixture === null` 확인). 조작은 production 입력만:
+> 캔버스 클릭(Pointer Lock) → WASD 항법 → Ctrl/Shift 심도 → 우클릭 조준 →
+> 좌클릭 발사. 관측은 읽기 전용 디버그 핸들(실제 인스턴스).
+
+**B1 적대·중립 동시 배치 — ✅ 통과**
+
+| 항목 | 실측 |
+|---|---|
+| 같은 출항의 선박 | `id=1 hostile (x −29.4, y 12, z −40)` · `id=2 neutral (x −29.4, y 12, z −20)` |
+| 사건 전 patrol | **0척** |
+| 세력 값 | 공식 `FactionId` (`hostile`/`neutral`) |
+| 렌더 변형 = 실제 faction | `id=1 → hostile 변형(삼각 마크·포탑 2)` · `id=2 → neutral 변형(사각 마크·포탑 0)` |
+| 세력 추측 경로 | 없음 — 변형 선택은 `ShipWorldView.faction` 값만 소비 |
+
+**B2 식별 태그 — ✅ 통과**
+
+| 항목 | 실측 |
+|---|---|
+| 조준 전 | 두 표적 모두 `identificationState='unidentified'` · `displayLabelId=null` (세력 문자열 미노출) |
+| 조준 후 적대 | `state='hostile'` · `label='faction.hostile'` · 41m |
+| 조준 후 중립 | `state='neutral'` · `label='faction.neutral'` · 23m |
+| 경비함 | `state='patrol'` (스폰 후) |
+| 화면 태그 실제 렌더 | `"▲ \| 적대 · 적대 함선 \| 41m · ◎ 조준 가능"` · `"■ \| 중립 · 민간 선박 \| 23m · ◎ 조준 가능"` |
+| 색 외 구분 | 기호(▲/■/◆) + 문구 + 거리 — **색에 의존하지 않는다** |
+| 파괴된 표적 | 격침 후 `state='unidentified'`·`isAlive=false`로 태그 제거 |
+
+**B3 faction-aware 보상 — ✅ 통과**
+
+| 세력 | 실측 |
+|---|---|
+| hostile 격침 | 출항 재화 `0 → 120` · `lootDropped {source:'cargoShip', credits:120, rareParts:0}` |
+| neutral 격침 | 지갑 `1900 → 1900` · 출항 재화 `0 → 0` · 드롭 엔티티 `0 → 0` · `lootDropped` **0건** |
+| patrol | 공식 정책 `pending` — 보상 지급 경로 없음, 임의 값 미부여 |
+
+**B4 중립 공격 → 경비 요청 — ✅ 통과**
+
+| 항목 | 실측 |
+|---|---|
+| 조준만으로 발행 | `neutralShipHit` **0건** |
+| 유효 피해 시 발행 | **1건** · `damageAmount=1` · `targetFaction='neutral'` |
+| 상관 id | `attackCorrelationId="torpedo:1"` (실제 어뢰 id) |
+| `guardShipRequested` | **1건** · `requestId="torpedo:1"`(동일) · `requestedFaction='patrol'` |
+| 원장 | 요청 1 · 스폰 1 |
+| 중복 | 동일 requestId 재처리 → `duplicateRequest`, 경비함 1척 유지 |
+
+경로 확인: `neutralShipHit` → `GuardIncidentLedger` → `guardShipRequested`
+→ `GuardSpawnLocationStrategy` → `GuardShipAdapter` → 실제 개체.
+
+**B5 실제 경비함 생성·이동 — ✅ 통과**
+
+| 항목 | 실측 |
+|---|---|
+| 스폰 결과 | `spawned` (noSpawnLocation·spawnFailed 아님) · 경비함 **1척** |
+| 세력 | `patrol` · `entityId=8000` |
+| 초기 표적 | `initialTargetEntityId=-1` = `PLAYER_ENTITY_ID` · AI `currentTargetEntityId=-1` |
+| spawnPosition 보존 | `{x 28.29, z −39.99, heading 2.094}` — 핸들 값 그대로 |
+| 수면 유지 | `y=12` (해수면), 6초 후에도 `y=12` |
+| 이동 | 플레이어와의 수평 거리 `30.00 → 5.80` (Δ **−24.20 m**) · AI state `attack` |
+| 월드 bounds | 이탈 없음 |
+| 렌더 source 등록 | `shipWorldSource`에 `patrol` 포함 |
+| 식별 소스 등록 | `patrol` 태그 표시 |
+| 방향 마커 | 노드 1개 · `"➤ 경비함 접근 47m"` — **실제 spawnPosition 기준** |
+| 같은 공격에서 | 경비함 **1척만** |
+
+정적 확인: production `DestroyerAI` 구현체 **정확히 1개**
+(`src/core/DestroyerAIController.ts`) · Guard 전용 AI 코어 **0개** ·
+검증 더블 production import **0건** · `CargoShipSystem` 위장 없음 ·
+C(탐지·폭뢰·내구도·침수) 참조 **0건** — `verify:meta` 88/88에 포함.
+
+### 출항 경계 reset — ✅ 통과
+
+새 출항에서 경비함 0척 · 원장 요청 0/스폰 0 · salvage 3개 재생성 ·
+선박 2척 생존 복구. 과거 requestId가 새 출항의 정상 사건을 막지 않는다.
+
+### B6 — 구조 준비 / 실기동 보류
+
+| 항목 | 상태 |
+|---|---|
+| `highValueTransport` archetype · `EscortBinding` · 렌더 배지·결속선 · engagement adapter | ✅ **구조 존재** |
+| 공식 `rewardMultiplier` | ⏳ **null** — 승인 수치 없음 |
+| 공식 `escortMaximumDistanceMeters` | ⏳ **null** |
+| 실제 호위 기동 | ⛔ **미완료** |
+| production 강제 생성 | 하지 않음 — 공식 params가 없으므로 목록이 비어 있고 배지·결속선도 표시되지 않는다 |
+
+**B6 최종 완료 = false.** 툴링 제안의 배율(`docs/SPRINT_B_B6_PROPOSAL.md`)은
+승인된 공식 수치가 아니므로 `params/economy.json`에 입력하지 않았다.
+
+### B7 — 도구 완비 / 실측 pending
+
+| 항목 | 상태 |
+|---|---|
+| 로깅 스키마 8항목 + 분류 정합성 + 개인정보 거부 11종 | ✅ |
+| `anonymousTesterId` 외 개인정보 필드 없음 (이메일·전화·이름 형태 거부) | ✅ |
+| `opportunityId` 중복 처리 | ✅ |
+| `inputMistake` 근거 2종 이상일 때만 인정 | ✅ |
+| `intentionalNeutralAttack`·`invalidOpportunity`·태그 노출 전 발사 분모 제외 | ✅ |
+| 분자 = `misidentification` / 분모 = `correct + misidentification` | ✅ |
+| 최소 테스터 5명 · 유효 기회 50회 미만 → `INSUFFICIENT_SAMPLE` | ✅ |
+| CSV·JSON export | ✅ (CSV 70행 · JSON `schemaVersion` 1) |
+| **실제 표본** | ⏳ 테스터 **0명** · 유효 기회 **0회** |
+
+```
+B7 empirical status = pending
+B7 final pass/fail   = not evaluated
+```
+
+합성 fixture는 집계 알고리즘 검증용이며 **실측 결과로 쓰지 않았다.**
+
+**`IdentificationExposureSink` production 미주입 — 의도된 결정.**
+기록 1건에는 `anonymousTesterId`·`playerDecision`·`resultClassification`
+(사람의 판단·인터뷰 결과)이 **필수**다. 노출 신호만 수집해서는 측정이
+성립하지 않으므로, 일반 플레이에서 수집만 켜는 배선을 하지 않았다
+(불필요한 로그 수집 금지). 측정 세션은 15차 결의 3에 따라 C 기간 중
+빌드·툴 창 병렬 슬롯에서 기획 주관으로 운영한다.
+
+### A 스프린트 회귀 (A+B 통합 빌드)
+
+| 항목 | 실측 |
+|---|---|
+| BASE에서 시작 | ✅ `metaState='BASE'`, 자동 출항 없음 |
+| EconomyHud | ✅ `"확정 자산 — 크레딧 0 · 희귀 부품 0"` |
+| Upgrade UI 7종 / Equipment UI 4종 | ✅ / ✅ |
+| 공식 가격 표시 | ✅ 1단계 `{credits:100, rareParts:0}` |
+| 출항 버튼 | ✅ 1개 (기지 화면) |
+| 구매 | ✅ `success` · 2000→1900 · 단계 1 · **저장 1회** |
+| 장비 장착·교체·해제·재장착 | ✅ 전부 `success` · 슬롯1 `fastTorpedo→heavyTorpedo→null→fastTorpedo` |
+| 저장 실패 rollback | ✅ `saveFailedRolledBack` · 크레딧·단계 무변경 |
+| 출항 저장 실패 → 기지 유지 | ✅ `saveFailed` · `metaState='BASE'` |
+| 새로고침 복원 | ✅ 단계 1 유지 · 슬롯 `["standardTorpedo","fastTorpedo"]` 유지 |
+| 명시적 빈 loadout 유지 | ✅ `[null,null]` → 새로고침 후 `[null,null]` |
+| salvage 3종 배치 | ✅ `salvage-1/2/3` · 중복 생성 없음 |
+| hostile cargo 보상 | ✅ 120 |
+
+### 판정
+
+```
+B_CORE_COMPLETE   = true    (B1·B2·B3·B4·B5 전부 production 실측 통과)
+B_FINAL_COMPLETE  = false   (B6 실기동 미완 · B7 실측 pending)
+C 기술 선행개발    = 가능    (15차 결의 1: C 발효 조건 = B1~B5 통과)
+C 공식 발효        = 불가    (A 통합 PR 미병합)
+B 공식 발효        = 불가    (발효 조건 = A 통합 PR 병합 — 아직 없음)
+```
+
+B6·B7 pending은 B1~B5 실패가 아니다 (15차 결의 1·3: 병렬 최종 조건).

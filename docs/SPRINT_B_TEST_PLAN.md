@@ -119,3 +119,44 @@ npm run verify:sprint-b
 보류(`manual`)·차단(`blocked`)·대기(`pending`)는 종료 코드에 반영되지 않지만
 반드시 목록으로 출력된다 — 숨기지 않으면서, 고칠 수 있는 실패와 남의 영역에서
 오는 대기를 분리하기 위한 규칙이다.
+
+---
+
+## A+B 통합 빌드 실행 결과 (통합 관리자 — production 브라우저)
+
+> 위 'B1~B5 — 통합 빌드에서 확인할 것' 9개 시나리오의 실행 결과다.
+> 실행 URL `http://localhost:5173/`, 쿼리 플래그 없음, `?bdemo` fixture 미장착.
+> 조작은 production 입력만 (Pointer Lock → WASD/Ctrl/Shift → 우클릭 → 좌클릭).
+
+| # | 시나리오 | 결과 |
+|---|---|---|
+| 1 | 출항 후 선박 관측 | ✅ hostile `id=1` + neutral `id=2` 동시 존재, patrol 0척 |
+| 2 | 원거리 조준 | ✅ `unidentified` · `displayLabelId=null` — 세력 미노출 |
+| 3 | 식별 거리 접근 | ✅ `hostile`(41m) / `neutral`(23m) 확정 표시 |
+| 4 | 적대 격침 | ✅ `cargo-standard` 120 드롭 → 출항 재화 `0 → 120` |
+| 5 | 중립 격침 | ✅ 지갑 `1900 → 1900`, 출항 재화 0, 드롭 엔티티 0, `lootDropped` 0건 |
+| 6 | 중립 유효 피격 | ✅ 경비함 **1척** 스폰 (`spawned`) |
+| 7 | 같은 사건 재처리 | ✅ `duplicateRequest` — 경비함 늘지 않음 |
+| 8 | 경비함 관측 | ✅ `patrol` · 초기 표적 `PLAYER_ENTITY_ID(-1)` · production `DestroyerAIController` 위임 (Guard 전용 AI 0) |
+| 9 | 조준만 / 빗나감 | ✅ `neutralShipHit` 0건 — 조준·미명중으로는 발행되지 않음 |
+
+5번(중립 격침 → 크레딧 불변)은 15차 결의 2가 지정한 단언이며,
+브라우저 실측 + `verify:gameplay` 결정적 검증 양쪽에서 확인됐다.
+
+### 정적 스캔의 한계에 대한 사람 확인 (본 문서 '정적 스캔의 범위와 한계')
+
+- **B2 세력 추측 금지**: 렌더의 세력 변형 선택이 `ShipWorldView.faction`
+  값만 소비함을 코드와 런타임 양쪽에서 확인 — 렌더 인스턴스의 variant가
+  게임플레이 faction과 1:1 일치(`id=1→hostile`, `id=2→neutral`).
+  모델명·클래스명 분기 없음.
+- **B5 신규 AI 0**: `implements DestroyerAI` **내용 기반** 판정으로
+  production 구현체 1개(`src/core/DestroyerAIController.ts`)만 존재.
+  파일명 변경으로 검사를 피할 수 없는 형태이며, 렌더 오버레이
+  (`GuardDirectionIndicator`)도 같은 AI 어휘 검사 대상에 포함된다.
+
+### 이 회차에서 자동 단언으로 승격된 항목
+
+`verify:sprint-b`의 `B4-port`가 관측 없는 `blocked` 하드코딩에서
+**조립 배선 정적 관측**으로 바뀌었다 (위치 전략 호출 + production AI 팩토리
+호출 + `create: () => null` 더미 0건). 관측 결과가 없으면 여전히 `blocked`이며,
+실제 개체 생성·이동 판정은 브라우저 실측이 담당한다.

@@ -150,3 +150,33 @@
 `params/*.json` 값의 중복 정의 금지. `propellerIdleSpinRatio`·최고 속력의 공식
 소스는 `params/movement.json` 하나이며, 렌더가 필요하면 composition root가
 검증 완료 값을 주입한다 (렌더 측 `idleSpinRatio`·`fullSpinAtSpeedMps`는 제거 대상).
+
+## 2f. 스프린트 B 계약 (세력·식별·경비함 — INT-CORE-012·013)
+
+| 계약 | 내용 | 소유 |
+|---|---|---|
+| `FactionId` | `hostile` \| `neutral` \| `patrol` **3종 고정**. `guard` 별칭 없음. 해저 재화(`object`)는 세력이 아니라 `CombatTargetClass`로 분리 | 리드 (`contracts/faction.ts`) |
+| `factionRule(faction)` | 세력별 규칙표 — 보상 드롭 테이블 참조·표시 라벨 키·AI 초기 태도. **시스템 내부 세력 분기 금지**, 판단 근거는 이 표 하나 | 리드 |
+| `neutralShipHit` | 중립 선박 **유효 피해**(damageAmount>0)에서만 발행. 조준·발사·빗나감·damage 0은 발행하지 않는다. `attackCorrelationId = "torpedo:<실제 어뢰 id>"` | 계약 = 리드 / 발행 = 게임플레이 (`CargoShipSystem`) |
+| `guardShipRequested` (v2) | `{requestId, sourceNeutralEntityId, attackerEntityId, incidentPosition, spawnReason, requestedFaction, correlationId}`. `requestId === attackCorrelationId` | 리드 |
+| `GuardIncidentLedger` | **중복 방지 단일 저장소** — 요청(`claimRequest`)과 스폰(`claimSpawn`)이 같은 원장을 공유. 시스템 내부 중복 표 금지 | 리드 (`PveIntegration`) |
+| `GuardSpawnLocationStrategy` | `resolve(request)` → 위치 또는 `null`. **원점·플레이어 위치 fallback 금지** — 자리를 못 찾으면 `noSpawnLocation` | 계약 = 리드 / 구현 = 게임플레이 (`CanyonPatrolSpawnLocation`) |
+| `GuardSpawnPort` 결과 | `spawned` \| `duplicateRequest` \| `noSpawnLocation` \| `spawnFailed` \| `invalidRequest` | 리드 |
+| `GuardShipHandle` | `{requestId, entityId, faction, spawnReason, initialTargetEntityId, spawnPosition, displayLabelId, ai}`. `spawnPosition`은 **실제 스폰 좌표** — 요청의 `incidentPosition`을 대신 쓰지 않는다 | 리드 |
+| `DestroyerAI` / `DestroyerAIController` | 범용 구축함 AI. production 구현체 **정확히 1개**. Guard 전용 AI·복사본 0 (내용 기반 정적 검사) | 리드 |
+| `SurfaceShipMotionPort(Factory)` | AI의 이동 실행부. **AI는 transform을 소유하지 않는다** — pose 정본은 게임플레이 entity 1개. `create()`는 스폰마다 독립 entity+포트를 만든다 | 계약 = 리드 / 구현 = 게임플레이 (`PatrolShipFleet`·`PatrolShipEntity`) |
+| `ShipIdentificationSource` / `ShipIdentificationView` | 식별 read model. **미식별 동안 `displayLabelId=null`** 이며 렌더는 `faction`을 표시에 쓰지 않는다(모델에는 B7 정답 대조용으로 포함). `tagDisplayable`·`isTargetable`·`isAlive`로 표시 판정 | 계약 = 리드 / 판정 = 게임플레이 / 표시 = 그래픽스 |
+| `ShipWorldSource` / `ShipWorldView` | 다중 선박 읽기 전용 **평면 스냅샷**(객체 참조 없음) — 적대·중립 화물선 + 경비함. `visualArchetype`은 원형 **키**이며 문구·색·메시는 계약에 없다 | 게임플레이 |
+| `IdentificationExposureSink` | `onTagExposure({entityId, identificationTagVisible, factionRevealed, firstShownAtMs})` — 태그 노출 사실만. **결과 분류·오인 판정은 하지 않는다**(툴링 소유) | 그래픽스 |
+| `HighValueTransportView` / `EscortBinding` | B6 read model. `rewardMultiplierRef`는 **참조 키**이며 보상 숫자를 노출하지 않는다 | 리드 계약 / 게임플레이 구현 |
+
+### B 주입 지점 (composition root 1회씩)
+
+| 대상 | 호출 | 규칙 |
+|---|---|---|
+| 스폰 위치 전략 | `guardSpawn.attachLocationStrategy(gameplay.guardSpawnLocation)` | 정확히 1회. `null`을 넘기면 미연결(스폰은 `noSpawnLocation`) |
+| AI 팩토리 | `guardAdapter.attachFactory(createProductionDestroyerAIFactory(gameplay.surfaceShipMotionPortFactory))` | 이동 포트 팩토리가 `null`을 반환하면 스폰은 `spawnFailed` — 가짜 이동·대체 AI를 만들지 않는다 |
+| 스폰 리스너 | `guardSpawn.attachSpawnListener(handle => …)` | **실제 스폰 결과만** 소비. `spawnFailed`·`noSpawnLocation`에서는 호출되지 않으므로 마커가 뜨지 않는다 |
+| 다중 선박 렌더 | `scene.attachShipWorldSource(gameplay.shipWorldSource)` | 주입 시 `attachCargoShipSource` 단일 경로를 **대체** — 중복 렌더 방지 |
+| 식별 태그 | `scene.attachIdentificationSource(gameplay.shipIdentification, sink?)` | 두 번째 인자(B7 노출 싱크)는 **선택**이며 현재 production 미주입 (사유: `docs/B7_IDENTIFICATION_STUDY.md`) |
+| 호위 표현 | `scene.attachConvoySource(gameplay.highValueTransport)` | 공식 params 미확정이라 목록이 비어 있고 배지·결속선도 표시되지 않는다 |

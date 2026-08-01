@@ -1280,3 +1280,60 @@ scene.attachCargoShipSource(gameplay.cargoShipState); // CargoShipStateSource �
 `factionRewards.patrol`은 `pending`이다. 계약 `FACTION_RULES.patrol.dropTableId`도
 `null`이라 현재는 경비함을 격침해도 보상이 없다. 결정 시 **계약과 params를
 함께** 개정해야 한다(둘 중 하나만 바꾸면 검증기가 로드를 거부한다).
+
+### INT-INTEG-003 — [FACTION][AI] A+B 최종 기술 통합 처리 결과 (통합 관리자)
+
+| 필드 | 내용 |
+|---|---|
+| 처리자 | 통합 관리자 (세션 브랜치 `claude/deep-dive-d5-gray-box-integration-tree5i`) |
+| 대상 | 리드 `5b443d5` · 게임플레이 `a48dce5` · 그래픽스 `cc09fb9` · 툴링 `2757a48` |
+| 관련 게이트 | B1~B5 (핵심) · B6·B7 (병렬) · A 전체 회귀 |
+
+**INT-GAME-013 요청 — 전부 반영.**
+
+| 요청 | 처리 |
+|---|---|
+| ① `const surfaceMotionPorts = gameplay.surfaceShipMotionPortFactory` | 반영. `{ create: () => null }` 상수를 그대로 대체(변수명·이후 코드 무변경). production `PatrolShipFleet`이며 테스트 더블 없음 |
+| ② `guardSpawn.attachLocationStrategy(gameplay.guardSpawnLocation)` | 반영. 정확히 1회 |
+| ③ `scene.attachShipWorldSource` / `attachIdentificationSource` | 반영. 다만 렌더에 `attachShipWorldSource`가 **없어서** 통합 창이 얇은 바인딩을 추가했다 (아래) |
+
+**INT-RENDER-011 — ⚠ 조립부 최소 변경 2건 처리.**
+
+1. `GuardShipHandle.spawnPosition` — 리드 정본에 이미 포함돼 있었다(병합 시
+   주석만 충돌). **리드 판본 채택**, 그래픽스 의도(추정 좌표 금지)는 동일하다.
+2. `run.mjs` B5 가드레일 allowlist에 `GuardDirectionIndicator.ts` 추가 —
+   **채택하지 않았다.** 리드가 같은 커밋 구간에서 검사 방식을 **내용 기반**
+   (`implements DestroyerAI` + AI 어휘 스캔)으로 개정했고, 그 개정판은
+   `src/render`·`src/ui` 오버레이를 allowlist로 빼지 않고 **같은 기준으로 검사**한다.
+   파일명 변경으로 회피할 수 없는 쪽이 더 강한 가드레일이므로 리드 정본을 남겼다.
+   `GuardDirectionIndicator`는 개정 검사에서도 통과한다(AI 어휘 0건).
+
+**통합 창이 추가한 코드 (렌더 소비 API 부재 보완):**
+
+`CanyonScene.attachShipWorldSource(source)` — 중립 화물선과 스폰된 경비함에
+3D 표현이 없었다(기존 `attachCargoShipSource`는 적대 1척 전용). 기존
+`CargoShipVisual` + `factionVisuals` 3종 변형을 **entityId별로 관리하는 얇은
+바인딩**만 추가했고 새 비주얼·새 계약은 만들지 않았다. 주입되면 단일 화물선
+경로를 **대체**하므로 적대 화물선이 두 경로로 중복 렌더되지 않는다.
+`torpedoHit` 폭발은 맞은 개체 인스턴스에서만 시작한다(멱등 유지).
+
+> 그래픽스 창 확인 요청: 이 바인딩의 소유를 렌더 창으로 이관할지, 아니면
+> `ShipWorldSource` 소비를 그래픽스가 자체 구현으로 대체할지 결정 바랍니다.
+> 통합 창은 표현을 설계하지 않았습니다 — 변형 선택·마크·항해등은 전부 기존
+> `factionVisuals` 정의를 그대로 씁니다.
+
+**검증 정규화:** `verify:sprint-b`의 `B4-port`가 관측 없이 `blocked`로
+하드코딩돼 있었다. 배선이 실제로 생겼으므로 **정적 관측 항목**으로 바꿨다 —
+위치 전략 호출 + production AI 팩토리 호출 + `create: () => null` 더미 0건을
+전부 만족할 때만 `pass`이고, 관측값이 없으면 여전히 `blocked`다.
+
+**남긴 결정 요청:**
+
+1. **`IdentificationExposureSink` 활성화 정책** — production 미주입 상태로 두었다.
+   기록 1건에 사람 판단 3필드(`anonymousTesterId`·`playerDecision`·
+   `resultClassification`)가 필수라 노출 신호만으로는 측정이 성립하지 않고,
+   일반 플레이에서 소비자 없는 로그를 켜지 않기 위한 결정이다.
+   측정 세션 운영 방식 확정 후 명시적 측정 모드에서만 배선한다.
+2. **B6 공식 수치** — `rewardMultiplier`·`escortMaximumDistanceMeters` 모두 null.
+   `docs/SPRINT_B_B6_PROPOSAL.md`의 제안값은 승인 수치가 아니므로
+   `params/economy.json`에 입력하지 않았다.

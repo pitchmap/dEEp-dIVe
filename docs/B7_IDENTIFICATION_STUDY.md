@@ -148,3 +148,48 @@ export 어디에도 들어오지 않는다.
 3. B1 중립 선박 배치 — 구분할 대상이 있어야 한다
 
 **현재 실측 표본: 테스터 0명 · 유효 기회 0회 → `INSUFFICIENT_SAMPLE`.**
+
+---
+
+## A+B 통합 회차 상태 (통합 관리자)
+
+| 항목 | 상태 |
+|---|---|
+| 도구 (스키마·검증기·수집기·집계·판정·export) | ✅ 완비 — `verify:sprint-b` B7 7항목 통과 |
+| 실제 테스터 | **0명** |
+| 유효 식별 기회 | **0회** |
+| 판정 | `INSUFFICIENT_SAMPLE` |
+
+```
+B7 empirical status = pending
+B7 final pass/fail  = not evaluated
+```
+
+합성 fixture(`identificationStudyFixture.ts`)는 집계 알고리즘 검증용이며
+**실측 결과로 사용하지 않았다.**
+
+### `IdentificationExposureSink` production 미주입 — 사유
+
+그래픽스가 제공하는 `IdentificationExposureSink.onTagExposure({entityId,
+identificationTagVisible, factionRevealed, firstShownAtMs})`는 **태그 노출
+사실**만 알린다. 그런데 이 문서의 기록 1건에는
+
+- `anonymousTesterId` (세션 운영자가 배정)
+- `playerDecision` (플레이어가 무엇으로 판단했는가)
+- `resultClassification` (correct / misidentification / intentionalNeutralAttack / …)
+
+가 **필수**이며, 이들은 사람의 판단·인터뷰에서만 나온다. 노출 신호만
+수집해서는 기록이 성립하지 않는다.
+
+따라서 A+B 통합 회차에서는 sink를 production에 주입하지 **않았다** —
+일반 플레이에서 아무도 소비하지 않는 로그를 켜 두지 않기 위한 결정이다.
+측정 세션 운영 방식(활성화 조건·저장 위치·동의 절차)이 확정되면 그때
+명시적 측정 모드에서만 켜지도록 배선한다. 개인정보 필드는 스키마 수준에서
+이미 거부된다(`anonymousTesterId` 외 저장 없음 — 이메일·전화·이름 형태 11종 거부).
+
+### B7이 이제 실행 가능한 이유
+
+B2 태그 UI가 A+B 통합 빌드의 production 경로에서 실제로 표시되는 것이
+확인됐다 (`"▲ 적대 · 적대 함선 · 41m"` / `"■ 중립 · 민간 선박 · 23m"`).
+태그가 없으면 '식별 후 결정'이라는 유효 기회 자체가 성립하지 않으므로,
+이 확인이 측정 세션의 선행 조건이었다. 남은 것은 사람의 플레이뿐이다.
