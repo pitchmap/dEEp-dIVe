@@ -127,6 +127,62 @@ try {
   }
 }
 
+// 스프린트 B 선행개발 정적 검사 (INT-CORE-012).
+{
+  const { readFileSync, readdirSync } = await import('node:fs');
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const read = (file) => readFileSync(path.join(root, file), 'utf8');
+  const walk = (dir) => {
+    const out = [];
+    for (const entry of readdirSync(path.join(root, dir), { withFileTypes: true })) {
+      const rel = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) out.push(...walk(rel));
+      else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.d.ts')) out.push(rel);
+    }
+    return out;
+  };
+  const sourceFiles = walk('src').filter((file) => !file.includes('__verification__'));
+
+  // ① 신규 경비함 AI 코어 파일 0개 — 경비 관련 파일은 어댑터·계약·경계뿐이고
+  //    AI 판단 로직(추적 상태 머신·공격 루틴)을 새로 만들지 않았다.
+  {
+    const allowed = new Set([
+      'src/core/GuardShipAdapter.ts', // 어댑터 (주입·수명주기만)
+      'src/contracts/guard.ts', // 계약
+    ]);
+    const guardFiles = sourceFiles.filter((file) => /guard/i.test(path.basename(file)));
+    const unexpected = guardFiles.filter((file) => !allowed.has(file));
+    // 어댑터 안에 AI 판단 어휘가 없어야 한다 (기존 AI 위임만).
+    const adapter = read('src/core/GuardShipAdapter.ts');
+    const aiLogicMarkers = ['pursue', 'chase', 'searchPattern', 'attackRun', 'depthCharge', 'detectionGauge'];
+    const leaked = aiLogicMarkers.filter((marker) => adapter.includes(marker));
+    results.push({
+      name: 'B5 신규 경비함 AI 코어 파일 0개 (어댑터·계약만 — 판단 로직 없음)',
+      passed: unexpected.length === 0 && leaked.length === 0,
+      detail:
+        unexpected.length === 0 && leaked.length === 0
+          ? `guard 파일 ${guardFiles.length}개 = 어댑터·계약`
+          : `예상 밖 파일: ${unexpected.join(', ') || '없음'} / AI 어휘: ${leaked.join(', ') || '없음'}`,
+    });
+  }
+
+  // ② 스프린트 C 범위(탐지 게이지·소나 상태 머신·폭뢰·선체 체력·침수) 구현
+  //    파일이 B 선행개발에서 생기지 않았는지 — 계약 파일의 예약 정의는 A 이전
+  //    부터 존재하므로 구현 파일(시스템)만 검사한다.
+  {
+    const cScopeFiles = sourceFiles.filter((file) =>
+      /(DetectionSystem|SonarSystem|DepthCharge|HullSystem|Flooding)\.ts$/.test(path.basename(file)),
+    );
+    results.push({
+      name: 'B 범위 밖(C) 구현 파일 없음 — 탐지·소나·폭뢰·내구도·침수 시스템 미생성',
+      passed: cScopeFiles.length === 0,
+      detail: cScopeFiles.length === 0 ? '통과' : `발견: ${cScopeFiles.join(', ')}`,
+    });
+  }
+}
+
 let failures = 0;
 for (const { name, passed, detail } of results) {
   if (!passed) failures += 1;

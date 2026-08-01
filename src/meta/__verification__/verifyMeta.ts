@@ -34,11 +34,33 @@ import {
   CountingSavePort,
   DepartureCommand,
   EquipmentJudgeAdapter,
+  GuardIncidentLedger,
+  GuardSpawnBridge,
+  GuardSpawnCoordinator,
+  NeutralIncidentBoundary,
   SortieSalvageSpawner,
   composeSalvageSpawnPlan,
   createBaseScreenPort,
 } from '../../core/PveIntegration';
 import type { SalvagePlacementSource } from '../../contracts/officialParams';
+import { GuardShipAdapter } from '../../core/GuardShipAdapter';
+import type { GuardShipHandle } from '../../core/GuardShipAdapter';
+import { FACTION_RULES, rewardDropTableIdFor } from '../../contracts/faction';
+import type { FactionId } from '../../contracts/faction';
+import { PLAYER_ENTITY_ID } from '../../contracts/guard';
+import type {
+  DestroyerAIFactory,
+  EscortBinding,
+  GuardShipAdapterConfig,
+  GuardShipRequestPayload,
+  NeutralShipHitPayload,
+} from '../../contracts/guard';
+import type {
+  IdentificationLogSink,
+  IdentificationOpportunityLog,
+  ShipIdentificationSource,
+  ShipIdentificationView,
+} from '../../contracts/identification';
 import { UpgradePurchaseSystem } from '../../systems/economy/UpgradePurchaseSystem';
 import { EquipmentSystem } from '../../systems/EquipmentSystem';
 import type { EquipmentCatalog, UpgradeEntry } from '../../tools/economyMath';
@@ -937,6 +959,318 @@ export function runMetaVerification(): VerificationResult[] {
         'salvage 스포너: 결합 거부 시 부분 생성 없음 (rejected·0건)',
         rejected.status === 'rejected' && spawned.length === 0,
         `status=${rejected.status}, spawned=${spawned.length}`,
+      );
+    }
+  }
+
+  // ── 스프린트 B 선행개발: 세력·중립 사건·경비함 스폰 (INT-CORE-012) ──
+  {
+    // 세력 정본 — 중복 의미 없음
+    {
+      const ids = Object.keys(FACTION_RULES);
+      const labels = ids.map((id) => FACTION_RULES[id as FactionId].displayLabelId);
+      const incidentRaisers = ids.filter((id) => FACTION_RULES[id as FactionId].raisesNeutralIncident);
+      check(
+        'B 세력: FactionId 3종(hostile·neutral·patrol) — guard 별칭 없음·중복 의미 없음',
+        ids.length === 3 &&
+          ids.includes('hostile') &&
+          ids.includes('neutral') &&
+          ids.includes('patrol') &&
+          !ids.includes('guard') &&
+          new Set(labels).size === 3 &&
+          incidentRaisers.length === 1 &&
+          incidentRaisers[0] === 'neutral',
+        `ids=${ids.join('/')}, 중립사건=${incidentRaisers.join('/')}`,
+      );
+    }
+    // 보상 계약 — 중립 0·적대 공식 테이블·patrol 발명 금지
+    {
+      const hostile = rewardDropTableIdFor('hostile');
+      const neutral = rewardDropTableIdFor('neutral');
+      const patrol = rewardDropTableIdFor('patrol');
+      check(
+        'B 보상: hostile=공식 드롭 테이블 / neutral=null(크레딧 0) / patrol=null(수치 발명 없음)',
+        hostile === 'cargo-standard' && neutral === null && patrol === null,
+        `hostile=${hostile}, neutral=${neutral}, patrol=${patrol}`,
+      );
+    }
+    // 직렬화 — 이벤트 payload 왕복
+    {
+      const payload: NeutralShipHitPayload = {
+        targetEntityId: 7,
+        attackerEntityId: PLAYER_ENTITY_ID,
+        targetFaction: 'neutral',
+        attackWorldPosition: { x: 3, z: -4 },
+        damageAmount: 12,
+        attackCorrelationId: 'atk-1',
+        timestamp: 1000,
+        firstValidNeutralHit: true,
+      };
+      const roundTrip = JSON.parse(JSON.stringify(payload)) as NeutralShipHitPayload;
+      check(
+        'B 직렬화: hostile/neutral 태그와 중립 피격 payload 왕복 보존',
+        roundTrip.targetFaction === 'neutral' &&
+          roundTrip.attackCorrelationId === 'atk-1' &&
+          roundTrip.attackerEntityId === PLAYER_ENTITY_ID &&
+          JSON.parse(JSON.stringify({ f: 'hostile' as FactionId })).f === 'hostile',
+        JSON.stringify(roundTrip),
+      );
+    }
+
+    const neutralHit = (
+      overrides: Partial<NeutralShipHitPayload> = {},
+    ): NeutralShipHitPayload => ({
+      targetEntityId: 7,
+      attackerEntityId: PLAYER_ENTITY_ID,
+      targetFaction: 'neutral',
+      attackWorldPosition: { x: 3, z: -4 },
+      damageAmount: 12,
+      attackCorrelationId: 'atk-1',
+      timestamp: 1000,
+      firstValidNeutralHit: true,
+      ...overrides,
+    });
+
+    const buildGuardChain = (
+      options: { withAi?: boolean; withLocation?: boolean } = {},
+    ): {
+      bus: EventBus;
+      requests: GuardShipRequestPayload[];
+      adapter: GuardShipAdapter;
+      bridge: GuardSpawnBridge;
+      createdAiConfigs: GuardShipAdapterConfig[];
+      spawnedHandles: GuardShipHandle[];
+    } => {
+      const bus = new EventBus();
+      const ledger = new GuardIncidentLedger();
+      const createdAiConfigs: GuardShipAdapterConfig[] = [];
+      const notifiedPositions: Array<{ x: number; z: number }> = [];
+      const factory: DestroyerAIFactory = {
+        create: (config) => {
+          createdAiConfigs.push(config);
+          // 기존 DestroyerAI 계약을 그대로 만족하는 대역 — 어댑터는 이
+          // 인스턴스의 판단에 개입하지 않는다 (신규 AI 코어 없음).
+          return {
+            state: 'alert' as const,
+            notifyLastKnownPosition: (x: number, z: number) => {
+              notifiedPositions.push({ x, z });
+            },
+            update: () => {},
+          };
+        },
+      };
+      const adapter = new GuardShipAdapter(options.withAi === false ? null : factory);
+      const spawnedHandles: GuardShipHandle[] = [];
+      const coordinator = new GuardSpawnCoordinator(ledger, adapter, null);
+      if (options.withLocation !== false) {
+        coordinator.attachLocationStrategy({
+          resolve: (request) => ({ x: request.incidentPosition.x + 20, z: request.incidentPosition.z }),
+        });
+      }
+      coordinator.attachSpawnListener((handle) => spawnedHandles.push(handle));
+      const bridge = new GuardSpawnBridge(coordinator);
+      const boundary = new NeutralIncidentBoundary(ledger);
+      boundary.initialize(verificationContext(bus));
+      bridge.initialize(verificationContext(bus));
+      const requests: GuardShipRequestPayload[] = [];
+      bus.on('guardShipRequested', (payload) => requests.push(payload));
+      return { bus, requests, adapter, bridge, createdAiConfigs, spawnedHandles };
+    };
+
+    {
+      const { bus, requests } = buildGuardChain();
+      bus.emit('neutralShipHit', neutralHit());
+      bus.emit('neutralShipHit', neutralHit());
+      check(
+        'B 중복 방지: 동일 attackCorrelationId → 경비 요청 1회 (원장 단일 저장소)',
+        requests.length === 1 && requests[0]?.correlationId === 'atk-1',
+        `requests=${requests.length}`,
+      );
+    }
+    {
+      const { bus, requests } = buildGuardChain();
+      bus.emit('neutralShipHit', neutralHit({ targetFaction: 'hostile', attackCorrelationId: 'atk-h' }));
+      check(
+        'B 세력 판정: 적대 선박 피격은 경비 요청 0회 (중립 사건 아님)',
+        requests.length === 0,
+        `requests=${requests.length}`,
+      );
+    }
+    {
+      const { bus, requests } = buildGuardChain();
+      bus.emit('neutralShipHit', neutralHit({ firstValidNeutralHit: false, attackCorrelationId: 'atk-2' }));
+      check(
+        'B 중복 방지: 첫 유효 피격이 아니면 요청하지 않음 (파괴 후 추가 피격 포함)',
+        requests.length === 0,
+        `requests=${requests.length}`,
+      );
+    }
+    {
+      const { bus, requests, spawnedHandles, createdAiConfigs, adapter } = buildGuardChain();
+      bus.emit('neutralShipHit', neutralHit());
+      const handle = spawnedHandles[0];
+      const config = createdAiConfigs[0];
+      check(
+        'B 스폰: 중립 유효 피격 1건 → 요청 1건 → 스폰 1척 (기존 구축함 AI 사용)',
+        requests.length === 1 &&
+          spawnedHandles.length === 1 &&
+          createdAiConfigs.length === 1 &&
+          adapter.spawnedShips.length === 1 &&
+          handle?.ai !== undefined,
+        `requests=${requests.length}, spawned=${spawnedHandles.length}`,
+      );
+      check(
+        'B 스폰: 경비함 세력 = patrol · 초기 표적 = 공격자(플레이어)',
+        handle?.faction === 'patrol' &&
+          handle.initialTargetEntityId === PLAYER_ENTITY_ID &&
+          config?.initialTargetPosition.x === 3 &&
+          config.spawnPosition.x === 23,
+        `faction=${handle?.faction}, target=${handle?.initialTargetEntityId}, spawn=${config?.spawnPosition.x}`,
+      );
+    }
+    {
+      const { bus, bridge, spawnedHandles } = buildGuardChain();
+      const request: GuardShipRequestPayload = {
+        requestId: 'req-1',
+        sourceNeutralEntityId: 7,
+        attackerEntityId: PLAYER_ENTITY_ID,
+        incidentPosition: { x: 0, z: 0 },
+        spawnReason: 'neutralAttack',
+        requestedFaction: 'patrol',
+        correlationId: 'atk-9',
+      };
+      bus.emit('guardShipRequested', request);
+      const first = bridge.lastOutcome;
+      bus.emit('guardShipRequested', request);
+      check(
+        'B 스폰 중복 방지: 동일 requestId 재요청 = duplicateRequest·스폰 1회',
+        first === 'spawned' && bridge.lastOutcome === 'duplicateRequest' && spawnedHandles.length === 1,
+        `first=${first}, second=${bridge.lastOutcome}, spawned=${spawnedHandles.length}`,
+      );
+    }
+    {
+      const { bus, bridge, spawnedHandles } = buildGuardChain({ withLocation: false });
+      bus.emit('neutralShipHit', neutralHit({ attackCorrelationId: 'atk-3' }));
+      check(
+        'B 스폰: 위치 전략 미연결 = noSpawnLocation (임의 좌표 생성 없음)',
+        bridge.lastOutcome === 'noSpawnLocation' && spawnedHandles.length === 0,
+        `outcome=${bridge.lastOutcome}`,
+      );
+    }
+    {
+      const { bus, bridge, adapter, spawnedHandles } = buildGuardChain({ withAi: false });
+      bus.emit('neutralShipHit', neutralHit({ attackCorrelationId: 'atk-4' }));
+      check(
+        'B 스폰: 구축함 AI 팩토리 미연결 = spawnFailed (대체 AI 생성 없음)',
+        bridge.lastOutcome === 'spawnFailed' && spawnedHandles.length === 0 && !adapter.aiWired,
+        `outcome=${bridge.lastOutcome}, aiWired=${adapter.aiWired}`,
+      );
+    }
+    {
+      const { bus, bridge } = buildGuardChain();
+      bus.emit('guardShipRequested', {
+        requestId: '',
+        sourceNeutralEntityId: 7,
+        attackerEntityId: PLAYER_ENTITY_ID,
+        incidentPosition: { x: 0, z: 0 },
+        spawnReason: 'neutralAttack',
+        requestedFaction: 'patrol',
+        correlationId: 'atk-5',
+      });
+      check(
+        'B 스폰: 잘못된 요청(빈 requestId) = invalidRequest',
+        bridge.lastOutcome === 'invalidRequest',
+        `outcome=${bridge.lastOutcome}`,
+      );
+    }
+    {
+      const { bus, adapter } = buildGuardChain();
+      bus.emit('neutralShipHit', neutralHit({ attackCorrelationId: 'atk-6' }));
+      let updates = 0;
+      const ship = adapter.spawnedShips[0];
+      if (ship) {
+        // 어댑터는 수명주기만 전달한다 — 판단 로직 없음
+        const original = ship.ai.update;
+        (ship.ai as { update: (dt: number) => void }).update = (dt: number) => {
+          updates += 1;
+          original.call(ship.ai, dt);
+        };
+      }
+      adapter.update(0.016);
+      check(
+        'B 어댑터: 수명주기 전달만 수행 (기존 AI.update 호출, 자체 판단 없음)',
+        updates === 1,
+        `updates=${updates}`,
+      );
+    }
+    {
+      // B6 계약이 핵심 게이트 경로에 의존을 만들지 않는지 — 호위 데이터 없이
+      // B4 흐름이 그대로 성립하는가로 확인한다.
+      const { bus, requests, spawnedHandles } = buildGuardChain();
+      const binding: EscortBinding = {
+        escortEntityId: 11,
+        escortedTransportId: 12,
+        maximumEscortDistanceMeters: 40,
+      };
+      bus.emit('neutralShipHit', neutralHit({ attackCorrelationId: 'atk-7' }));
+      check(
+        'B6 분리: 호위 계약을 쓰지 않아도 B1~B5 경로(요청·스폰) 성립',
+        requests.length === 1 && spawnedHandles.length === 1 && binding.escortEntityId === 11,
+        `requests=${requests.length}, spawned=${spawnedHandles.length}`,
+      );
+    }
+    {
+      // B2 식별 read model 생성 가능 — 미식별 시 라벨 없음
+      const unidentified: ShipIdentificationView = {
+        entityId: 7,
+        faction: 'neutral',
+        identificationState: 'unidentified',
+        displayLabelId: null,
+        distanceMeters: 900,
+        isTargetable: true,
+        isAlive: true,
+        worldPosition: { x: 0, y: 0, z: -900 },
+        tagDisplayable: false,
+      };
+      const identified: ShipIdentificationView = {
+        ...unidentified,
+        identificationState: 'neutral',
+        displayLabelId: FACTION_RULES.neutral.displayLabelId,
+        distanceMeters: 120,
+        tagDisplayable: true,
+      };
+      const source: ShipIdentificationSource = { identifications: [unidentified, identified] };
+      check(
+        'B2 식별 모델: UI 소비 모델 생성 가능 — 미식별은 라벨 null(세력 비노출)',
+        source.identifications.length === 2 &&
+          unidentified.displayLabelId === null &&
+          !unidentified.tagDisplayable &&
+          identified.displayLabelId === 'faction.neutral',
+        `unidentified=${unidentified.displayLabelId}, identified=${identified.displayLabelId}`,
+      );
+    }
+    {
+      // B7 로깅 계약 — 8항목·결과 분류
+      const log: IdentificationOpportunityLog = {
+        anonymousTesterId: 'T-01',
+        opportunityId: 'OP-1',
+        actualFaction: 'neutral',
+        identificationTagVisible: true,
+        playerDecision: 'hostile',
+        playerAction: 'attack',
+        resultClassification: 'misidentification',
+        timestamp: 1234,
+        notes: '실루엣만 보고 판단',
+      };
+      const collected: IdentificationOpportunityLog[] = [];
+      const sink: IdentificationLogSink = { record: (entry) => collected.push(entry) };
+      sink.record(log);
+      check(
+        'B7 로깅: 기록 8항목 + 결과 분류 계약 (집계·판정은 툴링)',
+        collected.length === 1 &&
+          collected[0]?.resultClassification === 'misidentification' &&
+          Object.keys(log).length === 9,
+        `필드수=${Object.keys(log).length}(notes 포함), 분류=${collected[0]?.resultClassification}`,
       );
     }
   }
