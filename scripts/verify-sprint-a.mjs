@@ -90,6 +90,9 @@ function docRegressionScan() {
 }
 
 // ── 남은 provisional 경제·장비 파일 목록 (A8) ────────────────────
+/** 경제·장비·화물·업그레이드 범위만 A8 대상 — 전투 임시값은 C9([COMBAT]) 소속 */
+const A8_PROVISIONAL_SCOPE = /econom|equip|cargo|upgrade/i;
+
 function provisionalEconomyFiles() {
   const found = [];
   const srcDir = path.join(projectRoot, 'src');
@@ -98,8 +101,35 @@ function provisionalEconomyFiles() {
     const relative = path.relative(projectRoot, file);
     const base = path.basename(file).toLowerCase();
     if (!base.startsWith('provisional')) continue;
-    // 경제·장비 범위만 A8 대상 — 전투 임시값은 C9([COMBAT]) 소속
-    if (/econom|equip|cargo/i.test(base)) found.push(relative);
+    if (A8_PROVISIONAL_SCOPE.test(base)) found.push(relative);
+  }
+  return found;
+}
+
+/**
+ * production 코드가 아직 provisional 경제 모듈을 import하는 지점 정적 스캔 (A8).
+ *
+ * 제외: provisional 파일 자기들끼리의 import(이미 파일 목록으로 집계됨),
+ * `__verification__` 하위(테스트 코드는 production 소비 경로가 아님).
+ */
+function provisionalEconomyImports() {
+  const found = [];
+  const srcDir = path.join(projectRoot, 'src');
+  if (!statSync(srcDir, { throwIfNoEntry: false })) return found;
+  const importPattern = /from\s+['"]([^'"]*provisional[^'"]*)['"]/gi;
+  for (const file of scanFiles(srcDir)) {
+    const relative = path.relative(projectRoot, file);
+    if (path.extname(file) !== '.ts') continue;
+    if (path.basename(file).toLowerCase().startsWith('provisional')) continue;
+    if (relative.includes('__verification__')) continue;
+    const lines = readFileSync(file, 'utf8').split('\n');
+    lines.forEach((line, index) => {
+      for (const match of line.matchAll(importPattern)) {
+        const specifier = match[1];
+        if (!A8_PROVISIONAL_SCOPE.test(path.basename(specifier))) continue;
+        found.push(`${relative}:${index + 1} → ${specifier}`);
+      }
+    });
   }
   return found;
 }
@@ -112,14 +142,19 @@ try {
     aimingJson: readJson('params/aiming.json'),
     upgradesJson: readJson('params/upgrades.json'),
     equipmentJson: readJson('params/equipment.json'),
+    economyJson: readJson('params/economy.json'),
+    cargoJson: readJson('params/cargo.json'),
     paramsRoot: {
       movement: readJson('params/movement.json'),
       detection: readJson('params/detection.json'),
       combat: readJson('params/combat.json'),
       crew: readJson('params/crew.json'),
+      economy: readJson('params/economy.json'),
+      cargo: readJson('params/cargo.json'),
     },
     docRegression: docRegressionScan(),
     provisionalFiles: provisionalEconomyFiles(),
+    provisionalImports: provisionalEconomyImports(),
   });
 } catch (error) {
   console.error('✖ 스프린트 A 검증 실행 자체가 실패했습니다:', error);

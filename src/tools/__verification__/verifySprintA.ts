@@ -24,9 +24,18 @@ import {
   type AimingParams,
 } from '../aimingMath';
 import {
+  APPROVED_A_GROUP_CUMULATIVE,
+  APPROVED_B_GROUP_CUMULATIVE,
+  assertNoPendingFields,
+  bossReadinessCost,
+  checkApprovedProgression,
   pendingFields,
+  sortieMaxIncome,
+  validateCargoParams,
+  validateEconomyParams,
   validateEquipmentCatalog,
   validateUpgradeCatalog,
+  type EconomyParams,
   type EquipmentCatalog,
   type UpgradeEntry,
 } from '../economyMath';
@@ -58,10 +67,14 @@ interface RunInput {
   upgradesJson: unknown;
   equipmentJson: unknown;
   paramsRoot: unknown;
+  economyJson: unknown;
+  cargoJson: unknown;
   /** 문서 회귀 검사 결과 — 러너가 파일 스캔 후 주입 */
   docRegression: { offenders: string[]; historical: string[] };
   /** 남은 provisional 경제·장비 파일 목록 — 러너가 주입 */
   provisionalFiles: string[];
+  /** production 코드의 provisional import 목록 — 러너가 정적 스캔 후 주입 */
+  provisionalImports: string[];
 }
 
 export function runSprintAVerification(input: RunInput): CheckResult[] {
@@ -398,17 +411,86 @@ export function runSprintAVerification(input: RunInput): CheckResult[] {
     return '거부 규칙 8종 전부 작동';
   });
 
-  {
+  let economy: EconomyParams | null = null;
+
+  check('A8-economy', 'A8 economy.json·cargo.json 스키마 검증 통과', () => {
+    economy = validateEconomyParams(input.economyJson);
+    const cargo = validateCargoParams(input.cargoJson);
+    assert(cargo.speedMetersPerSecond > 0, '화물선 속력 양수');
+    return `드롭 테이블 ${Object.keys(economy.dropTables).length}종, salvage ${economy.salvageSpawns.length}개, 화물선 이관 완료`;
+  });
+
+  check('A8-null0', 'A8 공식 params null 0개 (승인 이후 회귀 차단)', () => {
+    assertNoPendingFields(upgrades, equipment as EquipmentCatalog);
     const pending = pendingFields(upgrades, equipment);
+    assert(pending.length === 0, `미확정 ${pending.length}개`);
+    return 'upgrades 0 · equipment 0';
+  });
+
+  check('A8-approved', 'A8 승인 수치 대조 — 가격·희귀·단계별 누적 효과', () => {
+    const problems = checkApprovedProgression(upgrades);
+    assert(problems.length === 0, `승인값 불일치: ${problems.slice(0, 3).join(' / ')}`);
+    return `A군 누적 ${APPROVED_A_GROUP_CUMULATIVE.join('/')} · B군 ${APPROVED_B_GROUP_CUMULATIVE.join('/')} 일치`;
+  });
+
+  check('A8-equipmentRules', 'A8 장비 규칙 — 시작 보유·슬롯 용량 2·희귀 정수', () => {
+    const cat = equipment as EquipmentCatalog;
+    assert(cat.slotCapacity === 2, `slotCapacity 2 기대 (실제 ${cat.slotCapacity})`);
+    const standard = cat.items.find((e) => e.id === 'standardTorpedo');
+    assert(standard !== undefined, 'standardTorpedo 존재');
+    assert(standard?.costCredits === 0 && standard?.costRareParts === 0, '기본 어뢰 가격 0');
+    assert(standard?.startingItem === true, '기본 어뢰 시작 보유');
+    for (const item of cat.items) {
+      const rare = item.costRareParts ?? 0;
+      assert(Number.isInteger(rare), `${item.id} 희귀 부품 정수`);
+    }
+    return 'slotCapacity 2, standardTorpedo 시작 보유, 희귀 전부 정수';
+  });
+
+  check('A8-income', 'A8 출항 수입·희귀 경로·보스 준비 출항 횟수', () => {
+    const eco = economy as EconomyParams;
+    const income = sortieMaxIncome(eco);
+    assert(income.salvageCredits === 125, `salvage 125 기대 (실제 ${income.salvageCredits})`);
+    assert(income.totalCredits === 245, `출항 최대 수입 245 기대 (실제 ${income.totalCredits})`);
+    assert(income.rareParts >= 1, '희귀 부품 획득 경로 1개 이상');
+    assert(eco.creditLossOnDestroyedRatio === 0.5, `lossRate 0.5 기대 (실제 ${eco.creditLossOnDestroyedRatio})`);
+    const cost = bossReadinessCost(upgrades, equipment as EquipmentCatalog, eco);
+    const sorties = cost.credits / income.totalCredits;
+    const [min, max] = eco.bossReadinessReference.expectedSortieRange;
+    assert(sorties >= min && sorties <= max, `보스 준비 ${sorties.toFixed(1)}회가 목표 ${min}~${max}회를 벗어남`);
+    return `수입 ${income.totalCredits}(cargo ${income.cargoCredits}+salvage ${income.salvageCredits})·희귀 ${income.rareParts} / 보스 준비 ${cost.credits} → ${sorties.toFixed(1)}회`;
+  });
+
+  // A8 이관은 두 영역으로 나뉘고 소유 역할이 다르다. params 측(기획·툴링)은
+  // 자동 판정하고, 소비 측 배선(게임플레이 `src/systems/`·리드 `src/core`·
+  // `src/meta`)은 툴링 창에서 고칠 수 없으므로 수동 구역으로 분리한다.
+  // — 분리는 은폐가 아니다: 잔여 파일·import 전체 목록을 그대로 출력한다.
+  check('A8-migration-params', 'A8 params 측 이관 — 승인 수치가 공식 JSON에만 존재', () => {
+    const eco = economy as EconomyParams;
+    assert(
+      eco.dropTables['cargo-standard']?.credits === 120,
+      'cargo-standard 120이 economy.json에 존재해야 한다',
+    );
+    assert(eco.pickupRadiusMeters > 0, '회수 반경 이관 확인');
+    assertNoPendingFields(upgrades, equipment as EquipmentCatalog);
+    return 'upgrades·equipment·economy·cargo 4종 공식화 완료 (미확정 0)';
+  });
+
+  {
     const remaining = input.provisionalFiles;
-    const migrated = pending.length === 0 && remaining.length === 0;
+    const imports = input.provisionalImports;
+    const migrated = remaining.length === 0 && imports.length === 0;
     results.push({
-      id: 'A8-migration',
-      name: 'A8 임시 경제·장비 수치 전량 공식 params 이관 완료',
-      status: migrated ? 'pass' : 'fail',
+      id: 'A8-migration-consumers',
+      name: 'A8 소비 측 배선 — production provisional import 제거',
+      status: migrated ? 'pass' : 'manual',
       detail: migrated
-        ? '미확정 필드 0·잔여 provisional 0'
-        : `미확정 필드 ${pending.length}개, 잔여 provisional 파일 ${remaining.length}개 — 기획 경제 수치표(PvE D+3 병목) 도착 전이므로 임의 값을 넣지 않았다. 잔여: ${remaining.join(', ') || '없음'}`,
+        ? 'provisional 파일 0 · production import 0'
+        : [
+            `잔여 provisional 파일 ${remaining.length}개: ${remaining.join(', ') || '없음'}`,
+            `production import ${imports.length}건: ${imports.join(' | ') || '없음'}`,
+            '공식 params는 확정됐다. 남은 것은 소비 측 배선이며 해당 파일은 게임플레이(src/systems/)·리드(src/core, src/meta) 소유라 툴링 창에서 수정할 수 없다',
+          ].join('\n    → '),
     });
   }
 

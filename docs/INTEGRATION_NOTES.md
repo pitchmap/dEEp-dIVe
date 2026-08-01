@@ -339,6 +339,70 @@ verify:hud 34 전부 통과. Production URL(플래그 없음) Playwright 실측:
    병합 시 같은 목록에 잡힌다. **A8은 기획 경제 수치표(PvE D+3 절대 마감)가
    도착해야 통과 가능**하다 — 툴링은 그릇(구조·검증기)만 완성했다.
 
+---
+
+### INT-TOOL-009 — [ECON] A8 승인 경제 수치 확정 + 소비 측 배선 교체 요청
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 빌드·툴 (A8 마감 — 사용자 승인 반영) |
+| 대상 시스템 | `params/`(기획 커밋 영역), 게임플레이 `src/systems/`, 리드 `src/core/Game.ts`·`src/meta/` |
+| 변경 이유 | 위 INT-TOOL-008 항목 2의 **해소** — 경제 수치표가 사용자 승인으로 도착했고, 툴링이 그릇에 값을 채웠다 |
+| 관련 게이트 | A8 |
+| 하위 호환 여부 | params 스키마 **추가만**(장비에 `slotCost`·`startingItem`·`performance` 신설). 세이브 스키마 무변경 — 마이그레이션 불필요 |
+| 개발 리드 결정 | **확인 대기** — 아래 '요청' 2건 |
+| 적용 커밋 | `2a89400` (params 확정 — 다른 창이 소비 가능한 기준 커밋), 이후 검증기·로더·검증 커밋 |
+
+**확정된 것 (툴링·기획 영역 — 완료)**
+
+- `params/upgrades.json` 미확정 105 → **0**, `params/equipment.json` 9 → **0**
+- `params/economy.json`·`params/cargo.json` **신설** — 기존 provisional 런타임 값을
+  그대로 이관했고, 새 밸런스 변경이 아니다. 예외는 D5 승인 1건뿐:
+  파괴 손실률이 게임플레이 0.4 / 메타 루프 0.5로 갈려 있던 것을 **0.5로 통일**
+  (6차 결의 7 명시값).
+- **희귀 부품 획득 경로**(D2) 확정: `economy.json`의 `salvageSpawns[2]`
+  (`spawnId: "salvage-3"`)가 `rarePartId: "rare-alloy-core"`를 **확정 드롭**한다.
+  확률이 아니다. MVP의 유일한 희귀 부품 경로다.
+- 검증기 `src/tools/economyMath.ts` + 공식 로더 `src/tools/economyParams.ts`.
+  `verify:sprint-a` 자동 29/29 통과(승인값 회귀 차단 포함).
+
+**요청 ① — 소비 측 배선 교체 (게임플레이·리드)**
+
+production이 아직 provisional 모듈을 import한다. 해당 파일은 툴링 소유가 아니라
+직접 고치지 않았다. 교체 방법은 전부 동일하다 —
+`loadEconomyParams()`(`src/tools/economyParams.ts`)가 돌려주는
+`{ upgrades, equipment, economy, cargo }`를 소비하면 된다.
+
+| 파일 | 현재 import | 소유 |
+|---|---|---|
+| `src/core/Game.ts:26` | `../meta/provisionalEconomy` | 리드 (공통 보호 파일) |
+| `src/systems/CargoShipSystem.ts:37` | `./provisionalCargo` | 게임플레이 |
+| `src/systems/EquipmentSystem.ts:34` | `./provisionalEquipment` | 게임플레이 |
+| `src/systems/economy/EconomySystem.ts:27` | `./provisionalEconomy` | 게임플레이 |
+| `src/systems/economy/UpgradePurchaseSystem.ts:30` | `./provisionalUpgradeCost` | 게임플레이 |
+
+값이 동일하므로 **배선만 바꾸면 동작 변화가 없다.** 단 `EconomySystem`의
+손실률만 0.4 → 0.5로 바뀐다(D5 승인). 교체가 끝나면 provisional 파일 5개를
+삭제할 수 있고, `verify:sprint-a`의 `A8-migration-consumers`가 수동 →
+자동 통과로 전환된다.
+
+**요청 ② — 해저 재화 좌표 연결 (월드·그래픽스·통합)**
+
+`salvageSpawns`는 `spawnId`·`kind`·보상만 정의한다. **배치 좌표는 월드·그래픽스
+소유라 툴링이 정하지 않았다.** `spawnId`로 좌표를 연결해야 출항 최대 수입
+245크레딧·희귀 1개 전제가 실제로 성립한다. 현재 `spawnSalvage`는 production에서
+호출되지 않으므로, 연결 전까지 실측 수입은 수송선 120뿐이고 보스 준비는
+목표 4~6회를 크게 벗어난다.
+
+**기준값이 없어 배율만 정의한 4항목 (임의 생성 금지 준수)**
+
+`hullIntegrity`·`maxDepth`·`sonarRange`는 base stat params도 소비 코드도 저장소에
+없다. `torpedoDamage`는 소비 후보(`EquipmentSystem.setUpgradeModifiers`)가 있으나
+production 조립에 배선되어 있지 않다. 승인된 `effectBonus`만 정의하고
+`paramRef`는 비워 두었다 — **기준값을 추정해 입력하지 않았다.** 기준값이 도착하면
+`paramRef` 한 줄 추가로 시뮬레이터 최종값 계산이 열린다(검증기가 미해석
+`paramRef`를 거부하므로 오타는 즉시 잡힌다).
+
 
 
 ### INT-RENDER-008 — [LOOP][ECON] Sprint A 조준 시각·성장 UI 배선·상태 요청 (검증 완료 코드 예시 포함)
