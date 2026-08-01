@@ -4,13 +4,16 @@
  * 확정 공식 [합연산 — 곱연산 스택 금지]:
  *    최종값 = 기준값 × (1 + 보정값들의 합)
  *
- * 이 모듈이 수식의 유일한 구현이다 — 업그레이드 시뮬레이터와 게임플레이
- * 런타임 배율 레이어가 같은 함수를 import 한다 (복제 금지). JSON import가
- * 없어 Node 검증 러너에서도 그대로 로드된다. 로드·핫리로드는
+ * 이 모듈은 **카탈로그(params/upgrades.json) 검증·단계 합산**을 담당한다.
+ * 수식 자체의 유일한 구현은 리드 소유 `src/meta/upgradeMath.ts`이며
+ * (PvE 1차 통합 결정 — 중복 구현 해소), 여기서는 위임만 한다.
+ * 시뮬레이터와 게임플레이 런타임 배율 레이어가 같은 계산을 공유한다.
+ * JSON import가 없어 Node 검증 러너에서도 그대로 로드된다. 로드·핫리로드는
  * upgradeCalculator.ts 담당.
  */
 
 import { ParamValidationError } from '../config/validateParams';
+import { effectiveValue } from '../meta/upgradeMath';
 
 const FILE = 'params/upgrades.json';
 
@@ -94,7 +97,15 @@ export function sumUpgradeBonuses(
   return sum;
 }
 
-/** 확정 공식의 유일한 구현 — 시뮬레이터·게임플레이 공용 (복제 금지) */
+/**
+ * 확정 공식 적용 — **계산 본체는 리드 소유 `src/meta/upgradeMath.ts`의
+ * `effectiveValue`** 하나뿐이다 (PvE 1차 통합에서 중복 구현 해소,
+ * INTEGRATION_NOTES '계약 이름 통합 결정' #2).
+ *
+ * 이 함수는 시뮬레이터·툴링 호출부의 이름을 유지하기 위한 위임 래퍼다.
+ * 여기에 수식을 다시 쓰지 말 것 — 보정 합 유효성 검사(-100% 이하 거부)도
+ * 리드 구현이 함께 수행한다.
+ */
 export function applyUpgradeBonus(baseValue: number, bonusSum: number): number {
-  return baseValue * (1 + bonusSum);
+  return effectiveValue(baseValue, bonusSum);
 }

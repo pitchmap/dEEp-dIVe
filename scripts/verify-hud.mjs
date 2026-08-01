@@ -94,7 +94,7 @@ results['조작 안내 초기 표시'] = (await q('.controls-guide'))?.hidden ==
 results['화면 버튼 초기 표시'] = (await q('.hud-buttons'))?.hidden === false;
 results['일시정지 오버레이 초기 숨김'] = (await q('.resume-overlay'))?.hidden === true;
 const guideText = (await q('.controls-guide'))?.text ?? '';
-results['안내에 8개 조작 포함'] = ['W / S', 'A / D', 'Shift / Ctrl', 'Space', '우클릭', '좌클릭', 'H', 'Esc'].every(
+results['안내에 8개 조작 포함'] = ['W / S', 'A / D', 'Ctrl / E · Shift', 'Space', '우클릭', '좌클릭', 'H', 'Esc'].every(
   (k) => guideText.includes(k),
 );
 results['발사 버튼 잔량 표시 (3발)'] = (await fireState())?.label.includes('3발');
@@ -127,15 +127,18 @@ results['발사 버튼 1클릭 → 요청 1회 (마우스 경로 0)'] =
 results['조준 없이 발사 → 불발(잔량 3발 유지)'] = fs.label.includes('3발') && !fs.disabled;
 results['첫 발사 요청 시각 기록'] = typeof m.firstFireRequestMs === 'number' && m.firstFireRequestMs > 0;
 
-// ── 5) Shift 상승 → 잠망경 도달 → 조준 토글
-await page.keyboard.down('Shift');
+// ── 5) Ctrl 상승 → 잠망경 도달 → 조준 토글
+// 입력 규칙 확정(PvE 1차 통합): Ctrl = 상승 / Shift = 하강 / E = 상승 병행 키.
+// 이 스크립트는 구 규칙(Shift 상승)으로 작성돼 있어 잠망경 심도에 도달하지
+// 못했다 — 검증 의도(심도 게이트 후 조준 토글)는 그대로 두고 키만 교정한다.
+await page.keyboard.down('Control');
 let aimed = false;
 for (let i = 0; i < 30 && !aimed; i++) {
   await sleep(500);
   await aimBtn.click();
   aimed = await aimActive();
 }
-await page.keyboard.up('Shift');
+await page.keyboard.up('Control');
 results['잠망경 심도 도달 → 조준 버튼 활성(aimModeChanged)'] = aimed === true;
 await aimBtn.click();
 results['조준 버튼 재클릭 → 해제(비활성)'] = (await aimActive()) === false;
