@@ -12,7 +12,7 @@
  *  ② SaveBridge — 리드 `saveRequested` → 툴링 `SaveStore` 기록/복원.
  *     저장 코드가 메타 상태 머신을 조작하지 않는다 (읽기 스냅샷만).
  *  ③ UpgradeState — 저장된 단계 → 공식 `UpgradeModifiers` → 유효 파라미터.
- *     계산은 리드 `meta/upgradeMath`, 카탈로그는 툴링 `tools/upgradeMath`.
+ *     계산은 리드 `meta/upgradeMath`, 카탈로그는 툴링 `tools/economyMath`.
  */
 
 import type {
@@ -271,7 +271,7 @@ function isUpgradeStatId(id: string): id is UpgradeStatId {
  * 영구 업그레이드 단계 보관 + 공식 보정 집합 산출.
  *
  * 계산식은 리드 `meta/upgradeMath`(단일 구현), 카탈로그 정의·상한은 툴링
- * `tools/upgradeMath`가 소유한다. 이 클래스는 둘을 잇기만 한다.
+ * `tools/economyMath`가 소유한다. 이 클래스는 둘을 잇기만 한다.
  * `params/*.json` 원본은 절대 수정하지 않는다 — 유효값은 파생 복사본이다.
  */
 export class UpgradeState implements UpgradeLevelsPort {
@@ -430,7 +430,10 @@ export interface EquipmentSystemFacade {
   unequipItem(slotIndex: number): GameplayTransactionResult;
 }
 
-/** 게임플레이 purchaseTypes.TransactionResult의 구조 단면 (직접 import 대신) */
+/**
+ * 게임플레이 `EquipmentSystem.EquipmentChangeResult`의 구조 단면
+ * (구현체 직접 import 대신 — 구 `systems/economy/purchaseTypes`는 삭제됨).
+ */
 export type GameplayTransactionResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly category: 'condition' | 'save'; readonly reason: string };
