@@ -355,6 +355,50 @@ EconomySystem — spawnId 기준 중복·회수 후 재생성 거부 (이중 방
   `null`(저장 없음)과 `[]`(명시적 전부 해제)를 **구분**한다 — 빈 배열에
   기본 어뢰를 되돌려 주면 '전부 해제'가 새로고침마다 무효가 된다.
 
+### 세력·식별·경비함 스폰 조립 (INT-CORE-012 — 스프린트 B **선행개발**)
+
+> B 범위표는 A 통합 PR 병합 시 발효된다(15차 결의 1). 아래는 발효 전
+> 선행개발분이며, A+B 최종 통합 브랜치 검증 전까지 B 완료로 보지 않는다.
+
+```
+게임플레이 유효 피해 적용 (판정 소유)
+      │  neutralShipHit { targetFaction, damageAmount, attackCorrelationId,
+      │                   firstValidNeutralHit, ... }
+      ▼
+NeutralIncidentBoundary ── GuardIncidentLedger (중복 방지 정본 1곳)
+      │  guardShipRequested v2 { requestId, correlationId, incidentPosition, ... }
+      ▼
+GuardSpawnBridge → GuardSpawnCoordinator (GuardSpawnPort)
+      │   ├─ 위치: GuardSpawnLocationStrategy (게임플레이·월드 소유, 미연결 =
+      │   │        noSpawnLocation — 임의 좌표 금지)
+      │   └─ AI : GuardShipAdapter → DestroyerAIFactory → **기존 DestroyerAI**
+      ▼                              (미연결 = spawnFailed — 대체 AI 금지)
+world entity registration (attachSpawnListener 훅)
+
+식별: 게임플레이 ShipIdentificationSource → (조립부 주입) → 렌더 조준경 태그
+격침 보상: 세력 → rewardDropTableIdFor → economy dropTables → 지갑
+           (neutral = null → 지갑 불변)
+```
+
+**통합 창이 연결할 API와 순서** (전부 조립부 1줄 배선):
+
+1. `guardSpawn.attachLocationStrategy(gameplay.guardSpawnLocations)` — 게임플레이
+   위치 전략 도착 시. 없으면 스폰은 `noSpawnLocation`으로 끝난다.
+2. `guardAdapter.attachFactory(destroyerAiFactory)` — 구축함 AI 구현(리드,
+   C 트랙) 도착 시. 없으면 `spawnFailed`.
+3. `guardSpawn.attachSpawnListener((handle) => …)` — 스폰된 개체의 표적
+   등록·렌더 표시 배선.
+4. `scene.attachIdentificationSource(gameplay.identifications)` — 그래픽스
+   조준경 태그 UI 도착 시(렌더는 이 모델만 소비).
+
+등록 순서는 경제 브리지(②-a) → 사건 경계 → 스폰 브리지 → 어댑터(③ AI 그룹)다.
+중복 방지 저장소는 `GuardIncidentLedger` **하나**이며, 게임플레이 시스템
+내부에 같은 목적의 표를 만들지 않는다 (원장은 출항 경계에서 리셋).
+
+**신규 AI 금지 구조:** 어댑터는 주입과 수명주기 전달만 한다. 경비 전용
+추적 상태 머신·공격 루틴·탐지·폭뢰는 만들지 않는다(탐지·폭뢰·내구도·침수는
+스프린트 C 범위). 정적 검사가 경비 관련 파일이 어댑터·계약 2개뿐임을 확인한다.
+
 ## 게임 상태 전환과 장면 전환의 분리
 
 - **게임 상태(국면)** — `GameStateMachine`이 소유. 전환은 허용표 검증 후
