@@ -91,7 +91,7 @@ export interface DetectionSystem extends Updatable {
  *  - 입력 어댑터와 이 시스템의 연결은 composition root(core/Game.composeSystems)
  *    에서만 잇는다 — UI·입력 코드가 게임플레이 구현체를 직접 import하지 않는다.
  *  - **조준은 전 심도에서 가능하며, 조준이 잠수함의 심도·위치를 바꾸지 않는다**
- *    [7차 결의 1 — 구 '잠망경 심도 전용·자동 부상' 규칙은 폐기, 재도입 금지].
+ *    [7차 결의 1 — 구 '전 심도 허용 [7차 결의 1 — 구 심도 제한 규칙 폐기·재도입 금지]·자동 부상' 규칙은 폐기, 재도입 금지].
  *  - 조준 뷰 카메라(선수 발사관 시점)는 렌더가 aimModeChanged 구독 +
  *    TorpedoTubeSocketSource 소비로 처리한다.
  * 구현은 게임플레이 소유. 수동 조준 + 리드샷 보조선이 기본 [확정].

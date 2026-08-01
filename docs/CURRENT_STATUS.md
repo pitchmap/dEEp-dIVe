@@ -109,7 +109,7 @@
     - **[LOOP] 상위 메타 루프·업그레이드 배율 레이어 (INT-CORE-007)** — `src/meta/` 신규: MetaLoop(BASE→SORTIE_PREP→SORTIE→DEBRIEF, 하위 무수정 포장·통신 3종 제한), settlement(파괴 시 크레딧 손실·희귀 즉시 확정), upgradeMath(합연산 순수 함수 — params 불변, 툴 공용), provisionalEconomy(⚠ R7 손실률 50% 임시 — economy.json 이관 대기), 결정적 검증 19항목. Game 조립: metaLoop 최선두 등록, 세션 시작(BOOT→DEPARTURE)을 SortieSessionPort 어댑터로 이동 — 기지 화면 도입 전 임시 자동 출항
     - **DECISIONS.md 개정** — PvE 결정 P1~P16 표 신설(1차 결의 1·4 개정·신 스코프 가드), 폐기 표 정리(영구 성장 금지 → P2 대체). FILE_OWNERSHIP: src/meta(리드, save/는 툴링)·systems/economy(게임플레이)·params 확장(기획)
   - **스프린트 A 리드 창 (창 1 — 계약 생산자, 회의 12~14 반영):**
-    - **선행 계약 (INT-CORE-008, 커밋 `2542c7b`)** — TorpedoTubeSocketSource(앵커·2소켓, 십자선=탄도, 오프셋 단일 지점)·FineAimSource·AimingParams 4종(양수 크기, aimReturnBehavior 없음)·구매 불가 5종·TransactionResult·판정/지갑/단계/저장 포트·EquipmentChangeRequest·BaseScreenPort·saveRequested sortieLaunch. **AimSystem 계약에서 '잠망경 심도 전용' 폐기 규칙 삭제**(전 심도·심도 불변·해제 reset). conventions에 공용 클램프·aimForwardDirection
+    - **선행 계약 (INT-CORE-008, 커밋 `2542c7b`)** — TorpedoTubeSocketSource(앵커·2소켓, 십자선=탄도, 오프셋 단일 지점)·FineAimSource·AimingParams 4종(양수 크기, aimReturnBehavior 없음)·구매 불가 5종·TransactionResult·판정/지갑/단계/저장 포트·EquipmentChangeRequest·BaseScreenPort·saveRequested sortieLaunch. **AimSystem 계약에서 '전 심도 조준(구 심도 전용 규칙 폐기)' 폐기 규칙 삭제**(전 심도·심도 불변·해제 reset). conventions에 공용 클램프·aimForwardDirection
     - **구현 (INT-CORE-009)** — world/torpedoTubeAnchor(안전 오프셋 0.55 단일 정의)·core/TorpedoTubeSocketRig·meta/PurchaseTransaction·EquipmentTransaction(스냅샷→재검증→차감→적용→저장→commit/rollback, 예외 무전파)·MetaLoop WalletTransactionPort+출항 직전 저장·UpgradeState UpgradeLevelsPort. Game 조립: tubeSockets rig 배선. 결정적 검증 **35/35**(트랜잭션·소켓·클램프 16항목 신규)
 - **진행 중:** 없음
 - **다음 작업:** ① 게임플레이(조준 재작성·판정 포트) 병합 후 트랜잭션·BaseScreenPort·attachFineAimSource 실배선 (INT-CORE-009 스니펫) ② 병합 순서 리드→게임플레이→그래픽스→툴링, dev 통합 빌드에서 A1~A8 판정 ③ 보스 AI는 스프린트 C(C1~C9) 통과 후 본개발 — 스프린트 B·C·어뢰 캠은 착수 금지 상태(14차 결의 1)
@@ -137,7 +137,7 @@
 - **완료:**
   - D3~D5 조작·심도 (D+5 통합 반영) — WASD·관성·심도·`KeyboardInput`·`GameplaySystems`(GameSystem 수명주기)
   - **D+5 리뷰 스프린트 '이동·충돌' (통합 순서 [2])** — ① W 전진 / **S 후진**(상한 = 전진의 50%, `speed`는 부호 있는 전후 속도 — 프로펠러 S7 소비용) ② **Shift/Ctrl 연속 상승·하강**(수직 최고 속력 = 전진의 50%, 키 해제 시 관성 감속) ③ 수면 상한(+12.5)·해저 하한(-5) 이탈 방지 ④ 높이 기반 **심도 3구간 판정**(`LayeredDepthSystem` — 잠망경 ≥8 / 순항 ≥-2 / 심해, `depthChanged` 유지, `requestAscend/Descend` 계약은 프로그래매틱 층 이동으로 존치) ⑤ **정적 충돌**(`src/systems/collision/` — 구·AABB 조합, 선체 = 구 3개 캡슐 근사, 통과 방지·밀어내기만, 피해 없음, 반복 해석으로 끼임·떨림 방지) + 시작 지역 임시 레이아웃(CanyonScene 미러)
-  - **어뢰 전투 (통합 순서 [5], INT-CORE-002 계약 소비)** — ① 조준 시스템(계약 `AimSystem` 구현): beginAim/endAim/fireTorpedo **공용 진입점**, `aimModeChanged` 발행(중복 없음), 자동 락온 없음 ② `StraightRunTorpedoSystem`(계약 `TorpedoSystem` 구현): 선수 발사 지점 생성, 직선 주행, 최대 사거리 초과 제거, 함선(박스)·환경(3D, collision 공유 집합) 명중 시 1회만 처리, `torpedoFired` 발행, 재장전·보유량 = combat.json ③ `MouseCombatInput`: 우클릭 조준·좌클릭 발사(에지 1회=1발), blur·탭 전환 시 해제, 컨텍스트 메뉴 방지 ④ `TargetRegistry`: 표적 위치·속도·hitRadius + `onTorpedoHit`(1회 보장) — 리드샷 보조선 데이터 연결점 ※ 당시의 '잠망경 심도 전용 조준'은 7차 개정판으로 **폐기**됨 (아래 스프린트 A 항목 참조)
+  - **어뢰 전투 (통합 순서 [5], INT-CORE-002 계약 소비)** — ① 조준 시스템(계약 `AimSystem` 구현): beginAim/endAim/fireTorpedo **공용 진입점**, `aimModeChanged` 발행(중복 없음), 자동 락온 없음 ② `StraightRunTorpedoSystem`(계약 `TorpedoSystem` 구현): 선수 발사 지점 생성, 직선 주행, 최대 사거리 초과 제거, 함선(박스)·환경(3D, collision 공유 집합) 명중 시 1회만 처리, `torpedoFired` 발행, 재장전·보유량 = combat.json ③ `MouseCombatInput`: 우클릭 조준·좌클릭 발사(에지 1회=1발), blur·탭 전환 시 해제, 컨텍스트 메뉴 방지 ④ `TargetRegistry`: 표적 위치·속도·hitRadius + `onTorpedoHit`(1회 보장) — 리드샷 보조선 데이터 연결점 ※ 당시의 '전 심도 조준(구 심도 전용 규칙 폐기) 조준'은 7차 개정판으로 **폐기**됨 (아래 스프린트 A 항목 참조)
   - **화물선 + 상태 계약 적용 (INT-CORE-003 계약 소비)** — ① `SubmarinePlayerController`가 `SubmarinePoseSource` 계약 구현: `positionY`·부호 있는 `forwardSpeedMetersPerSecond`(+선수/−선미) 제공, 계약 `speed`는 비부호 크기로 정정 — `poseSource`는 계약 타입으로 노출 ② `CargoShipSystem`(계약 `CargoShipStateSource`·`CombatTarget` 구현): 1척, 해수면 흘수선 유지, 직선 왕복(끝점 반전 잔여 이월 — dt 불변), TargetRegistry 등록, 첫 명중에서 `torpedoHit {targetId,x,z}` 1회 발행 + 표적 즉시 해제(중복 침몰 불가) + hit 고정, sinkProgress 0→1(시간축 게임플레이 소유) 후 removed=true, dispose 시 등록·참조 정리 ③ `TargetRegistry` id를 계약 체계(number)로 정렬
   - **공유 CanyonLayout 소비 (INT-CORE-004 적용)** — ① `collision/startingArea.ts` 자체 좌표·높이 수식 미러 **삭제** → 주입받은 `CanyonLayout.blocks` 순회로 충돌체 생성(블록 1개 = AABB 1개, 회전은 외접 근사 — 소비측 규칙 유지), `blockToColliderBounds` 검증 헬퍼 제공 ② `provisionalWorld.ts`의 중복 해수면 값 삭제, 잠수함 수직 상한/하한을 `layout.seaSurfaceY ± 선체 반경`에서 **파생** ③ `CargoShipSystem` 흘수선 = `layout.seaSurfaceY` ④ `GameplaySystems`가 레이아웃 주입 지원(기본 `STARTING_CANYON_LAYOUT`, 스폰 = `layout.submarineSpawn`) + `layout` 읽기 전용 노출 ⑤ 결정적 검증 75항목(75/75 — 기존 71 유지 + 블록↔충돌체 수·경계 정합, 상한 파생, 화물선 흘수선 정합 4)
   - **스프린트 A — 창 2(게임플레이) 범위 (`[LOOP]`·`[ECON]`)**
@@ -187,7 +187,7 @@
 - **완료(추가 4):** 입력 모드 2원화 + 실브라우저 최종 검증 — 게임플레이 `c46c937`(공유 CanyonLayout 소비, `gameplay.layout` 노출) 병합. **발견 문제**: Esc로 Pointer Lock 해제 시 무조건 일시정지+전체 오버레이여서 '화면 버튼 방식으로 계속' 경로가 없었음(잠금 상태에선 커서가 없어 DOM 버튼 클릭 자체가 불가 — 버튼 모드가 사실상 차단). **수정(최소 변경)**: 일시정지 오버레이에 '마우스 모드로 계속(잠금 재진입)' / '화면 버튼으로 계속(잠금 없음 — resumeWithoutLock)' 선택 버튼 추가. '조준 버튼 = 잠금 진입 겸용' 해석은 모드 선택 목표 우선으로 폐기(INT-TOOL-005, 리드 확인 대기). 검증: HUD 33/33 + 시나리오 A(마우스)/B(화면 버튼)/C(모드 전환·상태 공유·잔탄 0 비활성) 20/20 + 결정적 검증 75/75, 스크린샷 4장
 - **완료(PvE 전환 — 회의록 10·11 위임분):** ① **세이브 시스템** `src/meta/save/` — schemaVersion(v1)·이중 슬롯(current+직전 정상 backup)·버전별 마이그레이션 틀·복구 경로(current 손상→백업→안전 초기 상태, 전 경로 부팅 불차단)·체크섬/암호화 없음 [확정], 저장 범위 = 크레딧·희귀 부품·업그레이드 단계·장착 장비·진행·안내 플래그, 문서 `docs/SAVE_SYSTEM.md` ② **업그레이드 시뮬레이터** — `params/upgrades.json`(7항목, R-P2 임시값 선진행) + 공용 순수 계산기 `src/tools/upgradeMath.ts`(합연산: 최종값 = 기준값 × (1+보정 합) — 시뮬레이터·게임플레이 공용, 복제 금지) + 개발 오버레이 패널(단계 선택·기준값(paramRef 해석/수동 입력)·보정 합·최종값 표시·JSON 복사, params 원본 불변, 핫리로드) ③ **신 스코프 가드** `scripts/check-scope-guard.mjs` — 업그레이드 ≤7·장비 ≤4·보스 ≤1·해역 ≤1, 기본 경고/CI --strict 실패 + 로더 차원 8개 거부 ④ **Keyboard Lock** `src/tools/KeyboardLockManager.ts` — 크로미움 전체화면에서 lock 요청(Ctrl/W/Shift), 미지원(파이어폭스)·거부 전부 무예외 폴백, 창 모드·미지원 시 병행 키 E 1회 안내(세이브 영속 플래그), Ctrl+W 차단 비보장 전제 ⑤ **오디오 배관** — `AudioCueRouter`(조준경 진입·해제음 aimModeChanged 구독 완료, 크레딧·희귀 부품·기지 전환 큐는 이벤트 계약 제안 대기), WebAudioSystem 음악 버스·침묵 전환 배관(호출 판정은 보스 상태 머신 소유) ⑥ **검증** — `verify:tooling` 26항목(세이브 10·업그레이드 5·가드 3·KeyboardLock 5·오디오 2+미지원 1), HUD 33항목 러너 저장소 반입(`scripts/verify-hud.mjs` — 스크래치패드 의존 해소), CI에 스코프 가드·결정적 검증 단계 추가
 - **완료(스프린트 A — 창 4 범위, 회의 14 결의 2):** ① **`params/aiming.json` + 검증기** — yaw 15 / 상향 10 / 하향 15 / 감도 0.5, 상·하향 모두 양수 크기 저장(부호는 `aimingMath.pitchLimitsDegrees()` 단일 지점에서만 적용 — 이중 부호 오류 차단), 음수·0·범위 밖·`aimReturnBehavior` 전부 로드 거부(보완분 결의 8·9). 카메라·게임플레이 공용 로더 `src/tools/aimingParams.ts` ② **공식 경제·장비 params 구조** — upgrades.json을 단계 배열 구조(단계 상한·단계별 가격·희귀 부품·효과 배율)로 전환, equipment.json 신설(4종 가격·희귀 부품·슬롯). 검증기 `economyMath`가 7항목·4종 초과·음수 가격·미존재 paramRef·단계 배열 누락·계약 밖 id를 거부. **수치는 전부 null = 기획 경제 수치표 미도착 — 임의 값 발명 없음** ③ **계산 정본 일원화** — 툴링 중복 `upgradeMath` 삭제, 시뮬레이터가 리드 `src/meta/upgradeMath.ts` 직접 사용(INT-CORE-007 이행). 시뮬레이터에 총비용·'보스까지 출항 4~6회' 판정 추가(미확정 시 판정 보류) ④ **저장 실패 주입 어댑터** `FaultInjectingStorage`(쓰기·백업 쓰기·quota 유사·직렬화 4종, 프로덕션 경로 미경유) + **원자적 변경·저장** `atomicSave`(스냅샷→변경→저장→실패 시 전부 롤백, `saveFailed`/`rejected` 타입 분리, 고정 안내 문구·내부 예외 비노출) ⑤ **스프린트 A 러너** `npm run verify:sprint-a` — A1~A8 + A5-T1~T6 + 문서 회귀(§8) 자동 판정 24항목, 타 창 병합 대기 항목 5건은 '수동 확인' 구역으로 분리 출력(가짜 초록불 금지) ⑥ 저장 시점 5종 개정 문서화(`docs/SAVE_SYSTEM.md`), 인수 기준 문서 `docs/SPRINT_A_ACCEPTANCE.md` 신설
-- **차단 문제(A 통과 불가 2건 — 툴링 소유 밖):** ① **§8 문서 회귀 7건** — '잠망경 심도 전용/에서만'이 게임플레이 코드 2곳(`PeriscopeAimSystem.ts:9`, `verifyGameplay.ts:670`)과 상태 문서 5곳(CURRENT_STATUS 게임플레이 구역, PROJECT_STATE ×2, NEXT_SPRINT, D10_INTEGRATION_CHECKLIST)에 잔존. 7차 결의 1-⑦ 미이행 → 해당 창이 제거해야 A 통과 ② **A8 이관 미완** — 미확정 필드 114개(기획 경제 수치표 PvE D+3 미도착), 잔여 provisional 2건(`src/meta/provisionalEconomy.ts`·`src/systems/provisionalCargo.ts`). 상세: INTEGRATION_NOTES INT-TOOL-008
+- **차단 문제(A 통과 불가 2건 — 툴링 소유 밖):** ① **§8 문서 회귀 7건** — '전 심도 조준(구 심도 전용 규칙 폐기)/에서만'이 게임플레이 코드 2곳(`PeriscopeAimSystem.ts:9`, `verifyGameplay.ts:670`)과 상태 문서 5곳(CURRENT_STATUS 게임플레이 구역, PROJECT_STATE ×2, NEXT_SPRINT, D10_INTEGRATION_CHECKLIST)에 잔존. 7차 결의 1-⑦ 미이행 → 해당 창이 제거해야 A 통과 ② **A8 이관 미완** — 미확정 필드 114개(기획 경제 수치표 PvE D+3 미도착), 잔여 provisional 2건(`src/meta/provisionalEconomy.ts`·`src/systems/provisionalCargo.ts`). 상세: INTEGRATION_NOTES INT-TOOL-008
 - **마지막 업데이트:** 스프린트 A 창 4 산출 완료 (aiming params·경제 validator·저장 실패 주입·A1~A8 러너·문서 회귀 확인). 리드 계약 `187536e` 병합 기준
 - **담당 브랜치:** `claude/deep-dive-tooling-phase-0-cj6c49` (`feat/tooling`의 세션 사본)
 
@@ -268,3 +268,23 @@
 - **수동 확인 필요 (자동화 환경 한계):** ① 실물 키보드 Esc의 Pointer Lock 해제 (자동화는 `exitPointerLock()` 동일 경로로 검증 — 브라우저 예약 동작이라 실기기에서 사실상 보장) ② 실기기 60fps(G1 — 헤드리스 SW 렌더 FPS는 참고치) ③ GitHub Pages 배포 URL(관리자 설정 대기)
 - **남은 버그:** 발견 0건 (콘솔 오류 0)
 - **백로그:** NEXT_SPRINT §3 유지 + INT-GAME-004·006·007 수치 이관(R7 임시값 표기), 격침 보상 +1 배선, ui.json 기획 통보
+
+---
+
+## 스프린트 A 통합 결과 (통합 관리자 창)
+
+> 상세: `docs/SPRINT_A_INTEGRATION_MANIFEST.md` · 판정: `docs/SPRINT_A_ACCEPTANCE.md`
+
+- **병합(전부 `--no-ff` tip merge, 이력 보존):** dev(`c5987a2`) → 리드(`c3c9cb9`)
+  → 게임플레이(`f61b1e8`) → 그래픽스(`51ad7c7`) → 빌드·툴(`946692b`)
+- **정규화:** 발사관 소켓 단일화(정본 `world/torpedoTubeAnchor` +
+  `core/TorpedoTubeSocketRig` — 게임플레이·렌더 자체 정의 삭제, 생성 거리
+  4.35 m/3.35 m 불일치 해소) · 구매 트랜잭션 단일화(리드 정본, 게임플레이는
+  판정 포트로 축소·저장소 미접근) · 렌더 조준 카메라의 소켓 소비 전환
+- **최소 수정:** `PurchaseTransaction` 롤백을 지갑·단계 독립 복원으로 분리,
+  `UpgradeState`를 공식 경제 카탈로그 소비로 전환(null은 보정 미생성)
+- **문서 회귀:** 구 '심도 전용 조준'·'자동 부상' 표현 **위반 0** (회의록 제외)
+- **회귀:** typecheck·build·size(4.3%)·scope 통과, gameplay 128/128 ·
+  meta 35/35 · tooling 26/26 · HUD 34/34
+- **차단:** A8 미확정 114필드(기획 경제 수치표 대기) · 툴링 교차 승인 대기 ·
+  구매/장비 UI(BaseScreenPort) 배선 미완 → **dev PR 금지, B 발효 불가**

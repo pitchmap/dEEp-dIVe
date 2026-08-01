@@ -109,13 +109,13 @@
 `npm run verify:sprint-a`의 자동 판정이 현재 **2건 실패**다. 둘 다 툴링 창이
 고칠 수 없는(소유 밖) 대상이므로 해당 창에 제거를 요청한다:
 
-1. **§8 문서 회귀 7건** — 7차 결의 1-⑦('잠망경 심도 전용'을 전 문서에서 삭제,
+1. **§8 문서 회귀 7건** — 7차 결의 1-⑦('전 심도 조준(구 심도 전용 규칙 폐기)'을 전 문서에서 삭제,
    코드-문서 동시 갱신)의 미이행분. 회의록 원문 2건은 역사 기록으로 자동 분류·제외됨.
 
    | 위치 | 소유 |
    |---|---|
-   | `src/systems/PeriscopeAimSystem.ts:9` "잠망경 심도에서만" | 게임플레이 |
-   | `src/systems/__verification__/verifyGameplay.ts:670` "잠망경 심도 전용" | 게임플레이 |
+   | `src/systems/PeriscopeAimSystem.ts:9` "전 심도에서(구 규칙 폐기)" | 게임플레이 |
+   | `src/systems/__verification__/verifyGameplay.ts:670` "전 심도 조준(구 심도 전용 규칙 폐기)" | 게임플레이 |
    | `docs/CURRENT_STATUS.md:94` (게임플레이 구역) | 게임플레이 |
    | `docs/PROJECT_STATE.md:138·167` | 통합 관리자 |
    | `docs/NEXT_SPRINT.md:25` | 통합 관리자 |
@@ -240,7 +240,7 @@ Game.ts 주석의 예정 사항 그대로). 검증 결과: 실지갑(세이브 �
 
 - **게임플레이 창**: ① 조준 재작성 — 전 심도 허용·자동 부상 제거·조준 중 기동, `FineAimSource` 구현(로컬 yaw/pitch, 클램프는 `conventions.clampAimYaw/PitchRadians`만, 해제 시 0 reset). `PeriscopeAimSystem`의 잠망경 조건·이름 정리(파일 소유권 게임플레이 — 리드는 수정하지 않았음) ② 어뢰 생성 — `tubeSockets.torpedoSpawnSocket` 소비(위치+전방 3D), 자체 `SPAWN_OFFSET_METERS`·`bowDirectionXZ` 방향 계산 삭제 ③ `UpgradePurchaseJudgePort`·`EquipmentChangeJudgePort` 구현(불가 사유 5종 산출 — 가격·상한은 params/경제 수치표) ④ 세션 리셋에 조준 미세각 0 포함
 - **그래픽스 창**: ① 조준 카메라 — `tubeSockets.aimCameraSocket` 소비(자체 오프셋 계산 금지), 자기 선체 제외는 조준 카메라 레이어 마스크 한정 ② 기지·구매·장비 UI는 `BaseScreenPort`만 소비(MetaLoop·지갑 직접 접근 금지), 불가 사유 5종 + 저장 실패 문구 구분 표시(내부 예외 비노출)
-- **툴링 창**: ① `params/aiming.json` + validator + `GameParams.aiming` 편입(계약: contracts/params.ts `AimingParams` — 양수 크기 검증, `aimReturnBehavior` 키 거부) ② SavePort 어댑터: `{ save: () => { saveBridge.writeSnapshot(); return saveBridge.lastSaveSucceeded; } }` ③ 저장 실패 강제 테스트 저장소로 A5-T1~T6 검증(트랜잭션 계약 테스트 16항목은 `npm run verify:meta`에 이미 포함) ④ '잠망경 심도 전용' 문서 제거 확인 — 잔존 위치: `src/systems/PeriscopeAimSystem.ts`·`verifyGameplay.ts`(게임플레이 창 수정분), PROJECT_STATE.md(통합 담당)
+- **툴링 창**: ① `params/aiming.json` + validator + `GameParams.aiming` 편입(계약: contracts/params.ts `AimingParams` — 양수 크기 검증, `aimReturnBehavior` 키 거부) ② SavePort 어댑터: `{ save: () => { saveBridge.writeSnapshot(); return saveBridge.lastSaveSucceeded; } }` ③ 저장 실패 강제 테스트 저장소로 A5-T1~T6 검증(트랜잭션 계약 테스트 16항목은 `npm run verify:meta`에 이미 포함) ④ '전 심도 조준(구 심도 전용 규칙 폐기)' 문서 제거 확인 — 잔존 위치: `src/systems/PeriscopeAimSystem.ts`·`verifyGameplay.ts`(게임플레이 창 수정분), PROJECT_STATE.md(통합 담당)
 - **통합 창 (리드 병합 시 배선 스니펫 — 게임플레이 판정 포트 병합 후 composeSystems에 추가):**
 
 ```ts
@@ -265,7 +265,7 @@ const baseScreen: BaseScreenPort = {
 |---|---|
 | 요청자 | 개발 리드 (14차 소회의 창 1 — 계약 생산자. 근거: 7차 대회의 결의 1~9 + 13차 소회의 결의 2·3·4·7·8·9) |
 | 대상 시스템 | `src/contracts/systems.ts`(AimSystem 개정 + FineAimSource·SocketPose·TorpedoTubeSocketSource), `src/contracts/params.ts`(AimingParams), `src/contracts/meta.ts`(PurchaseDenialReason 5종·TransactionResult·판정/지갑/단계/저장 포트·EquipmentChangeRequest·BaseScreenPort), `src/contracts/events.ts`(saveRequested cause + sortieLaunch), `src/core/conventions.ts`(clampAimYaw/PitchRadians·aimForwardDirection) |
-| 필요한 변경 | ① **폐기 규칙 제거**: AimSystem 계약에서 '잠망경 심도 전용' 문구 삭제 — 전 심도 조준·심도 불변·해제 시 미세각 reset으로 개정 (재도입 금지 명문화) ② 소켓 2구조: torpedoTubeAnchor → aimCameraSocket(정위치)·torpedoSpawnSocket(+고정 안전 오프셋, 정의 단일 지점) — 동일 좌표계·동일 전방축, 십자선=탄도, 시스템별 오프셋 계산 금지, Three.js 비노출 ③ 미세 조준: AimingParams 4종(양수 크기 규칙, aimReturnBehavior 없음) + 공용 클램프·전방 벡터 함수(카메라·조준·테스트 동일 함수) ④ 구매 불가 5종·트랜잭션 결과 3종(저장 실패는 별도 status — 내부 예외 UI 비노출) ⑤ 원자적 구매·장비 트랜잭션 포트(스냅샷→재검증→차감→적용→저장→commit/rollback — 틀=리드/내용=게임플레이) ⑥ 저장 시점 5종: 이벤트 3(settlement·rarePart·**sortieLaunch 신설**) + 트랜잭션 직접 저장 2(구매·장비 — 중복 이벤트 금지) ⑦ 기지 화면 BaseScreenPort(UI의 유일 진입점) |
+| 필요한 변경 | ① **폐기 규칙 제거**: AimSystem 계약에서 '전 심도 조준(구 심도 전용 규칙 폐기)' 문구 삭제 — 전 심도 조준·심도 불변·해제 시 미세각 reset으로 개정 (재도입 금지 명문화) ② 소켓 2구조: torpedoTubeAnchor → aimCameraSocket(정위치)·torpedoSpawnSocket(+고정 안전 오프셋, 정의 단일 지점) — 동일 좌표계·동일 전방축, 십자선=탄도, 시스템별 오프셋 계산 금지, Three.js 비노출 ③ 미세 조준: AimingParams 4종(양수 크기 규칙, aimReturnBehavior 없음) + 공용 클램프·전방 벡터 함수(카메라·조준·테스트 동일 함수) ④ 구매 불가 5종·트랜잭션 결과 3종(저장 실패는 별도 status — 내부 예외 UI 비노출) ⑤ 원자적 구매·장비 트랜잭션 포트(스냅샷→재검증→차감→적용→저장→commit/rollback — 틀=리드/내용=게임플레이) ⑥ 저장 시점 5종: 이벤트 3(settlement·rarePart·**sortieLaunch 신설**) + 트랜잭션 직접 저장 2(구매·장비 — 중복 이벤트 금지) ⑦ 기지 화면 BaseScreenPort(UI의 유일 진입점) |
 | 변경 이유 | 스프린트 A 4개 창(게임플레이 조준·판정 / 그래픽스 조준 카메라·UI / 툴링 aiming.json·저장 테스트)이 전부 이 계약의 소비자 — 선행 확정 없이는 각 창이 임시 인터페이스·개별 오프셋을 만들게 됨 (7차 결의 1-① 금지 조항) |
 | 관련 게이트 | A1~A8 전부 (특히 A3 십자선=탄도, A5 트랜잭션, A7 저장 유지) |
 | 영향을 받는 파일 | 계약 4파일 + conventions + INTERFACES.md. 소비: 게임플레이(조준 재작성·판정 포트 구현), 그래픽스(소켓 소비 카메라·UI), 툴링(aiming.json+validator+GameParams.aiming 편입·SavePort 어댑터·A5-T 테스트) |
