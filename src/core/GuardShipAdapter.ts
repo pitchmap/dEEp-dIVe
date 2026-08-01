@@ -24,6 +24,7 @@ import type { DestroyerAI } from '../contracts/systems';
 import type {
   DestroyerAIFactory,
   GuardShipAdapterConfig,
+  GuardSpawnLocation,
   GuardSpawnReason,
 } from '../contracts/guard';
 import type { FactionId } from '../contracts/faction';
@@ -32,11 +33,19 @@ import type { GameSystem, SystemContext } from './GameSystem';
 /** 스폰된 경비함 1척 — AI는 기존 구현, 나머지는 주입된 메타데이터다 */
 export interface GuardShipHandle {
   readonly requestId: string;
+  /** 스폰된 개체의 엔티티 id — 월드 등록·렌더 매칭의 키 */
+  readonly entityId: number;
   readonly faction: FactionId;
   readonly spawnReason: GuardSpawnReason;
   readonly initialTargetEntityId: number;
   readonly displayLabelId: string;
-  /** 기존 구축함 AI 인스턴스 — 어댑터는 이 객체의 판단에 개입하지 않는다 */
+  /**
+   * 실제 스폰 위치 — 위치 전략이 결정한 값 그대로 (계약 타입 재사용).
+   * 렌더의 등장 방향 표시가 **실재하는 경비함**을 가리키기 위해 필요하다
+   * (추정 좌표 금지 — INT-RENDER-011 요청 승인).
+   */
+  readonly spawnPosition: GuardSpawnLocation;
+  /** 범용 구축함 AI 인스턴스 — 어댑터는 이 객체의 판단에 개입하지 않는다 */
   readonly ai: DestroyerAI;
 }
 
@@ -77,14 +86,16 @@ export class GuardShipAdapter implements GameSystem {
   spawn(requestId: string, config: GuardShipAdapterConfig): GuardShipHandle | null {
     if (!this.factory) return null;
 
-    let ai: DestroyerAI;
+    let ai: DestroyerAI | null;
     try {
       ai = this.factory.create(config);
     } catch (error) {
       // 내부 예외 문자열은 밖으로 흘리지 않는다 — 개발 로그에만 남긴다.
-      console.error('[GuardShipAdapter] 기존 구축함 AI 생성 실패 — 스폰 취소', error);
+      console.error('[GuardShipAdapter] 범용 구축함 AI 생성 실패 — 스폰 취소', error);
       return null;
     }
+    // 이동 포트 미연결 등으로 팩토리가 만들지 못하면 스폰하지 않는다.
+    if (!ai) return null;
 
     // 초기 표적 주입: 기존 AI의 공식 진입점만 사용한다 (전용 추적 상태 없음).
     try {
@@ -99,10 +110,12 @@ export class GuardShipAdapter implements GameSystem {
 
     const handle: GuardShipHandle = {
       requestId,
+      entityId: config.entityId,
       faction: config.faction,
       spawnReason: config.spawnReason,
       initialTargetEntityId: config.initialTargetEntityId,
       displayLabelId: config.displayLabelId,
+      spawnPosition: config.spawnPosition,
       ai,
     };
     this.ships.push(handle);

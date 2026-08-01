@@ -1015,6 +1015,8 @@ export class GuardSpawnCoordinator implements GuardSpawnPort {
   private readonly adapter: GuardShipAdapter;
   private locationStrategy: GuardSpawnLocationStrategy | null;
   private onSpawned: ((handle: GuardShipHandle) => void) | null = null;
+  /** 경비함 엔티티 id 구간 — 화물선(소수)·salvage(9000+)와 겹치지 않는 구조 상수 */
+  private nextEntityId = GUARD_ENTITY_ID_BASE;
 
   constructor(
     ledger: GuardIncidentLedger,
@@ -1043,7 +1045,9 @@ export class GuardSpawnCoordinator implements GuardSpawnPort {
     const location = this.locationStrategy?.resolve(request) ?? null;
     if (!location) return 'noSpawnLocation';
 
+    const entityId = this.nextEntityId;
     const handle = this.adapter.spawn(request.requestId, {
+      entityId,
       faction: request.requestedFaction,
       spawnReason: request.spawnReason,
       initialTargetEntityId: request.attackerEntityId,
@@ -1052,6 +1056,8 @@ export class GuardSpawnCoordinator implements GuardSpawnPort {
       displayLabelId: factionRule(request.requestedFaction).displayLabelId,
     });
     if (!handle) return 'spawnFailed';
+    // id는 실제 스폰이 성사된 뒤에만 소비한다 (실패한 요청이 id를 태우지 않게).
+    this.nextEntityId += 1;
 
     try {
       this.onSpawned?.(handle);
@@ -1061,6 +1067,9 @@ export class GuardSpawnCoordinator implements GuardSpawnPort {
     return 'spawned';
   }
 }
+
+/** 경비함 엔티티 id 시작값 — 밸런스가 아니라 id 공간 구획(구조 상수) */
+const GUARD_ENTITY_ID_BASE = 8000;
 
 function isValidGuardRequest(request: GuardShipRequestPayload): boolean {
   if (!request.requestId || !request.correlationId) return false;
