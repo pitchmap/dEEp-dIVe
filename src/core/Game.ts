@@ -17,6 +17,8 @@ import { ControlsHud } from '../ui/ControlsHud';
 import { GateMetricRecorder } from '../tools/GateMetricRecorder';
 import { LoadingTimer } from '../tools/LoadingTimer';
 import { STARTING_CANYON_LAYOUT } from '../world/startingCanyonLayout';
+import { MetaLoop } from '../meta/MetaLoop';
+import { PROVISIONAL_CREDIT_LOSS_ON_DESTROYED_RATIO } from '../meta/provisionalEconomy';
 import { EventBus } from './EventBus';
 import { GameLoop } from './GameLoop';
 import { GameStateMachine } from './GameStateMachine';
@@ -43,6 +45,7 @@ export class Game {
   private recorder: GateMetricRecorder | null = null;
   private overlay: PerformanceOverlay | null = null;
   private controlsHud: ControlsHud | null = null;
+  private metaLoop: MetaLoop | null = null;
 
   // 성능 샘플링 상태
   private frameCount = 0;
@@ -112,6 +115,7 @@ export class Game {
         torpedo: gameplay.torpedo,
         layout: gameplay.layout,
         camera: this.renderer.camera,
+        meta: this.metaLoop,
       };
     }
 
@@ -132,7 +136,9 @@ export class Game {
    *  - params 외 의존성(렌더러·장면 등)은 이 지점에서 생성자 주입한다.
    *  - src/core는 공통 보호 파일 — 등록 추가는 feat→dev 병합 시 리드가 배선한다.
    *
-   * D+5 배선 (INT-GAME-002·INT-RENDER-001 승인 반영):
+   * 현재 배선 (INT-GAME-002·INT-RENDER-001·INT-CORE-006·007 반영):
+   *  ⓪ metaLoop    — 상위 메타 루프 (기지→출항→정산, 리드 — 하위 세션은
+   *                  SortieSessionPort 어댑터 경유만)
    *  ① gameplay    — WASD 이동·관성, Shift/Ctrl 심도 3층 (입력·조작)
    *  ② cameraInput — 마우스 궤도 회전·Space 리센터 (렌더 소유 카메라 입력)
    *  장면(CanyonScene)은 시스템이 아니라 SceneManager가 관리하며, 잠수함
@@ -140,6 +146,34 @@ export class Game {
    *  판정·이동을 계산하지 않는다.
    */
   private composeSystems(params: GameParams, scene: CanyonScene): GameplaySystems {
+    // ⓪ 상위 메타 루프 (리드 소유, src/meta — INT-CORE-006·007).
+    //    하위 해역 세션은 SortieSessionPort 어댑터로만 접촉한다 (통신 3종 제한).
+    //    이 어댑터가 계층 경계의 유일한 구현 지점이다 — 상위는 하위 내부 상태를
+    //    읽지 않고, 하위는 상위의 존재를 모른다.
+    const sessionPort = {
+      // ① 세션 시작 — 초회 출항은 부트 전환. 재출항 시 하위 세션 재초기화는
+      //   게임플레이 세션 리셋 API 합류 후 이 어댑터만 확장한다 (INT-CORE-007
+      //   적용 요청 — CURRENT_STATUS). RESULT→DEPARTURE 재시작 전환은 허용표 기존안.
+      start: (): void => {
+        if (this.stateMachine.state === 'BOOT') {
+          // 첫 렌더 완료 후 호출됨 — 부트 완료 전환을 상위 루프가 소유한다
+          this.stateMachine.transition('DEPARTURE');
+        } else if (this.stateMachine.canTransition('DEPARTURE')) {
+          this.stateMachine.transition('DEPARTURE');
+        }
+      },
+      // ③ 중도 귀환 — 하위 정리 절차(게임플레이 소유)가 합류하기 전에는
+      //   즉시 aborted 결과를 보고한다. 합류 시 이 어댑터가 세션 정리를 위임.
+      requestReturnToBase: (): void => {
+        this.metaLoop?.settleSortie({ outcome: 'aborted' });
+      },
+    };
+    this.metaLoop = new MetaLoop(this.bus, sessionPort, {
+      // ⚠ R7 임시값 — params/economy.json 이관 대기 (INT-CORE-007)
+      creditLossOnDestroyedRatio: PROVISIONAL_CREDIT_LOSS_ON_DESTROYED_RATIO,
+    });
+    this.registry.register(this.metaLoop);
+
     // ① 입력·조작 — 게임플레이. 개발 모드 params 핫리로드는 승인된 로더의
     //    onParamsReloaded를 주입해 유효 값 교체만 허용한다 (JSON 역기록 없음).
     //    협곡 레이아웃은 장면과 같은 STARTING_CANYON_LAYOUT 단일 인스턴스 주입.
@@ -200,8 +234,11 @@ export class Game {
     if (!this.firstRenderDone) {
       this.firstRenderDone = true;
       this.loadingTimer.markFirstRender();
-      // 부트 완료 — 상태 머신 기본 전환 구조 검증을 겸한다.
-      this.stateMachine.transition('DEPARTURE');
+      // 부트 완료 — 세션 시작은 상위 메타 루프를 경유한다 (BOOT→DEPARTURE
+      // 전환은 SortieSessionPort 어댑터가 수행). 기지 화면(그래픽·UI) 도입
+      // 전까지는 자동 출항 — 도입 시 이 두 줄이 기지 UI 트리거로 대체된다.
+      this.metaLoop?.beginSortiePrep();
+      this.metaLoop?.launchSortie();
     }
   }
 
