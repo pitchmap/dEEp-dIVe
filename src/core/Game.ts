@@ -203,6 +203,19 @@ export class Game {
         guardAdapter: this.guardAdapter,
         guardSpawn: this.guardSpawn,
         guardLedger: this.guardLedger,
+        // 스프린트 B 실측용 읽기 전용 핸들 (실제 인스턴스 — 더미 아님).
+        // 목록은 **접근 시점에 평가**되도록 getter로 노출한다 — 부팅 시점
+        // 스냅샷을 박아 두면 스폰 이후 상태를 관측할 수 없다.
+        get ships() {
+          return gameplay.ships;
+        },
+        shipWorldSource: gameplay.shipWorldSource,
+        shipIdentification: gameplay.shipIdentification,
+        get patrolFleet() {
+          return gameplay.patrolShips;
+        },
+        highValueTransport: gameplay.highValueTransport,
+        scene,
       };
     }
 
