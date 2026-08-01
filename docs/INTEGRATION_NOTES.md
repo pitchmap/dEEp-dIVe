@@ -90,6 +90,20 @@
 
 ## 제안 목록
 
+### INT-GAME-009 — 스프린트 A 계약 요청: 앵커·2소켓 / 구매 트랜잭션 / 지갑·저장 포트 / 조준 params
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 (스프린트 A 창 2) |
+| 대상 시스템 | 리드 창(창 1) 산출물: `torpedoTubeAnchor`·`aimCameraSocket`·`torpedoSpawnSocket`, 구매 트랜잭션 구조, 조준·구매·장비·저장 계약 / 툴링 창(창 4) 산출물: `params/aiming.json`(+validator), 경제 가격 params |
+| 필요한 변경 | ① **앵커·2소켓 계약** [13차 결의 2] — 현재 게임플레이가 `src/systems/collision/torpedoTubeSocket.ts`에 소비 지점 겸 **안전 오프셋 단일 정의**를 두고 선진행 중(수치는 새로 만들지 않고 기존 `submarineHull` 기하에서 파생). 리드 계약 도착 시 이 파일은 계약을 읽는 어댑터로 축소되거나 삭제된다 ② **구매 트랜잭션 틀** [보완분 결의 7] — 순서·롤백 규격은 회의록대로 구현했고(스냅샷→재검증→차감→적용→저장→확정/롤백), 판정 내용(사유 5종)은 게임플레이 소유. 리드의 공식 구조가 오면 `economy/purchaseTypes.ts`의 결과 타입을 그 계약으로 승격 요청 ③ **지갑·저장 포트** — `PurchaseWalletPort`(credits·rareParts·applyDelta)·`PurchaseSavePort`(save(): boolean)를 조립부가 리드 `MetaLoop` 지갑과 툴링 `SaveStore`에 바인딩해야 한다. 게임플레이는 `GameplaySystems.attachBaseEconomy(purchase, savePort)` 진입점을 제공한다 ④ **조준 params** — `aiming.json` 4종(yaw 15 / pitchUp 10 / pitchDown 15 / sensitivity 0.5, 전부 양수 크기)이 오면 `provisionalAiming.ts` 삭제. 추가로 **조준 감도 기준값**(일반 카메라 라디안/픽셀 = 렌더 `ORBIT_RADIANS_PER_PIXEL` 0.005)이 현재 렌더와 게임플레이에 **중복 정의**되어 있다 — 공통 기준을 `aiming.json` 또는 리드 계약에 두기를 요청 ⑤ **가격 params** — `upgrades.json`에 가격 필드가 없어 `economy/provisionalUpgradeCost.ts`로 선진행(단계 선형). 공식 경제 수치표 도착 시 주입 교체 |
+| 변경 이유 | 스프린트 A 창 2 범위(전 심도 조준·미세 조준·탄도 일치·구매 판정·장비 변경·롤백) 구현 완료. 회의 14 병합 순서는 리드→게임플레이인데 리드 창 계약이 원격에 아직 없어, **계약 복제 없이** 소비 지점 단일화로 선진행함 |
+| 관련 게이트 | A1~A8 (특히 A5 저장 실패 롤백 T1~T6, A7 재접속 유지) |
+| 영향을 받는 파일 | `src/systems/SubmarineAimSystem.ts`·`aimGeometry.ts`·`provisionalAiming.ts`·`collision/torpedoTubeSocket.ts`·`StraightRunTorpedoSystem.ts`·`EquipmentSystem.ts`·`economy/{UpgradePurchaseSystem,purchaseTypes,provisionalUpgradeCost}.ts`, 조립부 `src/core/Game.ts`(지갑·저장 포트 바인딩) |
+| 하위 호환 여부 | 깨짐 없음 — 계약 파일 무수정, 게임플레이 내부 구현·주입 지점만. `AimSystem` 계약 시그니처 불변(toggleAim 등은 구현체 확장) |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
+
 ### INT-CORE-009 — 스프린트 A 리드 구현: 소켓 rig·트랜잭션 오케스트레이터·조립 기준
 
 | 필드 | 내용 |

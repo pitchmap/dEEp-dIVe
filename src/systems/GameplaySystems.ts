@@ -40,11 +40,12 @@ import { computeShipBoxPush } from './collision/shipHullBox';
 import { computeHullSpheres } from './collision/submarineHull';
 import { registerStartingAreaColliders } from './collision/startingArea';
 import { EconomySystem } from './economy/EconomySystem';
+import type { PurchaseSavePort, UpgradePurchaseSystem } from './economy/UpgradePurchaseSystem';
 import { EquipmentSystem } from './EquipmentSystem';
 import { KeyboardInput, type KeyEventSource, type VisibilitySource } from './KeyboardInput';
 import { LayeredDepthSystem } from './LayeredDepthSystem';
 import { MouseCombatInput } from './MouseCombatInput';
-import { PeriscopeAimSystem } from './PeriscopeAimSystem';
+import { SubmarineAimSystem } from './SubmarineAimSystem';
 import { StraightRunTorpedoSystem } from './StraightRunTorpedoSystem';
 import { SubmarinePlayerController } from './SubmarinePlayerController';
 import { TargetRegistry } from './TargetRegistry';
@@ -71,13 +72,19 @@ export class GameplaySystems implements GameSystem {
    * **토글** 방식: 우클릭·HUD 조준 버튼 = toggleAim(), 비조준 발사 시도는
    * aimRequiredCount로 안내 신호를 남긴다.
    */
-  readonly aim: PeriscopeAimSystem;
+  readonly aim: SubmarineAimSystem;
   /** 어뢰 상태 — remaining·reloadRemainingSeconds(UI), torpedoes(렌더 항적) */
   readonly torpedo: StraightRunTorpedoSystem;
   /** 장비 4종 (기본/고속/중어뢰/디코이) — 슬롯·업그레이드 배율 주입점 */
   readonly equipment: EquipmentSystem;
   /** 경제 — 드롭·픽업·크레딧·희귀 부품·경비 요청·출항 정산 */
   readonly economy: EconomySystem;
+
+  /**
+   * 기지 업그레이드 구매 판정 — 지갑·저장 포트가 조립부(리드)에서 주입되어야
+   * 하므로 여기서 생성하지 않고 연결만 받는다 (미연결 = 기지 밖 맥락).
+   */
+  private purchaseSystem: UpgradePurchaseSystem | null = null;
   /** 전투 표적 등록소 — 명중 판정·리드샷 보조선이 같은 목록을 읽는다 */
   readonly targets: TargetRegistry;
   /**
@@ -104,6 +111,9 @@ export class GameplaySystems implements GameSystem {
     /** 협곡 레이아웃 — composition root 주입 우선, 기본은 공유 단일 인스턴스 */
     layout: CanyonLayout = STARTING_CANYON_LAYOUT,
   ) {
+    // 지연 참조용 자기 별칭 (조준↔어뢰 조립 순환 해소)
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
     this.layout = layout;
     this.input = new KeyboardInput();
     this.mouse = new MouseCombatInput();
@@ -122,6 +132,8 @@ export class GameplaySystems implements GameSystem {
       surfaceY: layout.seaSurfaceY, // 해수면은 공유 레이아웃 값 하나만 사용
     });
     this.equipment = new EquipmentSystem();
+    // 어뢰는 조준 전방을 '지연 참조'한다 — 조준·어뢰가 서로를 필요로 하므로
+    // 조립 순환을 끊되, 발사 시점에는 언제나 같은 단일 출처(this.aim)를 읽는다.
     this.torpedo = new StraightRunTorpedoSystem(
       bus,
       params.combat,
@@ -129,8 +141,13 @@ export class GameplaySystems implements GameSystem {
       this.collision,
       this.targets,
       this.equipment,
+      {
+        get forward() {
+          return self.aim.forward;
+        },
+      },
     );
-    this.aim = new PeriscopeAimSystem(bus, this.depth, this.torpedo);
+    this.aim = new SubmarineAimSystem(bus, this.player, this.torpedo);
     this.economy = new EconomySystem(this.targets, this.player, () => this.ships);
     this.subscribeToParamsReload = subscribeToParamsReload ?? null;
   }
@@ -146,6 +163,21 @@ export class GameplaySystems implements GameSystem {
    */
   get poseSource(): SubmarinePoseSource {
     return this.player;
+  }
+
+  /**
+   * 기지 경제 연결 [조립부 전용] — 업그레이드 구매 판정 시스템과 장착 변경
+   * 저장 포트를 붙인다. 저장 포트가 붙으면 장착 변경도 원자적으로 처리되어
+   * 저장 실패 시 이전 loadout으로 롤백된다 [13차 보완분 결의 7].
+   */
+  attachBaseEconomy(purchase: UpgradePurchaseSystem, savePort: PurchaseSavePort | null): void {
+    this.purchaseSystem = purchase;
+    this.equipment.attachSavePort(savePort);
+  }
+
+  /** 구매 판정 시스템 (미연결 시 null) — 기지 UI가 소비 */
+  get upgradePurchase(): UpgradePurchaseSystem | null {
+    return this.purchaseSystem;
   }
 
   /** 화물선 상태 소스 — 계약 타입으로 노출 (렌더 CargoShipVisual 주입용) */
@@ -230,7 +262,9 @@ export class GameplaySystems implements GameSystem {
     const toggles = this.mouse.consumeAimToggleClicks();
     for (let i = 0; i < toggles; i += 1) this.aim.toggleAim();
 
-    // 6) 조준 유지 조건 감시 (잠망경 심도 이탈 시 자동 해제)
+    // 6) 마우스 이동 → 미세 조준각 (조준 중에만 반응, 감도·한계는 params)
+    const move = this.mouse.consumeMoveDelta();
+    this.aim.applyMouseDelta(move.dx, move.dy);
     this.aim.update(deltaSeconds);
 
     // 7) 좌클릭 발사 — **조준경 상태에서만** 발사 경로로 전달 (결의 2).

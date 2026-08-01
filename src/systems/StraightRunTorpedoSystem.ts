@@ -21,10 +21,13 @@
 import type { CombatParams } from '../contracts/params';
 import type { TorpedoSystem } from '../contracts/systems';
 import type { EventBus } from '../core/EventBus';
-import { bowDirectionXZ } from '../core/conventions';
+import type { AimForward } from './aimGeometry';
 import type { CollisionWorld } from './collision/CollisionWorld';
 import { sphereIntersectsShipBox } from './collision/shipHullBox';
-import { SUBMARINE_HULL_HALF_LENGTH } from './collision/submarineHull';
+import {
+  TORPEDO_COLLISION_RADIUS,
+  torpedoSpawnSocket,
+} from './collision/torpedoTubeSocket';
 import type { EquipmentId, TorpedoProfile } from './EquipmentSystem';
 import {
   PROVISIONAL_TORPEDO_MAX_RANGE_METERS,
@@ -43,22 +46,20 @@ export interface ArmamentPort {
   launchDecoy(x: number, y: number, z: number): boolean;
 }
 
-/** 어뢰 충돌 반경 (m) — 구조 상수 (선체 근사와 동급, 밸런스 수치 아님) */
-const TORPEDO_COLLISION_RADIUS = 0.35;
-
-/** 선수 표면과 어뢰 생성점 사이 여유 — 자함 선체와 즉시 겹치지 않게 */
-const BOW_CLEARANCE = 0.2;
-
-/** 발사 지점 오프셋: 선체 반길이 + 어뢰 반경 + 여유 (선수 방향) */
-const SPAWN_OFFSET_METERS =
-  SUBMARINE_HULL_HALF_LENGTH + TORPEDO_COLLISION_RADIUS + BOW_CLEARANCE;
+/**
+ * 조준 방향 공급 포트 — SubmarineAimSystem이 충족한다.
+ * 어뢰 초기 진행 방향은 **조준 카메라와 같은 이 출처**에서만 온다
+ * (십자선 ray = 어뢰 방향). TorpedoSystem은 방향을 자체 계산하지 않는다.
+ */
+export interface AimDirectionPort {
+  readonly forward: AimForward;
+}
 
 /** 발사 시점 포즈 읽기 전용 원천 — SubmarinePlayerController가 충족 */
 export interface TorpedoLaunchPose {
   readonly positionX: number;
   readonly positionY: number;
   readonly positionZ: number;
-  readonly headingRadians: number;
 }
 
 /** 주행 중 어뢰의 읽기 전용 상태 — 렌더(항적·모델)·검증이 소비 */
@@ -68,6 +69,8 @@ export interface TorpedoSnapshot {
   readonly y: number;
   readonly z: number;
   readonly directionX: number;
+  /** 수직 성분 — 미세 조준 pitch가 반영된 3D 진행 방향 */
+  readonly directionY: number;
   readonly directionZ: number;
   readonly traveledMeters: number;
   /** 발사 시점 장비 프로파일 (m/s) — 렌더 항적 보간용 */
@@ -80,6 +83,7 @@ interface ActiveTorpedo {
   y: number;
   z: number;
   directionX: number;
+  directionY: number;
   directionZ: number;
   traveledMeters: number;
   speedMetersPerSecond: number;
@@ -100,6 +104,7 @@ export class StraightRunTorpedoSystem implements TorpedoSystem {
   private readonly environment: CollisionWorld;
   private readonly targets: TargetRegistry;
   private readonly armament: ArmamentPort;
+  private readonly aimDirection: AimDirectionPort;
 
   constructor(
     bus: EventBus,
@@ -108,9 +113,11 @@ export class StraightRunTorpedoSystem implements TorpedoSystem {
     environment: CollisionWorld,
     targets: TargetRegistry,
     armament: ArmamentPort,
+    aimDirection: AimDirectionPort,
   ) {
     this.bus = bus;
     this.pose = pose;
+    this.aimDirection = aimDirection;
     this.environment = environment;
     this.targets = targets;
     this.armament = armament;
@@ -159,12 +166,12 @@ export class StraightRunTorpedoSystem implements TorpedoSystem {
    * 어뢰 성공 시 torpedoFired 발행.
    */
   fire(): boolean {
-    const direction = bowDirectionXZ(this.pose.headingRadians);
-    const bowX = this.pose.positionX + direction.x * SPAWN_OFFSET_METERS;
-    const bowZ = this.pose.positionZ + direction.z * SPAWN_OFFSET_METERS;
+    // 방향·생성점은 전부 조준 전방 + 소켓에서 온다 (자체 오프셋 계산 없음)
+    const forward = this.aimDirection.forward;
+    const spawn = torpedoSpawnSocket(this.pose, forward);
 
     if (this.armament.activeEquipment === 'decoy') {
-      return this.armament.launchDecoy(bowX, this.pose.positionY, bowZ);
+      return this.armament.launchDecoy(spawn.x, spawn.y, spawn.z);
     }
 
     const profile = this.armament.activeTorpedoProfile();
@@ -176,11 +183,12 @@ export class StraightRunTorpedoSystem implements TorpedoSystem {
 
     const torpedo: ActiveTorpedo = {
       id: this.nextTorpedoId,
-      x: bowX,
-      y: this.pose.positionY,
-      z: bowZ,
-      directionX: direction.x,
-      directionZ: direction.z,
+      x: spawn.x,
+      y: spawn.y,
+      z: spawn.z,
+      directionX: forward.x,
+      directionY: forward.y,
+      directionZ: forward.z,
       traveledMeters: 0,
       speedMetersPerSecond: profile.speedMetersPerSecond,
       damage: profile.damage,
@@ -204,6 +212,7 @@ export class StraightRunTorpedoSystem implements TorpedoSystem {
     for (const torpedo of this.active) {
       const step = torpedo.speedMetersPerSecond * deltaSeconds;
       torpedo.x += torpedo.directionX * step;
+      torpedo.y += torpedo.directionY * step;
       torpedo.z += torpedo.directionZ * step;
       torpedo.traveledMeters += step;
 

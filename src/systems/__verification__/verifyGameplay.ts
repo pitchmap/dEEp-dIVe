@@ -29,7 +29,12 @@ import { computeShipBoxPush } from '../collision/shipHullBox';
 import { GameplaySystems } from '../GameplaySystems';
 import { KeyboardInput, type MovementInput, type VisibilitySource } from '../KeyboardInput';
 import { LayeredDepthSystem } from '../LayeredDepthSystem';
-import { PeriscopeAimSystem } from '../PeriscopeAimSystem';
+import { SubmarineAimSystem } from '../SubmarineAimSystem';
+import { aimForwardVector, clampAimAngles } from '../aimGeometry';
+import { BASE_CAMERA_RADIANS_PER_PIXEL, PROVISIONAL_AIMING_PARAMS } from '../provisionalAiming';
+import { torpedoSpawnSocket, TORPEDO_COLLISION_RADIUS } from '../collision/torpedoTubeSocket';
+import { UpgradePurchaseSystem, type PurchaseWalletPort, type PurchaseSavePort } from '../economy/UpgradePurchaseSystem';
+import { provisionalUpgradeCost } from '../economy/provisionalUpgradeCost';
 import { StraightRunTorpedoSystem } from '../StraightRunTorpedoSystem';
 import { SubmarinePlayerController } from '../SubmarinePlayerController';
 import { TargetRegistry, type CombatTarget } from '../TargetRegistry';
@@ -132,7 +137,7 @@ function makeCombatRig(
   targets: TargetRegistry;
   equipment: EquipmentSystem;
   torpedo: StraightRunTorpedoSystem;
-  aim: PeriscopeAimSystem;
+  aim: SubmarineAimSystem;
 } {
   const bus = new EventBus();
   const input = new ScriptedInput();
@@ -141,8 +146,15 @@ function makeCombatRig(
   const world = new CollisionWorld();
   const targets = new TargetRegistry();
   const equipment = new EquipmentSystem();
-  const torpedo = new StraightRunTorpedoSystem(bus, params.combat, controller, world, targets, equipment);
-  const aim = new PeriscopeAimSystem(bus, depth, torpedo);
+  // 조준↔어뢰 지연 참조 (GameplaySystems와 동일한 단일 출처 배선)
+  let aimRef: SubmarineAimSystem | null = null;
+  const torpedo = new StraightRunTorpedoSystem(bus, params.combat, controller, world, targets, equipment, {
+    get forward() {
+      return (aimRef as SubmarineAimSystem).forward;
+    },
+  });
+  const aim = new SubmarineAimSystem(bus, controller, torpedo);
+  aimRef = aim;
   return { bus, input, controller, depth, world, targets, equipment, torpedo, aim };
 }
 
@@ -688,26 +700,23 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     systems.detachInput();
   }
 
-  // 18. 조준 게이트 — 잠망경 심도 전용, aimModeChanged 중복 없음, 이탈 시 자동 해제
+  // 18. 전 심도 조준 — 모든 유효 심도에서 진입, aimModeChanged 중복 없음
   {
     const rig = makeCombatRig(params);
     const aimEvents: boolean[] = [];
     rig.bus.on('aimModeChanged', ({ aiming }) => aimEvents.push(aiming));
 
-    const rejected = !rig.aim.beginAim();
-    check(
-      '조준: 잠망경 심도 밖 beginAim 거부 (false, 이벤트 없음)',
-      rejected && !rig.aim.aiming && aimEvents.length === 0,
-      `layer=${rig.depth.currentLayer}`,
-    );
-
-    rig.depth.requestAscend(); // cruise → periscope
-    const began = rig.aim.beginAim();
+    const began = rig.aim.beginAim(); // 순항 심도(초기 y=0) — 부상 없이 즉시 진입
     const beganAgain = rig.aim.beginAim(); // 중복 호출 — 이벤트 재발행 없음
     check(
-      '조준: 잠망경 심도 beginAim 허용 + aimModeChanged{true} 1회',
-      began && beganAgain && rig.aim.aiming && aimEvents.length === 1 && aimEvents[0] === true,
-      `events=${aimEvents.join(',')}`,
+      '조준: 순항 심도에서 조준 가능 (부상 요구 없음) + aimModeChanged{true} 1회',
+      began &&
+        beganAgain &&
+        rig.aim.aiming &&
+        rig.depth.currentLayer === 'cruise' &&
+        aimEvents.length === 1 &&
+        aimEvents[0] === true,
+      `layer=${rig.depth.currentLayer}, events=${aimEvents.join(',')}`,
     );
 
     rig.aim.endAim();
@@ -718,13 +727,182 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       `events=${aimEvents.join(',')}`,
     );
 
+    // 심도가 바뀌어도 조준은 유지된다 — 심도 조건 자체가 없다
     rig.aim.beginAim();
-    rig.depth.requestDescend(); // periscope → cruise (조준 유지 조건 상실)
-    rig.aim.update(dt);
+    rig.input.descend = true;
+    for (let i = 0; i < Math.round(3 / dt); i += 1) {
+      rig.controller.update(dt);
+      rig.depth.update(dt);
+      rig.aim.update(dt);
+    }
+    rig.input.release();
     check(
-      '조준: 조준 중 잠망경 심도 이탈 시 자동 해제',
-      !rig.aim.aiming && aimEvents.length === 4 && aimEvents[3] === false,
-      `events=${aimEvents.join(',')}`,
+      '조준: 조준 중 심도가 바뀌어도 자동 해제되지 않음 (심도 조건 없음)',
+      rig.aim.aiming && rig.depth.currentLayer === 'deep' && aimEvents.length === 3,
+      `layer=${rig.depth.currentLayer}, aiming=${rig.aim.aiming}`,
+    );
+  }
+
+  // 18b. 전 심도 조준 — 수면 근처·심해 경계에서도 진입 가능 + Y 불변
+  {
+    const depthCases: Array<{ label: string; y: number; layer: string }> = [
+      { label: '수면 근처', y: SUBMARINE_MAX_Y, layer: 'periscope' },
+      { label: '순항 심도', y: 0, layer: 'cruise' },
+      { label: '심해', y: SUBMARINE_MIN_Y, layer: 'deep' },
+    ];
+    let allEntered = true;
+    let allYStable = true;
+    const detail: string[] = [];
+
+    for (const testCase of depthCases) {
+      const rig = makeCombatRig(params);
+      rig.controller.setPositionY(testCase.y);
+      rig.depth.update(dt);
+
+      const yBeforeAim = rig.controller.positionY;
+      const entered = rig.aim.beginAim();
+      const yAfterAim = rig.controller.positionY;
+      rig.aim.update(dt);
+      const yWhileAiming = rig.controller.positionY;
+      rig.aim.endAim();
+      const yAfterRelease = rig.controller.positionY;
+
+      const stable =
+        yAfterAim === yBeforeAim &&
+        yWhileAiming === yBeforeAim &&
+        yAfterRelease === yBeforeAim;
+      if (!entered || rig.depth.currentLayer !== testCase.layer) allEntered = false;
+      if (!stable) allYStable = false;
+      detail.push(`${testCase.label}(${rig.depth.currentLayer}) y=${yAfterRelease}`);
+    }
+
+    check('조준: 수면 근처·순항·심해 전 구간에서 조준 진입 가능', allEntered, detail.join(' / '));
+    check(
+      '조준: 진입·유지·해제 전후 잠수함 Y 변화 없음 (자동 부상·심도 보정 제거)',
+      allYStable,
+      detail.join(' / '),
+    );
+  }
+
+  // 18c. 조준 중 기동 — 전후진·선회·상승·하강이 기존 물리 규칙 그대로 동작
+  {
+    const rig = makeCombatRig(params);
+    rig.aim.beginAim();
+
+    rig.input.throttleForward = true;
+    simulate(rig.controller, 2, dt);
+    const movedForward = rig.controller.forwardSpeedMetersPerSecond > 0;
+    const cappedByPhysics = rig.controller.forwardSpeedMetersPerSecond <= maxSpeed + 1e-9;
+
+    rig.input.release();
+    rig.input.reverse = true;
+    simulate(rig.controller, 4, dt);
+    const reversed = rig.controller.forwardSpeedMetersPerSecond < 0;
+    const reverseCapped =
+      rig.controller.forwardSpeedMetersPerSecond >= -maxReverse - 1e-9;
+
+    rig.input.release();
+    rig.input.turnLeft = true;
+    const headingBefore = rig.controller.headingRadians;
+    simulate(rig.controller, turnSeconds, dt);
+    const turned = Math.abs(rig.controller.headingRadians - headingBefore - Math.PI / 2) < 1e-6;
+
+    rig.input.release();
+    rig.input.ascend = true;
+    const yBefore = rig.controller.positionY;
+    simulate(rig.controller, 1, dt);
+    const ascended = rig.controller.positionY > yBefore;
+    rig.input.release();
+    rig.input.descend = true;
+    simulate(rig.controller, 2, dt);
+    const descended = rig.controller.positionY < yBefore;
+    rig.input.release();
+
+    check(
+      '조준 중 기동: W/S 전후진 허용 (기존 관성·상한 규칙 우회 없음)',
+      movedForward && cappedByPhysics && reversed && reverseCapped && rig.aim.aiming,
+      `forward 상한 ${maxSpeed}, 후진 상한 ${-maxReverse}`,
+    );
+    check(
+      '조준 중 기동: A/D 선체 선회 허용 (선회 시간 = params)',
+      turned && rig.aim.aiming,
+      `90도 ${turnSeconds}s`,
+    );
+    check(
+      '조준 중 기동: Ctrl/E 상승·Shift 하강 허용',
+      ascended && descended && rig.aim.aiming,
+      `y ${yBefore.toFixed(2)} → 상승 후 하강`,
+    );
+  }
+
+  // 18d. 미세 조준 — clamp·로컬 좌표·해제 시 reset·감도
+  {
+    const rig = makeCombatRig(params);
+    const limits = clampAimAngles(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, PROVISIONAL_AIMING_PARAMS);
+    const lowerLimits = clampAimAngles(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, PROVISIONAL_AIMING_PARAMS);
+    const degrees = (radians: number): number => (radians * 180) / Math.PI;
+
+    const notAimingIgnored = (() => {
+      rig.aim.applyMouseDelta(100, 100);
+      return rig.aim.yawRadians === 0 && rig.aim.pitchRadians === 0;
+    })();
+
+    rig.aim.beginAim();
+    rig.aim.applyMouseDelta(-10, 0); // 좌측 이동 → yaw 증가(좌현)
+    const expectedYaw =
+      10 * BASE_CAMERA_RADIANS_PER_PIXEL * PROVISIONAL_AIMING_PARAMS.aimMouseSensitivity;
+    const sensitivityOk = Math.abs(rig.aim.yawRadians - expectedYaw) < 1e-9;
+    check(
+      '미세 조준: 비조준 시 무반응 + 감도 = aimMouseSensitivity 적용',
+      notAimingIgnored && sensitivityOk,
+      `yaw=${rig.aim.yawRadians.toFixed(4)} (감도 ${PROVISIONAL_AIMING_PARAMS.aimMouseSensitivity})`,
+    );
+
+    rig.aim.applyMouseDelta(-100000, -100000); // 상·좌 대량 입력 → clamp
+    const yawClamped = Math.abs(degrees(rig.aim.yawRadians) - PROVISIONAL_AIMING_PARAMS.aimYawLimitDegrees) < 1e-9;
+    const pitchUpClamped =
+      Math.abs(degrees(rig.aim.pitchRadians) - PROVISIONAL_AIMING_PARAMS.aimPitchUpLimitDegrees) < 1e-9;
+    rig.aim.applyMouseDelta(200000, 200000); // 하·우 대량 입력 → 반대편 clamp
+    const yawClampedNeg = Math.abs(degrees(rig.aim.yawRadians) + PROVISIONAL_AIMING_PARAMS.aimYawLimitDegrees) < 1e-9;
+    const pitchDownClamped =
+      Math.abs(degrees(rig.aim.pitchRadians) + PROVISIONAL_AIMING_PARAMS.aimPitchDownLimitDegrees) < 1e-9;
+    check(
+      '미세 조준: yaw ±15° / pitch +10°·15° 하향으로 clamp (양수 크기 → 계산에서만 부호)',
+      yawClamped && pitchUpClamped && yawClampedNeg && pitchDownClamped,
+      `한계 yaw=${degrees(limits.yawRadians).toFixed(1)}°, pitchMax=${degrees(limits.pitchRadians).toFixed(1)}°, pitchMin=${degrees(lowerLimits.pitchRadians).toFixed(1)}°`,
+    );
+
+    rig.aim.endAim();
+    const resetOk = rig.aim.yawRadians === 0 && rig.aim.pitchRadians === 0;
+    rig.aim.beginAim();
+    const startsAtBow = rig.aim.yawRadians === 0 && rig.aim.pitchRadians === 0;
+    check(
+      '미세 조준: 조준 해제 시 yaw·pitch reset — 다음 조준은 선수 정면에서 시작',
+      resetOk && startsAtBow,
+      `yaw=${rig.aim.yawRadians}, pitch=${rig.aim.pitchRadians}`,
+    );
+
+    // 로컬 좌표: A/D로 선체가 돌면 미세각은 그대로 유지되고 전방 벡터만 함께 회전
+    rig.aim.applyMouseDelta(-500, 0);
+    const yawBefore = rig.aim.yawRadians;
+    const forwardBefore = rig.aim.forward;
+    rig.input.turnLeft = true;
+    simulate(rig.controller, turnSeconds, dt); // 좌 90도
+    rig.input.release();
+    const forwardAfter = rig.aim.forward;
+    const expected = aimForwardVector(rig.controller.headingRadians, {
+      yawRadians: yawBefore,
+      pitchRadians: rig.aim.pitchRadians,
+    });
+    const rotatedWithHull =
+      rig.aim.yawRadians === yawBefore &&
+      Math.abs(forwardAfter.x - expected.x) < 1e-9 &&
+      Math.abs(forwardAfter.z - expected.z) < 1e-9 &&
+      Math.abs(forwardAfter.x - forwardBefore.x) > 0.5;
+    check(
+      '미세 조준: 잠수함 로컬 기준 — 선체 선회 시 미세각 유지·조준선 함께 회전',
+      rotatedWithHull,
+      `yaw 유지 ${yawBefore.toFixed(4)}, forward x ${forwardBefore.x.toFixed(3)} → ${forwardAfter.x.toFixed(3)}`,
     );
   }
 
@@ -738,7 +916,6 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     const step = 1 / 60;
 
     const notAimingFire = !rig.aim.fireTorpedo();
-    rig.depth.requestAscend();
     rig.aim.beginAim();
     const fire1 = rig.aim.fireTorpedo();
     const fire2 = rig.aim.fireTorpedo(); // 재장전 중 — 거부
@@ -796,7 +973,6 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
   // 20. 어뢰 직선 주행 + 최대 사거리 초과 시 제거 (빗나간 어뢰 정리)
   {
     const rig = makeCombatRig(params);
-    rig.depth.requestAscend();
     rig.aim.beginAim();
     rig.aim.fireTorpedo();
     const step = 1 / 60;
@@ -838,7 +1014,6 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     };
     rig.targets.register(cargo);
 
-    rig.depth.requestAscend();
     rig.aim.beginAim();
     rig.aim.fireTorpedo();
     const step = 1 / 60;
@@ -891,7 +1066,6 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       const systems = new GameplaySystems(bus, params);
       const keySource = new EventTarget();
       systems.attachInput(keySource);
-      systems.depth.requestAscend(); // 잠망경 심도
 
       if (useMouse) {
         keySource.dispatchEvent(mouseEvent('mousedown', 2)); // 우클릭 토글 = 조준경 진입
@@ -1111,7 +1285,8 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       faction: 'hostile',
     });
 
-    rig.depth.requestAscend();
+    // 수상 화물선 흘수 높이에서 수평 사격 (심도는 조준 조건이 아니라 탄도 조건)
+    rig.controller.setPositionY(STARTING_CANYON_LAYOUT.seaSurfaceY - 2);
     rig.aim.beginAim();
     rig.aim.fireTorpedo();
     const step = 1 / 60;
@@ -1223,7 +1398,6 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       `aimRequired=${rig.aim.aimRequiredCount}, fired=${fired.length}`,
     );
 
-    rig.depth.requestAscend(); // 잠망경 심도
     const on = rig.aim.toggleAim();
     const stateOn = rig.aim.aiming;
     const off = rig.aim.toggleAim(); // 조준 중 우클릭 재입력 = 해제
@@ -1555,7 +1729,6 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
   // 36b. [LOOP] 장비가 실제 전투 수치에 반영 — 발사 어뢰의 속력 차이
   {
     const rig = makeCombatRig(params);
-    rig.depth.requestAscend();
     rig.aim.beginAim();
     rig.equipment.equip(1, 'fastTorpedo');
     rig.equipment.selectSlot(1);
@@ -1577,7 +1750,6 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
   // 36c. [LOOP] 디코이 — 단일 fire 경로 위임, 가짜 표적 생성, 어뢰 자원과 분리
   {
     const rig = makeCombatRig(params);
-    rig.depth.requestAscend();
     rig.aim.beginAim();
     rig.equipment.equip(1, 'decoy');
     rig.equipment.selectSlot(1);
@@ -1601,6 +1773,323 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       '[LOOP] 디코이: 수명 만료 시 제거 (교란 표적 정리)',
       rig.equipment.activeDecoys.length === 0,
       `decoys=${rig.equipment.activeDecoys.length}`,
+    );
+  }
+
+  // 36d. [LOOP] 소켓 기반 탄도 — 조준 forward = 어뢰 초기 방향, 자기 충돌 없음
+  {
+    const rig = makeCombatRig(params);
+    rig.aim.beginAim();
+    rig.aim.applyMouseDelta(-500, -500); // 좌·상 미세 조준 (yaw·pitch 모두 0이 아님)
+
+    const cameraForward = rig.aim.forward; // 조준 카메라가 소비하는 값과 동일 출처
+    const expectedSpawn = torpedoSpawnSocket(rig.controller, cameraForward);
+    rig.aim.fireTorpedo();
+    const shot = rig.torpedo.torpedoes[0];
+
+    const directionMatches =
+      shot !== undefined &&
+      Math.abs(shot.directionX - cameraForward.x) < 1e-12 &&
+      Math.abs(shot.directionY - cameraForward.y) < 1e-12 &&
+      Math.abs(shot.directionZ - cameraForward.z) < 1e-12;
+    check(
+      '탄도: 십자선 ray(조준 카메라 forward)와 어뢰 초기 방향 완전 일치 (단일 출처)',
+      directionMatches && Math.abs(cameraForward.y) > 1e-6 && rig.aim.yawRadians !== 0,
+      `forward=(${cameraForward.x.toFixed(4)}, ${cameraForward.y.toFixed(4)}, ${cameraForward.z.toFixed(4)})`,
+    );
+
+    const spawnMatches =
+      shot !== undefined &&
+      Math.abs(shot.x - expectedSpawn.x) < 1e-12 &&
+      Math.abs(shot.y - expectedSpawn.y) < 1e-12 &&
+      Math.abs(shot.z - expectedSpawn.z) < 1e-12;
+    check(
+      '탄도: 생성 위치 = torpedoSpawnSocket (TorpedoSystem 자체 오프셋 없음)',
+      spawnMatches,
+      `spawn=(${shot?.x.toFixed(3)}, ${shot?.y.toFixed(3)}, ${shot?.z.toFixed(3)})`,
+    );
+
+    // 자기 충돌: 생성 직후 어뢰 구가 자함 선체 근사 구 어느 것과도 겹치지 않는다
+    const hull = computeHullSpheres(
+      rig.controller.positionX,
+      rig.controller.positionY,
+      rig.controller.positionZ,
+      rig.controller.headingRadians,
+    );
+    let minGap = Number.POSITIVE_INFINITY;
+    if (shot) {
+      for (const sphere of hull) {
+        const distance = Math.hypot(shot.x - sphere.x, shot.y - sphere.y, shot.z - sphere.z);
+        minGap = Math.min(minGap, distance - (sphere.radius + TORPEDO_COLLISION_RADIUS));
+      }
+    }
+    check(
+      '탄도: 생성 직후 잠수함 자기 충돌 없음 (고정 안전 오프셋)',
+      minGap > 0,
+      `선체 표면과의 여유 ${minGap.toFixed(3)}m`,
+    );
+
+    // 리드샷 보조선 입력: 실제 발사된 어뢰 속력과 동일해야 한다
+    check(
+      '탄도: 리드샷 보조선 속력 = 실제 발사 어뢰 속력 (장비 반영 값)',
+      shot !== undefined && rig.torpedo.torpedoSpeedMetersPerSecond === shot.speedMetersPerSecond,
+      `보조선 ${rig.torpedo.torpedoSpeedMetersPerSecond} / 어뢰 ${shot?.speedMetersPerSecond}`,
+    );
+
+    // pitch가 반영되면 어뢰는 수직으로도 이동한다 (수평 전용 아님)
+    const yAtLaunch = shot?.y ?? 0;
+    for (let i = 0; i < Math.round(1 / (1 / 60)); i += 1) rig.torpedo.update(1 / 60);
+    const flying = rig.torpedo.torpedoes[0];
+    check(
+      '탄도: pitch 미세각이 어뢰 3D 주행에 반영 (상향 조준 = 상승 주행)',
+      flying !== undefined && flying.y > yAtLaunch,
+      `y ${yAtLaunch.toFixed(2)} → ${flying?.y.toFixed(2)}`,
+    );
+  }
+
+  // 36e. [LOOP] 발사 후 조준 유지 + 비조준 발사 거부 (전 심도 규칙에서도 불변)
+  {
+    const rig = makeCombatRig(params);
+    const beforeAimFire = rig.aim.fireTorpedo();
+    const afterRejection = rig.torpedo.torpedoes.length;
+
+    rig.aim.beginAim();
+    rig.aim.fireTorpedo();
+    check(
+      '전투: 비조준 발사 거부 + 발사 후에도 조준 상태 유지 (연속 조준 사격)',
+      !beforeAimFire &&
+        afterRejection === 0 &&
+        rig.aim.aimRequiredCount === 1 &&
+        rig.torpedo.torpedoes.length === 1 &&
+        rig.aim.aiming,
+      `aiming=${rig.aim.aiming}, aimRequired=${rig.aim.aimRequiredCount}`,
+    );
+  }
+
+  // 38. [ECON] 업그레이드 구매 — 성공·조건 실패·저장 실패 롤백 (A5-T1~T6)
+  {
+    const catalog = [
+      { id: 'maxSpeed', maxLevel: 5, bonusPerLevel: 0.1 },
+      { id: 'sonarRange', maxLevel: 1, bonusPerLevel: 0.1 },
+    ];
+    const makeWallet = (credits: number, rareParts: number): PurchaseWalletPort => {
+      const state = { credits, rareParts };
+      return {
+        get credits() {
+          return state.credits;
+        },
+        get rareParts() {
+          return state.rareParts;
+        },
+        applyDelta(creditsDelta, rarePartsDelta) {
+          state.credits += creditsDelta;
+          state.rareParts += rarePartsDelta;
+        },
+      };
+    };
+    const makeSave = (behavior: { ok: boolean; throws?: boolean }): PurchaseSavePort => ({
+      save() {
+        if (behavior.throws) throw new Error('quota exceeded (테스트)');
+        return behavior.ok;
+      },
+    });
+
+    // A5-T1 구매·저장 성공
+    {
+      const wallet = makeWallet(1000, 0);
+      const purchase = new UpgradePurchaseSystem(catalog, wallet, makeSave({ ok: true }));
+      const cost = provisionalUpgradeCost(1);
+      const result = purchase.purchase('maxSpeed');
+      check(
+        '[ECON] A5-T1 구매 성공 — 크레딧 차감·단계 증가·보정 반영',
+        result.ok &&
+          purchase.levelOf('maxSpeed') === 1 &&
+          wallet.credits === 1000 - cost.credits &&
+          purchase.modifiers.maxSpeed === 0.1,
+        `credits=${wallet.credits}, level=${purchase.levelOf('maxSpeed')}`,
+      );
+    }
+
+    // A5-T2 크레딧 부족 — 상태 변경 없이 거부
+    {
+      const wallet = makeWallet(10, 0);
+      const purchase = new UpgradePurchaseSystem(catalog, wallet, makeSave({ ok: true }));
+      const result = purchase.purchase('maxSpeed');
+      check(
+        '[ECON] A5-T2 크레딧 부족 — insufficientCredits, 상태 변경 없음',
+        !result.ok &&
+          result.reason === 'insufficientCredits' &&
+          result.category === 'condition' &&
+          wallet.credits === 10 &&
+          purchase.levelOf('maxSpeed') === 0,
+        `reason=${result.ok ? 'ok' : result.reason}`,
+      );
+    }
+
+    // 희귀 부품 부족 (4단계부터 요구)
+    {
+      const wallet = makeWallet(100000, 0);
+      const purchase = new UpgradePurchaseSystem(catalog, wallet, makeSave({ ok: true }));
+      purchase.restoreLevels({ maxSpeed: 3 });
+      const creditsBefore = wallet.credits;
+      const result = purchase.purchase('maxSpeed');
+      check(
+        '[ECON] 희귀 부품 부족 — insufficientRareParts, 크레딧 차감 없음',
+        !result.ok &&
+          result.reason === 'insufficientRareParts' &&
+          wallet.credits === creditsBefore &&
+          purchase.levelOf('maxSpeed') === 3,
+        `reason=${result.ok ? 'ok' : result.reason}`,
+      );
+    }
+
+    // 최대 단계
+    {
+      const wallet = makeWallet(100000, 10);
+      const purchase = new UpgradePurchaseSystem(catalog, wallet, makeSave({ ok: true }));
+      purchase.restoreLevels({ sonarRange: 1 });
+      const result = purchase.purchase('sonarRange');
+      const unknown = purchase.purchase('eighthUpgrade');
+      check(
+        '[ECON] 최대 단계 도달 — maxLevelReached (+ 8번째 항목 구매 불가)',
+        !result.ok &&
+          result.reason === 'maxLevelReached' &&
+          !unknown.ok &&
+          unknown.reason === 'maxLevelReached' &&
+          wallet.credits === 100000,
+        `level=${purchase.levelOf('sonarRange')}/1`,
+      );
+    }
+
+    // A5-T3·T4·T5·T7 저장 실패 롤백 (반환값 false / 예외 둘 다)
+    for (const mode of [{ ok: false }, { ok: false, throws: true }]) {
+      const wallet = makeWallet(1000, 5);
+      const purchase = new UpgradePurchaseSystem(catalog, wallet, makeSave(mode));
+      purchase.restoreLevels({ maxSpeed: 2 });
+      const creditsBefore = wallet.credits;
+      const rareBefore = wallet.rareParts;
+      const levelBefore = purchase.levelOf('maxSpeed');
+
+      const result = purchase.purchase('maxSpeed');
+      const rolledBack =
+        !result.ok &&
+        result.category === 'save' &&
+        result.reason === 'saveFailed' &&
+        wallet.credits === creditsBefore &&
+        wallet.rareParts === rareBefore &&
+        purchase.levelOf('maxSpeed') === levelBefore &&
+        purchase.modifiers.maxSpeed === levelBefore * 0.1;
+      check(
+        `[ECON] A5-T3·T4 저장 실패(${mode.throws ? '예외' : 'false'}) → 크레딧·단계 전부 롤백`,
+        rolledBack,
+        `credits=${wallet.credits}/${creditsBefore}, level=${purchase.levelOf('maxSpeed')}/${levelBefore}`,
+      );
+
+      // A5-T5: 재로드(스냅샷 = 저장된 상태)에서도 구매 전 상태 유지
+      const reloaded = new UpgradePurchaseSystem(catalog, makeWallet(creditsBefore, rareBefore), makeSave({ ok: true }));
+      reloaded.restoreLevels(purchase.levelSnapshot);
+      check(
+        `[ECON] A5-T5 저장 실패 후 재로드 — 구매 전 단계 유지 (${mode.throws ? '예외' : 'false'})`,
+        reloaded.levelOf('maxSpeed') === levelBefore,
+        `level=${reloaded.levelOf('maxSpeed')}`,
+      );
+    }
+
+    // A5-T6: 저장 실패 안내와 일반 불가 안내가 구분됨 + 롤백 후 재구매 가능
+    {
+      const wallet = makeWallet(1000, 0);
+      const failing = { ok: false };
+      const save: PurchaseSavePort = {
+        save() {
+          return failing.ok;
+        },
+      };
+      const purchase = new UpgradePurchaseSystem(catalog, wallet, save);
+      const failed = purchase.purchase('maxSpeed');
+      const poor = new UpgradePurchaseSystem(catalog, makeWallet(1, 0), save).purchase('maxSpeed');
+      const distinct =
+        !failed.ok && !poor.ok && failed.category === 'save' && poor.category === 'condition';
+
+      failing.ok = true; // 저장 복구 후 재구매
+      const retry = purchase.purchase('maxSpeed');
+      check(
+        '[ECON] A5-T6 저장 실패·조건 실패 안내 구분 + 롤백 뒤 재구매 성공',
+        distinct && retry.ok && purchase.levelOf('maxSpeed') === 1,
+        `save=${failed.ok ? '-' : failed.category}, condition=${poor.ok ? '-' : poor.category}, retry=${retry.ok}`,
+      );
+    }
+  }
+
+  // 39. [ECON] 장비 장착·교체·해제 — 슬롯 제한·중복·저장 실패 롤백
+  {
+    const equipment = new EquipmentSystem(['standardTorpedo']);
+    const equipped = equipment.equipItem('fastTorpedo'); // 빈 슬롯 자동 배정
+    const duplicate = equipment.equipItem('fastTorpedo');
+    const full = equipment.equipItem('heavyTorpedo'); // 슬롯 2 소진
+    check(
+      '[ECON] 장비: 장착 성공 / 이미 장착 중(alreadyEquipped) / 슬롯 부족(slotFull)',
+      equipped.ok &&
+        !duplicate.ok &&
+        duplicate.reason === 'alreadyEquipped' &&
+        !full.ok &&
+        full.reason === 'slotFull' &&
+        equipment.loadout.equipped.length === 2,
+      `loadout=${equipment.loadout.equipped.join('/')}`,
+    );
+
+    const replaced = equipment.replaceItem(1, 'heavyTorpedo');
+    const replaceDuplicate = equipment.replaceItem(1, 'standardTorpedo'); // 0번에 이미 있음
+    check(
+      '[ECON] 장비: 교체 성공 / 다른 슬롯 중복 교체 거부',
+      replaced.ok &&
+        equipment.slots[1] === 'heavyTorpedo' &&
+        !replaceDuplicate.ok &&
+        replaceDuplicate.reason === 'alreadyEquipped',
+      `slots=${equipment.slots.join('/')}`,
+    );
+
+    const removed = equipment.unequipItem(1);
+    check(
+      '[ECON] 장비: 해제 성공 (슬롯 비움, 활성 슬롯 자동 보정)',
+      removed.ok && equipment.slots[1] === null && equipment.activeEquipment !== null,
+      `slots=${equipment.slots.join('/')}, active=${equipment.activeEquipment}`,
+    );
+
+    // 저장 실패 → 이전 loadout 복원
+    const failing = { ok: false };
+    equipment.attachSavePort({
+      save() {
+        return failing.ok;
+      },
+    });
+    const before = [...equipment.slots];
+    const saveFailed = equipment.equipItem('fastTorpedo');
+    check(
+      '[ECON] 장비: 저장 실패 시 이전 loadout으로 롤백 (saveFailed 구분)',
+      !saveFailed.ok &&
+        saveFailed.category === 'save' &&
+        saveFailed.reason === 'saveFailed' &&
+        equipment.slots.join('/') === before.join('/'),
+      `slots=${equipment.slots.join('/')} (기대 ${before.join('/')})`,
+    );
+
+    failing.ok = true;
+    const retried = equipment.equipItem('fastTorpedo');
+    const profileAfter = (() => {
+      equipment.selectSlot(equipment.slots.indexOf('fastTorpedo'));
+      return equipment.activeTorpedoProfile();
+    })();
+    const standardProfile = (() => {
+      equipment.selectSlot(equipment.slots.indexOf('standardTorpedo'));
+      return equipment.activeTorpedoProfile();
+    })();
+    check(
+      '[ECON] 장비: 저장 복구 후 장착 성공 + 변경이 전투 유효 파라미터에 반영',
+      retried.ok &&
+        profileAfter !== null &&
+        standardProfile !== null &&
+        profileAfter.speedMetersPerSecond !== standardProfile.speedMetersPerSecond,
+      `fast=${profileAfter?.speedMetersPerSecond}, standard=${standardProfile?.speedMetersPerSecond}`,
     );
   }
 
