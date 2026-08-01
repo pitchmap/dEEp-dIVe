@@ -36,6 +36,7 @@ import { rewardDropTableIdFor, type FactionId } from '../../contracts/faction';
 import type { CargoShipConfig } from '../CargoShipSystem';
 import { cargoShipConfigFromOfficial } from '../CargoShipSystem';
 import type { CargoRuntimeParams } from '../economy/officialEconomyCatalog';
+import type { PatrolShipMotionProfile } from './PatrolShipEntity';
 
 /** 선박 1척의 배치 — 세력 + 구성. 좌표·수치는 전부 공식 params 파생 */
 export interface ShipPlacement {
@@ -82,6 +83,39 @@ export function shipPlacementsFromOfficialCargo(
     }),
     Object.freeze({ faction: 'neutral' as const, config: neutralConfig }),
   ]);
+}
+
+/**
+ * 경비함 운동 프로파일 — **전부 임시 상속값이다** (경비함 전용 공식 튜닝값 아님).
+ *
+ * 공식 guard·destroyer 튜닝 항목이 `params/`에 아직 없다. 새 수치를 만들지
+ * 않고 아래 우선순위대로 **이미 검증된 기존 값**만 상속한다:
+ *
+ * | 값 | 출처 | 성격 |
+ * |---|---|---|
+ * | 전진 속력 | 공식 `params/cargo.json` `speedMetersPerSecond` | 공식 수상함 이동값 |
+ * | 명중 반경·선체 박스 | 공식 `params/cargo.json` `hitRadiusMeters`·`hullBox` | 공식 수상함 치수 |
+ * | 해수면 높이 | 공유 `CanyonLayout.seaSurfaceY` | 월드 정본 |
+ * | 선회 속도 | `params/movement.json` `turn90Seconds` (90도 소요 시간) | **잠수함 이동 어댑터의 검증값 상속** — 수상함 선회 공식값이 없다 |
+ *
+ * 화물선은 웨이포인트 도달 시 선수각을 즉시 맞추는 방식이라 '선회 속도'
+ * 개념이 없다. 그래서 저장소에 존재하는 유일한 검증된 선회값(잠수함
+ * 90도 소요 시간)을 상속한다. 경비함 공식 튜닝표가 도착하면 이 함수만
+ * 교체된다 (INT-GAME-013).
+ */
+export function patrolShipMotionProfile(
+  cargo: CargoRuntimeParams,
+  surfaceY: number,
+  turn90Seconds: number,
+): PatrolShipMotionProfile {
+  return {
+    speedMetersPerSecond: cargo.speedMetersPerSecond,
+    // 90도(=π/2) 소요 시간 → rad/s. 파생식이며 새 수치가 아니다.
+    turnRateRadiansPerSecond: turn90Seconds > 0 ? Math.PI / 2 / turn90Seconds : 0,
+    surfaceY,
+    hitRadius: cargo.hitRadiusMeters,
+    hullBox: cargo.hullBox,
+  };
 }
 
 /**
