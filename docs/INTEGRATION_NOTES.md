@@ -56,6 +56,33 @@
 
 ## 제안 목록
 
+### INT-RENDER-007 — 기지 화면·외형 단계(visualTier) 메타 배선 요청 (PvE 단계 2)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스 (feat/render — PvE 성장 루프 시각 준비분) |
+| 대상 시스템 | 리드 메타 루프 상태 머신(신규, 11차 결의 2)·`src/core/Game.ts`(장면 전환 배선) |
+| 필요한 변경 | ① 기지 상태 진입 시 `BaseSceneView`(src/render — ManagedScene 구현)를 SceneManager 활성 장면으로 전환, 해역 진입 시 CanyonScene 복귀 ② 메타 상태의 외형 단계를 렌더에 주입: 기지 = `baseView.applyMetaVisualState({ hullVisualTier, weaponVisualTier })`, 해역 = `scene.setSubmarineVisualTiers(hull, weapon)` — **렌더는 명시적 visualTier만 소비**하며 업그레이드 수치·저장 데이터를 읽지 않는다 ③ 기지 상태에서 전투 HUD 숨김(툴링 협의) |
+| 변경 이유 | D+9 성장 루프 빌드(출항→파밍→귀환→강화)의 기지 화면·성장 외형이 렌더에 준비 완료 — 메타 루프(리드 신규 작성)와의 연결점만 필요. 그 전까지 QA 경로(`?base=1`·`?tiers=<h>,<w>`)로 검수 가능 |
+| 관련 게이트 | PvE 단계 2 Exit Criteria (D+9 빌드) |
+| 영향을 받는 파일 | 리드 메타 루프(위치 미정), `src/core/Game.ts`, (렌더 측 준비 완료: `BaseSceneView.ts`·`SubmarineVisual.ts`) |
+| 하위 호환 여부 | 깨짐 없음 — 미배선 시 기존 해역 장면만 동작 |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
+
+### INT-RENDER-006 — 어뢰 상태 주입 배선 요청 (어뢰 가시화·기포 항적, 5차 결의 2)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스 (feat/render) |
+| 대상 시스템 | `src/core/Game.ts` (공통 보호 — composeSystems 1줄) |
+| 필요한 변경 | `scene.attachEventBus(this.bus);` 다음 줄에:<br>`scene.attachTorpedoSource(gameplay.torpedo);`<br>— 렌더의 `TorpedoStateSource`(읽기 전용 `torpedoes` 스냅샷 + `torpedoSpeedMetersPerSecond`)는 `StraightRunTorpedoSystem`이 이미 구조적으로 충족 |
+| 변경 이유 | 어뢰 로우폴리 모델·기포 항적(TorpedoVisuals — 풀링+인스턴싱 1드로우)과 조준경 내 리드샷 보조선이 어뢰 상태·속력을 소비해야 함. 임시 배선으로 실측 검증 완료(발사→어뢰·항적 표시, 스크린샷 확보) 후 원복 — 보호 파일 미수정 |
+| 관련 게이트 | G3(발사 피드백)·G7, 5차 결의 2(리드샷 학습 피드백 P1) |
+| 영향을 받는 파일 | `src/core/Game.ts` 1줄 (렌더 측 준비 완료: `TorpedoVisuals.ts`·`attachTorpedoSource` 포트) |
+| 하위 호환 여부 | 깨짐 없음 — 미배선 시 어뢰·항적 미표시(기존 판정·투명 어뢰 상태와 동일) |
+| 개발 리드 결정 | (대기) |
+
 ### INT-CORE-007 — 상위 메타 루프·업그레이드 배율 레이어 구현과 조립
 
 | 필드 | 내용 |

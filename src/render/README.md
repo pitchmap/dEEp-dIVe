@@ -35,6 +35,23 @@
   연출 시간 등). 게임플레이 밸런스(`params/*.json`, 기획 소유)와 구분.
   프로펠러 공회전 값은 여기서 **제거됨** — movement.json이 단일 소스
 - `BlobShadow.ts` — 코드 생성 방사형 그라데이션 텍스처 평면 (실시간 그림자 금지 대응)
+- `TorpedoVisuals.ts` — 어뢰 로우폴리 + 기포 항적(풀링·인스턴싱 1드로우).
+  `attachTorpedoSource` 주입(INT-RENDER-006 배선 대기) — 판정 없음
+- `PeriscopeView.ts` — 조준경(5차 결의 3): 동일 카메라 + 원형 마스크(DOM) +
+  FOV 보간 + 십자선·눈금. `aimModeChanged` 소비만 — 렌더 독자 전환 없음
+- `LeadShotIndicator.ts` — 조준경 내 리드샷 보조선(요격 지점 링) — 표적
+  위치·속도·어뢰 속력의 읽기 전용 소비 표현
+- `EnvironmentDressing.ts` — 부활 1호(5차 결의 5): 산호 3종·어군 2종
+  (인스턴싱)·침몰선 잔해·원경 실루엣. 연안 한정, 밀도 캡 기록, 보스 전장은
+  이 예산 재배분(11차 결의 1)
+- `SubmarineVisual.ts` — 잠수함 + 외형 단계 어댑터(선체·주무장 각 3단계,
+  visualTier 주입만). 최종 에셋 교체 지점 2함수 격리
+- `BaseSceneView.ts` — 기지 화면 경량 3D 배경 — 메타 시각 상태 소비 전용
+  (상점·구매·저장 판정 없음, INT-RENDER-007 배선 대기)
+- `boss/` — 보스 분절 애니 스파이크(강체 5분절 계층 트랜스폼 + 사인파,
+  스켈레탈·스키닝·관절 물리 없음, 충돌은 게임플레이 단일 캡슐 전제).
+  A안 `SegmentedSwimMotion` / B안 `BossMotionFallback`(기본 비활성) —
+  `BossMotionStyle` 경계. 판정 문서: `docs/RENDER_SPIKE_BOSS.md`
 - `xray/XrayFloodingSpike.ts` — X-ray 반투명 렌더 기술 스파이크 [보호 목록,
   판정: 성공]. 기본 장면과 분리된 모듈, `?xray` URL 플래그로 장착, 실패 시 격리.
   판정 문서: `docs/RENDER_SPIKE_XRAY.md`
@@ -49,6 +66,9 @@
   자동 격침 없음): sinkProgress를 URL 값으로 고정해 침몰 매핑·폭발(값>0)을
   정지 화면으로 검수. 정식 상태 소스가 주입되면 무시된다
 - `?lookup` — 카메라를 앙각으로 젖혀 해수면·실루엣 확인
+- `?bossSpike=1` — 보스 분절 스파이크 (`&bossMotion=b` = B안, 기본 비활성)
+- `?base=1` — 기지 화면 미리보기 (메타 루프 배선 전 QA 경로)
+- `?tiers=<hull>,<weapon>` — 외형 단계(각 1~3) 시연 주입
 
 ## 연결 방식 (판정 계산 금지 원칙)
 

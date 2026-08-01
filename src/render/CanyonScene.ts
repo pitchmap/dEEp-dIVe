@@ -1,10 +1,13 @@
 /**
- * 회색 박스 수중 장면 (D+5 통합 + INT-CORE-003·004 정식 계약 소비).
+ * 회색 박스 수중 장면 (D+10 프로토타입 + 5차 결의 시각·PvE 성장 루프 렌더).
  *
- * 포함: 공유 CanyonLayout 기반 협곡 블록아웃 / 잠수함 대체 오브젝트
- * (캡슐+함교+선미 프로펠러) / 카메라 추적·리센터(CameraRig) / 기본 수중
- * 포그·배경(수면 위/아래 전환) / 해수면 / 블롭 섀도 / 화물선(계약 상태 매핑) /
- * X-ray 스파이크 장착점(?xray, 실패 격리).
+ * 포함: 공유 CanyonLayout 기반 협곡 블록아웃 / 잠수함(SubmarineVisual —
+ * 외형 단계 어댑터 + 선미 프로펠러) / 카메라 추적·리센터(CameraRig) / 기본
+ * 수중 포그·배경(수면 위/아래 전환) / 해수면(정점 파도) / 블롭 섀도 /
+ * 화물선(계약 상태 매핑) / 어뢰 가시화·기포 항적(TorpedoVisuals) /
+ * 조준경(PeriscopeView — aimModeChanged 소비) + 리드샷 보조선 /
+ * 환경 배치(EnvironmentDressing — 부활 1호) / QA 격리 경로: ?xray ·
+ * ?bossSpike=1(보스 분절 스파이크) · ?base=1(기지 화면 미리보기).
  *
  * 성능 예산 (§12 [확정]): 실시간 조명 2개 이내(방향광 1 + 보조 환경광),
  * 실시간 그림자 미사용(블롭 섀도만), 반사·굴절 미사용.
@@ -34,11 +37,22 @@ import type { EventBus, Unsubscribe } from '../core/EventBus';
 import type { ManagedScene } from '../core/SceneManager';
 import { STARTING_CANYON_LAYOUT } from '../world/startingCanyonLayout';
 import type { Renderer } from './Renderer';
+import { BaseSceneView } from './BaseSceneView';
 import { BlobShadow } from './BlobShadow';
+import { BossSegmentSpike } from './boss/BossSegmentSpike';
+import { BossMotionFallback } from './boss/BossMotionFallback';
+import { SegmentedSwimMotion } from './boss/SegmentedSwimMotion';
+import type { BossMotionStyle } from './boss/BossMotionStyle';
 import { CameraRig } from './CameraRig';
 import { CargoShipVisual } from './CargoShipVisual';
+import { EnvironmentDressing } from './EnvironmentDressing';
+import { LeadShotIndicator } from './LeadShotIndicator';
+import { PeriscopeView } from './PeriscopeView';
 import { Propeller } from './Propeller';
 import { SeaSurface } from './SeaSurface';
+import { SubmarineVisual } from './SubmarineVisual';
+import type { TorpedoStateSource } from './TorpedoVisuals';
+import { TorpedoVisuals } from './TorpedoVisuals';
 import { XrayFloodingSpike } from './xray/XrayFloodingSpike';
 
 /** 수중 배경·포그 톤 — 임시 색상. 심도별 그라데이션·아트 색은 D13 이후 (§3.1) */
@@ -54,27 +68,35 @@ const ABOVE_FOG_FAR = 280;
 /** 회색 박스 팔레트 (최종 아트 아님) */
 const FLOOR_COLOR = 0x3d474d;
 const WALL_COLOR = 0x59646c;
-const SUBMARINE_COLOR = 0x8a949b;
 
 /** 포즈 미주입 시 기본 수직 위치 — 스폰 관례(y=0, 순항 구간)와 동일 */
 const DEFAULT_SUBMARINE_Y = 0;
-/** 잠수함 선체 반長 — 프로펠러 선미(+Z) 장착 위치 계산용 (시각 상수) */
-const SUBMARINE_HALF_LENGTH = 2.8;
 
 export class CanyonScene implements ManagedScene {
   private readonly scene = new THREE.Scene();
   private readonly layout: CanyonLayout;
   private readonly rig: CameraRig;
   private readonly blobShadow: BlobShadow;
-  private readonly submarine = new THREE.Group();
+  private readonly submarine = new SubmarineVisual();
   private readonly propeller = new Propeller();
   private readonly seaSurface: SeaSurface;
+  private readonly torpedoVisuals = new TorpedoVisuals();
+  private readonly leadIndicator = new LeadShotIndicator();
+  private readonly environment: EnvironmentDressing;
+  private periscope: PeriscopeView | null = null;
   private readonly disposables: Array<{ dispose(): void }> = [];
 
   private poseSource: SubmarinePoseSource | null = null;
   private cargoShipSource: CargoShipStateSource | null = null;
+  private torpedoSource: TorpedoStateSource | null = null;
   private cargoShip: CargoShipVisual | null = null;
   private xraySpike: XrayFloodingSpike | null = null;
+
+  // QA 격리 경로 — 기지 화면 미리보기(?base=1)·보스 분절 스파이크(?bossSpike=1)
+  private baseView: BaseSceneView | null = null;
+  private bossSpike: BossSegmentSpike | null = null;
+  private bossShakeIntensity = 0;
+  private elapsed = 0;
 
   // 검증 완료된 이동 파라미터 — 프로펠러(공회전 비율·최고 속력)의 소스.
   // 핫리로드 통지로 유효한 새 값만 교체된다 (JSON 역기록 없음).
@@ -83,6 +105,8 @@ export class CanyonScene implements ManagedScene {
 
   // torpedoHit 구독 (폭발 연출 시작 신호 — 침몰 시간축은 상태 소스 소유)
   private unsubscribeTorpedoHit: Unsubscribe | null = null;
+  // aimModeChanged 구독 — 조준경 표현은 게임플레이 상태만 소비 (5차 결의 3)
+  private unsubscribeAimMode: Unsubscribe | null = null;
 
   // 수면 위/아래 포그 전환 상태
   private cameraAboveSurface = false;
@@ -115,13 +139,18 @@ export class CanyonScene implements ManagedScene {
     this.scene.add(new THREE.AmbientLight(0x1d3a47, 1.4));
 
     this.buildCanyonFromLayout();
-    this.buildSubmarinePlaceholder();
+    this.mountSubmarine();
 
     this.blobShadow = new BlobShadow(this.layout.floorY);
     this.scene.add(this.blobShadow.mesh);
 
     this.seaSurface = new SeaSurface(this.layout.seaSurfaceY);
     this.scene.add(this.seaSurface.mesh);
+
+    this.environment = new EnvironmentDressing(this.layout);
+    this.scene.add(this.environment.root);
+    this.scene.add(this.torpedoVisuals.root);
+    this.scene.add(this.leadIndicator.root);
 
     this.rig = new CameraRig(this.renderer.camera);
     // 렌더 검증용: ?lookup 플래그 시 카메라를 아래로 내려 해수면·실루엣 확인
@@ -131,6 +160,59 @@ export class CanyonScene implements ManagedScene {
 
     this.shipDemoSnapshot = this.parseShipDemoSnapshot();
     this.mountXraySpikeIfRequested();
+    this.mountBossSpikeIfRequested();
+    this.mountBaseViewIfRequested();
+  }
+
+  /**
+   * 보스 분절 스파이크 장착 — `?bossSpike=1` (11차 결의 5, 1주차 판정).
+   * `&bossMotion=b`면 B안(이동 곡선·관성·카메라 흔들림) — 기본 비활성.
+   * 격리 원칙: 실패해도 기본 장면·빌드는 정상 작동한다.
+   */
+  private mountBossSpikeIfRequested(): void {
+    const query = new URLSearchParams(window.location.search);
+    if (query.get('bossSpike') !== '1') return;
+    try {
+      const spawn = this.layout.submarineSpawn;
+      const useFallback = query.get('bossMotion') === 'b';
+      let motion: BossMotionStyle;
+      if (useFallback) {
+        const fallback = new BossMotionFallback(4, this.renderer.camera.position);
+        fallback.onNearPass = (intensity) => {
+          this.bossShakeIntensity = Math.max(this.bossShakeIntensity, intensity);
+        };
+        motion = fallback;
+      } else {
+        motion = new SegmentedSwimMotion(spawn.x, 4, spawn.z - 34);
+      }
+      this.bossSpike = new BossSegmentSpike(motion, true);
+      this.scene.add(this.bossSpike.root);
+      console.info(
+        `[CanyonScene] 보스 분절 스파이크 장착 (?bossSpike=1${useFallback ? '&bossMotion=b' : ''}).`,
+      );
+    } catch (error) {
+      this.bossSpike = null;
+      console.warn('[CanyonScene] 보스 스파이크 초기화 실패 — 기본 장면은 계속 작동합니다.', error);
+    }
+  }
+
+  /**
+   * 기지 화면 미리보기 — `?base=1` (렌더 QA 전용).
+   * 정식 활성화는 리드 메타 루프의 SceneManager 전환(INT-RENDER-007) —
+   * 그 전까지 이 위임 경로로 기지 장면·외형 단계를 검수한다.
+   */
+  private mountBaseViewIfRequested(): void {
+    const query = new URLSearchParams(window.location.search);
+    if (query.get('base') !== '1') return;
+    this.baseView = new BaseSceneView(this.renderer);
+    const tiers = query.get('tiers');
+    if (tiers) {
+      const [hull, weapon] = tiers.split(',').map((v) => Number.parseInt(v, 10));
+      this.baseView.applyMetaVisualState({
+        hullVisualTier: hull ?? 1,
+        weaponVisualTier: weapon ?? 1,
+      });
+    }
   }
 
   /** 게임플레이 포즈 상태(계약 SubmarinePoseSource) 연결점 — 렌더는 소비만 한다 */
@@ -144,6 +226,27 @@ export class CanyonScene implements ManagedScene {
   }
 
   /**
+   * 어뢰 상태 연결점 — gameplay.torpedo(읽기 전용 스냅샷·어뢰 속력)를
+   * composition root가 1회 주입한다 (INT-RENDER-006). 미주입 시 어뢰·항적
+   * 미표시(렌더가 상태를 지어내지 않음).
+   */
+  attachTorpedoSource(source: TorpedoStateSource): void {
+    this.torpedoSource = source;
+  }
+
+  /**
+   * 외형 단계(visualTier) 주입 — 리드 메타 루프가 제공하는 명시적 단계만
+   * 소비한다 (업그레이드 수치 계산 금지, INT-RENDER-007).
+   */
+  setSubmarineVisualTiers(hullTier: number, weaponTier: number): void {
+    this.submarine.setVisualTiers(hullTier, weaponTier);
+    this.baseView?.applyMetaVisualState({
+      hullVisualTier: hullTier,
+      weaponVisualTier: weaponTier,
+    });
+  }
+
+  /**
    * EventBus 연결점 — torpedoHit(명중 폭발 시작 신호) 구독용.
    * composition root가 1회 주입한다. 중복 주입 시 기존 구독을 해제해
    * 한 명중에 폭발이 여러 번 시작되지 않게 한다.
@@ -153,6 +256,21 @@ export class CanyonScene implements ManagedScene {
     this.unsubscribeTorpedoHit = bus.on('torpedoHit', (payload) =>
       this.onTorpedoHit(payload),
     );
+    // 조준경: 게임플레이가 발행한 조준 상태만 소비 — 렌더 독자 전환 없음
+    this.unsubscribeAimMode?.();
+    this.unsubscribeAimMode = bus.on('aimModeChanged', (payload) => {
+      this.ensurePeriscope().setAiming(payload.aiming);
+    });
+  }
+
+  /** 조준경 오버레이 지연 생성 — 캔버스 부모(#app)에 겹친다 */
+  private ensurePeriscope(): PeriscopeView {
+    if (!this.periscope) {
+      const host =
+        this.renderer.webgl.domElement.parentElement ?? document.body;
+      this.periscope = new PeriscopeView(this.renderer.camera, host);
+    }
+    return this.periscope;
   }
 
   /** 카메라 입력 어댑터(CameraInputAdapter) 연결용 */
@@ -161,16 +279,31 @@ export class CanyonScene implements ManagedScene {
   }
 
   update(deltaSeconds: number): void {
+    // 기지 화면 미리보기(?base=1) — 협곡 장면 대신 기지 장면만 갱신 (QA 경로)
+    if (this.baseView) {
+      this.baseView.update(deltaSeconds);
+      return;
+    }
+    this.elapsed += deltaSeconds;
+
     const spawn = this.layout.submarineSpawn;
     const x = this.poseSource?.positionX ?? spawn.x;
     const y = this.poseSource?.positionY ?? DEFAULT_SUBMARINE_Y;
     const z = this.poseSource?.positionZ ?? spawn.z;
     const heading = this.poseSource?.headingRadians ?? spawn.headingRadians;
 
-    this.submarine.position.set(x, y, z);
-    this.submarine.rotation.y = meshYawRadians(heading);
+    this.submarine.root.position.set(x, y, z);
+    this.submarine.root.rotation.y = meshYawRadians(heading);
     this.blobShadow.follow(x, z); // 블롭 섀도는 해저 투영 — 수직 이동과 무관
     this.rig.update(deltaSeconds, x, y, z, heading);
+
+    // B안 스파이크 전용 — 근접 통과 카메라 흔들림 (지수 감쇠, 기본 0)
+    if (this.bossShakeIntensity > 0.001) {
+      const camera = this.renderer.camera;
+      camera.position.x += Math.sin(this.elapsed * 47) * this.bossShakeIntensity;
+      camera.position.y += Math.cos(this.elapsed * 53) * this.bossShakeIntensity * 0.6;
+      this.bossShakeIntensity *= Math.exp(-3 * deltaSeconds);
+    }
 
     // 프로펠러: 계약 forwardSpeedMetersPerSecond(+선수/−선미)만 사용 —
     // 위치 차분 재계산 금지. A/D 단독 선회는 이 값에 영향이 없다.
@@ -181,9 +314,40 @@ export class CanyonScene implements ManagedScene {
     );
 
     this.seaSurface.update(deltaSeconds);
+    this.environment.update(deltaSeconds);
+    this.torpedoVisuals.update(deltaSeconds, this.torpedoSource);
+    this.periscope?.update(deltaSeconds);
+    this.updateLeadIndicator();
     this.updateCargoShip(deltaSeconds);
     this.updateFogByCameraDepth();
     this.xraySpike?.update(deltaSeconds);
+    this.bossSpike?.update(deltaSeconds);
+  }
+
+  /**
+   * 리드샷 보조선 — 조준 중에만, 게임플레이 읽기 전용 상태(표적 위치·속도 +
+   * 어뢰 속력 + 포즈)로 요격 지점을 표시한다 (판정 복제 아님, 5차 결의 3).
+   */
+  private updateLeadIndicator(): void {
+    const aiming = this.periscope?.isAiming ?? false;
+    const target = this.cargoShipSource ?? this.shipDemoSnapshot;
+    if (!aiming || !target || target.removed || target.hit) {
+      this.leadIndicator.update(false, 0, 0, 0, 0, 0, 0, 0, 0, this.renderer.camera);
+      return;
+    }
+    const spawn = this.layout.submarineSpawn;
+    this.leadIndicator.update(
+      true,
+      this.poseSource?.positionX ?? spawn.x,
+      this.poseSource?.positionZ ?? spawn.z,
+      target.positionX,
+      target.positionY,
+      target.positionZ,
+      target.velocityX,
+      target.velocityZ,
+      this.torpedoSource?.torpedoSpeedMetersPerSecond ?? 0,
+      this.renderer.camera,
+    );
   }
 
   /** 수면 위/아래에 따른 배경·포그 전환 (반사·굴절 없음 — 색·포그 차이만) */
@@ -207,6 +371,10 @@ export class CanyonScene implements ManagedScene {
   }
 
   render(): void {
+    if (this.baseView) {
+      this.baseView.render();
+      return;
+    }
     this.renderer.render(this.scene);
   }
 
@@ -219,10 +387,22 @@ export class CanyonScene implements ManagedScene {
     this.unsubscribeParamsReload = null;
     this.unsubscribeTorpedoHit?.();
     this.unsubscribeTorpedoHit = null;
+    this.unsubscribeAimMode?.();
+    this.unsubscribeAimMode = null;
+    this.baseView?.dispose();
+    this.baseView = null;
+    this.bossSpike?.dispose();
+    this.bossSpike = null;
+    this.periscope?.dispose();
+    this.periscope = null;
     this.xraySpike?.dispose();
     this.xraySpike = null;
     this.cargoShip?.removeAndDispose();
     this.cargoShip = null;
+    this.torpedoVisuals.dispose();
+    this.leadIndicator.dispose();
+    this.environment.dispose();
+    this.submarine.dispose();
     this.propeller.dispose();
     this.seaSurface.dispose();
     this.blobShadow.dispose();
@@ -267,33 +447,21 @@ export class CanyonScene implements ManagedScene {
   }
 
   /**
-   * 잠수함 대체 오브젝트 — 캡슐 선체 + 함교 박스 + 선미 프로펠러
-   * (최종 모델은 D+8 임포트). 선수·선미 규약: 로컬 -Z = 선수, +Z = 선미.
+   * 잠수함 장착 — SubmarineVisual(외형 단계 어댑터) + 선미 프로펠러.
+   * 선수·선미 규약: 로컬 -Z = 선수, +Z = 선미 (conventions).
+   * 외형 단계는 setVisualTiers 주입만 — QA는 ?tiers=<hull>,<weapon>.
    */
-  private buildSubmarinePlaceholder(): void {
-    const material = new THREE.MeshLambertMaterial({
-      color: SUBMARINE_COLOR,
-      flatShading: true,
-    });
-    const hullGeometry = new THREE.CapsuleGeometry(0.9, 3.8, 3, 10);
-    hullGeometry.rotateX(Math.PI / 2); // 캡슐 축(Y)을 전후 방향(Z)으로
-    const sailGeometry = new THREE.BoxGeometry(0.7, 1.1, 2.0);
-    this.disposables.push(material, hullGeometry, sailGeometry);
+  private mountSubmarine(): void {
+    this.propeller.root.position.set(0, 0, this.submarine.sternMountZ);
+    this.submarine.root.add(this.propeller.root);
+    this.submarine.root.position.y = DEFAULT_SUBMARINE_Y;
+    this.scene.add(this.submarine.root);
 
-    const hull = new THREE.Mesh(hullGeometry, material);
-    this.submarine.add(hull);
-
-    // 함교는 선수(-Z) 쪽으로 치우쳐 앞뒤 구분을 돕는다
-    const sail = new THREE.Mesh(sailGeometry, material);
-    sail.position.set(0, 1.2, -0.5);
-    this.submarine.add(sail);
-
-    // 프로펠러 — 선미(+Z, conventions.LOCAL_STERN) 중앙 1개. 표현 계층 전용
-    this.propeller.root.position.set(0, 0, SUBMARINE_HALF_LENGTH + 0.15);
-    this.submarine.add(this.propeller.root);
-
-    this.submarine.position.y = DEFAULT_SUBMARINE_Y;
-    this.scene.add(this.submarine);
+    const tiers = new URLSearchParams(window.location.search).get('tiers');
+    if (tiers) {
+      const [hull, weapon] = tiers.split(',').map((v) => Number.parseInt(v, 10));
+      this.submarine.setVisualTiers(hull ?? 1, weapon ?? 1);
+    }
   }
 
   /** torpedoHit — 현재 화물선 id와 일치할 때만 폭발 시작 (멱등 처리) */
