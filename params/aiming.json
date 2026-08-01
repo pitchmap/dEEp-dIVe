@@ -1,0 +1,7 @@
+{
+  "$comment": "미세 조준각 — 7차 대회의 결의 1-⑤ + 개발 소회의(13) 결의 3·보완분 결의 8·9. [초기 테스트값 — 확정 밸런스 아님, 튜닝표 등재]. 규칙: ① 상향·하향 제한각은 모두 '양의 각도 크기'로 저장하고 부호는 런타임 계산에서만 적용한다 (pitchMin = -aimPitchDownLimitDegrees / pitchMax = +aimPitchUpLimitDegrees) ② 미세 조준각은 잠수함 로컬 좌표 기준(선체 선회 시 함께 회전) ③ 조준 해제 시 yaw·pitch를 항상 0으로 초기화한다 — reset 단일 동작이므로 aimReturnBehavior 항목을 두지 않는다(보완분 결의 9: persist 스키마·스텁 금지) ④ 카메라·게임플레이·테스트가 src/tools/aimingParams.ts의 동일 로더·동일 제한 계산 함수를 사용한다(이중 부호 오류 방지). [LOOP]",
+  "aimYawLimitDegrees": 15,
+  "aimPitchUpLimitDegrees": 10,
+  "aimPitchDownLimitDegrees": 15,
+  "aimMouseSensitivity": 0.5
+}

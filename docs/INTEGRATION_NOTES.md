@@ -90,6 +90,49 @@
 
 ## 제안 목록
 
+### INT-TOOL-008 — [LOOP][ECON] 스프린트 A 툴링 산출물 + 이관·문서 회귀 차단 요청
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 빌드·툴 (스프린트 A 창 4 — 회의 14 범위표) |
+| 대상 시스템 | `params/aiming.json`·`params/upgrades.json`·`params/equipment.json`(기획 커밋 영역), `package.json`(스크립트), `.github/workflows/ci.yml`, 게임플레이·통합 관리자 문서 |
+| 필요한 변경 | ① **aiming.json 신설** — 4항목(yaw 15 / up 10 / down 15 / 감도 0.5), 양수 크기 저장·부호는 `src/tools/aimingMath.ts` 단일 지점에서만 적용, `aimReturnBehavior` 미포함(보완분 결의 9). **카메라(그래픽스)·조준(게임플레이)은 반드시 `src/tools/aimingParams.ts`의 동일 로더·`pitchLimitsDegrees()`/`clampAimOffsetDegrees()`를 사용할 것** — 각자 JSON을 읽거나 음수를 붙이면 이중 부호 오류 ② **경제·장비 공식 params 구조 확정** — upgrades.json을 단계 배열 구조(costCredits·costRareParts·effectBonus, 길이 = maxLevel)로 전환, equipment.json 신설(가격·희귀 부품·슬롯). **수치는 전부 `null` = 기획 경제 수치표 미도착** — 임의 값을 발명하지 않았다(7차 결의 4의 병목). 기획이 값을 채우면 `[ECON]` 태그로 커밋 ③ **계산 복제 제거** — 툴링 `src/tools/upgradeMath.ts` 삭제, 시뮬레이터가 리드 정본 `src/meta/upgradeMath.ts`를 직접 사용(INT-CORE-007 적용 요청 이행) ④ scripts 2종 추가(`verify:meta`·`verify:sprint-a`) |
+| 변경 이유 | 스프린트 A 창 4 범위(aiming params·경제 validator·저장 실패 주입·A1~A8 러너·문서 회귀 확인)의 산출 |
+| 관련 게이트 | A1·A2·A3(파라미터 측면), A5·A6·A7(저장 원자성), A8(이관 상태), §8 문서 회귀 |
+| 영향을 받는 파일 | params 3종, src/tools/{aimingMath,aimingParams,economyMath,upgradeCalculator,UpgradeSimulator}.ts, src/meta/save/{FaultInjectingStorage,atomicSave}.ts, scripts/verify-sprint-a.mjs, docs/SPRINT_A_ACCEPTANCE.md |
+| 하위 호환 여부 | upgrades.json 스키마가 `bonusPerLevel` 단일값 → 단계 배열로 **변경**됨(구 구조 소비자는 툴링 시뮬레이터뿐이며 동시 갱신 완료). 세이브 스키마는 무변경(마이그레이션 불필요) |
+| 개발 리드 결정 | **확인 대기** — 특히 ②의 'null = 미확정' 표기 방식과 ③의 정본 일원화 승인 요청 |
+| 적용 커밋 | (이 브랜치의 스프린트 A 툴링 커밋) |
+
+**[A8/§8 차단 보고 — 다른 창 소유 파일의 제거 필요 항목]**
+
+`npm run verify:sprint-a`의 자동 판정이 현재 **2건 실패**다. 둘 다 툴링 창이
+고칠 수 없는(소유 밖) 대상이므로 해당 창에 제거를 요청한다:
+
+1. **§8 문서 회귀 7건** — 7차 결의 1-⑦('잠망경 심도 전용'을 전 문서에서 삭제,
+   코드-문서 동시 갱신)의 미이행분. 회의록 원문 2건은 역사 기록으로 자동 분류·제외됨.
+
+   | 위치 | 소유 |
+   |---|---|
+   | `src/systems/PeriscopeAimSystem.ts:9` "잠망경 심도에서만" | 게임플레이 |
+   | `src/systems/__verification__/verifyGameplay.ts:670` "잠망경 심도 전용" | 게임플레이 |
+   | `docs/CURRENT_STATUS.md:94` (게임플레이 구역) | 게임플레이 |
+   | `docs/PROJECT_STATE.md:138·167` | 통합 관리자 |
+   | `docs/NEXT_SPRINT.md:25` | 통합 관리자 |
+   | `docs/D10_INTEGRATION_CHECKLIST.md:56` | 통합 관리자 |
+
+   ※ `docs/deep_dive_master_plan.md:245`도 같은 문구를 담고 있으나 게이트 전
+   수정 금지 문서라 역사 기록으로 분류했다 — 마스터 플랜 각주 처리 여부는 리드 판단.
+
+2. **A8 이관 미완** — 미확정 필드 114개(= 기획 수치표 미도착), 잔여 provisional
+   경제 파일 2건: `src/meta/provisionalEconomy.ts`(리드), `src/systems/provisionalCargo.ts`(게임플레이).
+   게임플레이 브랜치의 `src/systems/economy/provisionalEconomy.ts`·`provisionalEquipment.ts`도
+   병합 시 같은 목록에 잡힌다. **A8은 기획 경제 수치표(PvE D+3 절대 마감)가
+   도착해야 통과 가능**하다 — 툴링은 그릇(구조·검증기)만 완성했다.
+
+=======
+
+
 ### INT-RENDER-008 — [LOOP][ECON] Sprint A 조준 시각·성장 UI 배선·상태 요청 (검증 완료 코드 예시 포함)
 
 | 필드 | 내용 |
@@ -230,7 +273,6 @@ const baseScreen: BaseScreenPort = {
 | 하위 호환 여부 | 기존 코드 무변경(추가+doc 개정만) — AimSystem 시그니처 불변이라 PeriscopeAimSystem 컴파일 유지(동작 개정은 게임플레이 창 몫). AimingParams는 GameParams 미편입 상태로 선행(편입은 툴링 창이 json·validator와 동시에) |
 | 개발 리드 결정 | 승인 — 창 1 소유 범위. 소켓 rig 구현·트랜잭션 오케스트레이터는 후속 커밋(INT-CORE-009) |
 | 적용 커밋 | (본 브랜치 선행 계약 커밋) |
-
 ### INT-TOOL-007 — [LOOP][ECON] PvE 툴링 배선 요청: 저장 시점·경제/기지 이벤트 계약·병행 키 E·보스 오디오
 
 | 필드 | 내용 |
@@ -258,6 +300,8 @@ const baseScreen: BaseScreenPort = {
 | 하위 호환 여부 | 기존 스크립트·의존성 무변경 (추가만) |
 | 개발 리드 결정 | **확인 대기 + 정책 선택지 보고** — 스코프 가드 위반 처리: 회의 문언은 '빌드 **경고**'(소회의 결의 4), 이번 작업 지시는 'CI **실패** 가능하면'. 현재 구성 = 로컬 기본 경고 / CI `--strict` 실패. 회의 문언 우선 시 CI에서 `--strict`만 제거하면 됨 |
 | 적용 커밋 | (이 브랜치의 PvE 툴링 커밋) |
+>>>>>>> 187536e
+
 
 ### INT-RENDER-007 — 기지 화면·외형 단계(visualTier) 메타 배선 요청 (PvE 단계 2)
 
@@ -285,7 +329,6 @@ const baseScreen: BaseScreenPort = {
 | 영향을 받는 파일 | `src/core/Game.ts` 1줄 (렌더 측 준비 완료: `TorpedoVisuals.ts`·`attachTorpedoSource` 포트) |
 | 하위 호환 여부 | 깨짐 없음 — 미배선 시 어뢰·항적 미표시(기존 판정·투명 어뢰 상태와 동일) |
 | 개발 리드 결정 | (대기) |
-
 ### INT-CORE-007 — 상위 메타 루프·업그레이드 배율 레이어 구현과 조립
 
 | 필드 | 내용 |
@@ -322,6 +365,7 @@ const baseScreen: BaseScreenPort = {
 | 하위 호환 여부 | 깨짐 없음 — 전부 추가. `faction`은 선택 필드(미지정 = hostile 과도기 호환, 게임플레이 태그 작업 후 필수 승격 예정) |
 | 개발 리드 결정 | 승인 — 신 스코프 가드(업그레이드 7항목·장비 4종)를 유니언 타입 상한으로 기계 강제. 계층 통신 3종 제한을 포트+이벤트로 고정. 저장 이벤트는 `saveRequested` 단일(cause 구분)로 통합 |
 | 적용 커밋 | (본 브랜치 선행 계약 커밋) |
+<<<<<<< HEAD
 
 ### INT-GAME-008 — PvE 경제·전투 계약 패키지 (이벤트·params·EffectiveParams·보스 포트)
 

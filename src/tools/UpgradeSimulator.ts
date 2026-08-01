@@ -1,52 +1,47 @@
 /**
- * 업그레이드 시뮬레이터 (툴링 소유 — 소회의(11) 결의 4, 공수 0.5일 항목).
+ * 업그레이드 시뮬레이터 (툴링 소유 — 소회의(11) 결의 4, 7차 결의 8).
  *
- * 목적: 기획(박태현)이 빌드 없이 업그레이드 조합의 최종 수치를 검증한다.
- * 튜닝표 v3 '테스트 결과' 열의 증빙 화면 (배석 디렉터 발언).
+ * 목적: 기획이 빌드 없이 업그레이드 조합의 최종 수치와 **총비용 곡선**을
+ * 검증한다. 7차 결의 8의 판정 기준 '보스 도전 최소 사양까지 출항 4~6회'를
+ * 이 화면에서 사전 확인한다.
  *
  * 규칙:
- *  - 계산은 upgradeCalculator의 공용 순수 함수만 사용 — 수식 복제 금지.
+ *  - 계산은 `src/meta/upgradeMath.ts`(리드 정본) 함수만 사용 — 복제 금지.
  *  - params 원본을 절대 수정하지 않는다 (읽기 전용 + JSON 내보내기만).
- *  - 기준값: paramRef가 있으면 로드된 params에서 해석, 없으면(대상 시스템
- *    미도입) 입력란에 직접 넣어 미리 볼 수 있다.
- *  - upgrades.json 저장 시 핫리로드로 즉시 갱신.
+ *  - 미확정(null) 값은 '미확정'으로 표시하고 계산을 보류한다 — 임의 값 대입 금지.
  */
 
 import { loadParams, onParamsReloaded } from '../config/ParamLoader';
-import type { GameParams } from '../contracts/params';
+import { effectiveDurationSeconds, effectiveValue } from '../meta/upgradeMath';
 import {
-  applyUpgradeBonus,
+  estimatedSortiesToAfford,
+  loadEquipmentCatalog,
   loadUpgradeCatalog,
-  onUpgradeCatalogReloaded,
-  sumUpgradeBonuses,
-  type UpgradeDefinition,
+  onCatalogReloaded,
+  pendingFields,
+  resolveParamRef,
+  totalUpgradeCost,
+  type OfficialUpgradeId,
+  type UpgradeEntry,
 } from './upgradeCalculator';
 
-/** "movement.maxSpeedMetersPerSecond" 형태의 경로에서 기준값(value)을 해석 */
-export function resolveParamBase(params: GameParams, ref: string): number | null {
-  let node: unknown = params;
-  for (const segment of ref.split('.')) {
-    if (typeof node !== 'object' || node === null) return null;
-    node = (node as Record<string, unknown>)[segment];
-  }
-  if (typeof node === 'object' && node !== null && 'value' in node) {
-    const value = (node as { value: unknown }).value;
-    return typeof value === 'number' && Number.isFinite(value) ? value : null;
-  }
-  return typeof node === 'number' && Number.isFinite(node) ? node : null;
-}
+/** 시간형(작을수록 좋은) 기준값 — 단축 적용 대상 */
+const DURATION_STATS: readonly OfficialUpgradeId[] = ['turnRate', 'reloadSpeed'];
+
+/** 보스 도전 최소 사양 가정 — 전 항목 1단계 (7차 결의 8 곡선 확인용 기본값) */
+const DEFAULT_TARGET_LEVEL = 1;
 
 interface RowState {
-  def: UpgradeDefinition;
+  def: UpgradeEntry;
   level: number;
-  /** paramRef 미보유 항목의 수동 기준값 (미입력 시 null) */
-  manualBase: number | null;
 }
 
 export class UpgradeSimulator {
   private readonly root: HTMLDivElement;
   private readonly tableBody: HTMLDivElement;
+  private readonly summary: HTMLDivElement;
   private readonly output: HTMLTextAreaElement;
+  private readonly creditsPerSortieInput: HTMLInputElement;
   private readonly unsubscribers: Array<() => void> = [];
   private rows: RowState[] = [];
 
@@ -61,6 +56,21 @@ export class UpgradeSimulator {
 
     this.tableBody = document.createElement('div');
     this.root.appendChild(this.tableBody);
+
+    this.summary = document.createElement('div');
+    this.summary.className = 'upgrade-sim-summary';
+    this.root.appendChild(this.summary);
+
+    const sortieRow = document.createElement('div');
+    sortieRow.className = 'upgrade-sim-actions';
+    const label = document.createElement('span');
+    label.textContent = '출항당 평균 크레딧: ';
+    this.creditsPerSortieInput = document.createElement('input');
+    this.creditsPerSortieInput.type = 'number';
+    this.creditsPerSortieInput.placeholder = '미확정';
+    this.creditsPerSortieInput.addEventListener('input', () => this.renderSummary());
+    sortieRow.append(label, this.creditsPerSortieInput);
+    this.root.appendChild(sortieRow);
 
     const actions = document.createElement('div');
     actions.className = 'upgrade-sim-actions';
@@ -81,9 +91,9 @@ export class UpgradeSimulator {
 
     container.appendChild(this.root);
 
-    this.rebuildRows(loadUpgradeCatalog());
+    this.rebuildRows();
     this.unsubscribers.push(
-      onUpgradeCatalogReloaded((catalog) => this.rebuildRows(catalog)),
+      onCatalogReloaded(() => this.rebuildRows()),
       onParamsReloaded(() => this.render()),
     );
   }
@@ -97,19 +107,33 @@ export class UpgradeSimulator {
     this.root.remove();
   }
 
-  private rebuildRows(catalog: UpgradeDefinition[]): void {
-    const previous = new Map(this.rows.map((row) => [row.def.id, row]));
-    this.rows = catalog.map((def) => ({
+  private rebuildRows(): void {
+    const previous = new Map(this.rows.map((row) => [row.def.id, row.level]));
+    this.rows = loadUpgradeCatalog().map((def) => ({
       def,
-      level: Math.min(previous.get(def.id)?.level ?? 0, def.maxLevel),
-      manualBase: previous.get(def.id)?.manualBase ?? null,
+      level: Math.min(previous.get(def.id) ?? DEFAULT_TARGET_LEVEL, def.maxLevel),
     }));
     this.render();
   }
 
-  private baseValueOf(row: RowState): number | null {
-    if (row.def.paramRef) return resolveParamBase(loadParams(), row.def.paramRef);
-    return row.manualBase;
+  /** 단계까지의 누적 보정 합 — 미확정 단계가 하나라도 있으면 null */
+  private bonusSumAt(def: UpgradeEntry, level: number): number | null {
+    if (level <= 0) return 0;
+    const value = def.effectBonus[level - 1];
+    return value === null || value === undefined ? null : value;
+  }
+
+  private baseValueOf(def: UpgradeEntry): number | null {
+    return def.paramRef ? resolveParamRef(loadParams(), def.paramRef) : null;
+  }
+
+  private finalValueOf(def: UpgradeEntry, level: number): number | null {
+    const base = this.baseValueOf(def);
+    const bonus = this.bonusSumAt(def, level);
+    if (base === null || bonus === null) return null;
+    return DURATION_STATS.includes(def.id)
+      ? effectiveDurationSeconds(base, bonus)
+      : effectiveValue(base, bonus);
   }
 
   private render(): void {
@@ -133,10 +157,11 @@ export class UpgradeSimulator {
       name.title = row.def.note ?? row.def.paramRef ?? '';
 
       const levelSelect = document.createElement('select');
-      for (let level = 0; level <= row.def.maxLevel; level++) {
+      for (let level = 0; level <= row.def.maxLevel; level += 1) {
         const option = document.createElement('option');
         option.value = String(level);
-        option.textContent = `${level} (+${Math.round(level * row.def.bonusPerLevel * 100)}%)`;
+        const bonus = this.bonusSumAt(row.def, level);
+        option.textContent = bonus === null ? `${level} (미확정)` : `${level} (+${Math.round(bonus * 100)}%)`;
         if (level === row.level) option.selected = true;
         levelSelect.appendChild(option);
       }
@@ -145,79 +170,102 @@ export class UpgradeSimulator {
         this.render();
       });
 
+      const base = this.baseValueOf(row.def);
       const baseCell = document.createElement('span');
-      const resolvedBase = this.baseValueOf(row);
-      if (row.def.paramRef) {
-        baseCell.textContent = resolvedBase !== null ? String(resolvedBase) : '(경로 해석 실패)';
-        baseCell.title = row.def.paramRef;
-      } else {
-        const baseInput = document.createElement('input');
-        baseInput.type = 'number';
-        baseInput.placeholder = '기준값 입력';
-        baseInput.title = row.def.note ?? '기준값 파라미터 미도입 — 수동 입력으로 미리보기';
-        if (row.manualBase !== null) baseInput.value = String(row.manualBase);
-        baseInput.addEventListener('input', () => {
-          const parsed = Number(baseInput.value);
-          row.manualBase = baseInput.value !== '' && Number.isFinite(parsed) ? parsed : null;
-          this.renderOutputsOnly();
-        });
-        baseCell.appendChild(baseInput);
-      }
+      baseCell.textContent = base !== null ? String(base) : '미확정';
+      baseCell.title = row.def.paramRef ?? '기준값 파라미터 미도입';
 
-      const bonusSum = sumUpgradeBonuses([row.def], { [row.def.id]: row.level });
+      const bonus = this.bonusSumAt(row.def, row.level);
       const bonusCell = document.createElement('span');
       bonusCell.className = 'upgrade-sim-bonus';
-      bonusCell.textContent = `+${Math.round(bonusSum * 100)}%`;
+      bonusCell.textContent = bonus === null ? '미확정' : `+${Math.round(bonus * 100)}%`;
 
+      const final = this.finalValueOf(row.def, row.level);
       const finalCell = document.createElement('span');
       finalCell.className = 'upgrade-sim-final';
-      finalCell.textContent =
-        resolvedBase !== null ? formatNumber(applyUpgradeBonus(resolvedBase, bonusSum)) : '—';
+      finalCell.textContent = final !== null ? formatNumber(final) : '—';
 
       el.append(name, levelSelect, baseCell, bonusCell, finalCell);
       this.tableBody.appendChild(el);
     }
 
-    this.renderOutputsOnly();
+    this.renderSummary();
   }
 
-  /** 수동 기준값 타이핑 중 전체 리렌더로 포커스를 뺏지 않도록 출력만 갱신 */
-  private renderOutputsOnly(): void {
+  /** 총비용·예상 출항 횟수 (7차 결의 8 판정 기준 4~6회) */
+  private renderSummary(): void {
+    const levels: Partial<Record<OfficialUpgradeId, number>> = {};
+    for (const row of this.rows) levels[row.def.id] = row.level;
+
+    const total = totalUpgradeCost(this.rows.map((r) => r.def), levels);
+    const perSortieRaw = Number(this.creditsPerSortieInput.value);
+    const perSortie =
+      this.creditsPerSortieInput.value !== '' && Number.isFinite(perSortieRaw) ? perSortieRaw : null;
+    const sorties = estimatedSortiesToAfford(total?.credits ?? null, perSortie);
+
+    const pending = pendingFields(this.rows.map((r) => r.def), safeEquipmentCatalog());
+    const lines: string[] = [];
+    lines.push(
+      total
+        ? `총비용: 크레딧 ${total.credits} / 희귀 부품 ${total.rareParts}`
+        : '총비용: 미확정 (기획 경제 수치표 대기 — 임의 값 대입 없음)',
+    );
+    if (sorties === null) {
+      lines.push('예상 출항 횟수: 판정 보류 (총비용 또는 출항당 수익 미확정)');
+    } else {
+      const ok = sorties >= 4 && sorties <= 6;
+      lines.push(`예상 출항 횟수: ${sorties.toFixed(1)}회 — 기준 4~6회 ${ok ? '충족' : '이탈(가격 재조정 필요)'}`);
+    }
+    lines.push(`미확정 필드: ${pending.length}개`);
+    this.summary.textContent = lines.join('\n');
+
     this.output.value = JSON.stringify(this.snapshot(), null, 2);
   }
 
   /** 튜닝표 증빙용 결과 스냅샷 — params를 변경하지 않는 읽기 전용 산출물 */
   snapshot(): object {
+    const levels: Partial<Record<OfficialUpgradeId, number>> = {};
+    for (const row of this.rows) levels[row.def.id] = row.level;
+    const total = totalUpgradeCost(this.rows.map((r) => r.def), levels);
+    const perSortieRaw = Number(this.creditsPerSortieInput.value);
+    const perSortie =
+      this.creditsPerSortieInput.value !== '' && Number.isFinite(perSortieRaw) ? perSortieRaw : null;
+
     return {
-      formula: '최종값 = 기준값 × (1 + 보정 합) [합연산]',
-      items: this.rows.map((row) => {
-        const base = this.baseValueOf(row);
-        const bonusSum = sumUpgradeBonuses([row.def], { [row.def.id]: row.level });
-        return {
-          id: row.def.id,
-          label: row.def.label,
-          level: row.level,
-          baseValue: base,
-          baseSource: row.def.paramRef ?? (row.manualBase !== null ? '(수동 입력)' : '(미정)'),
-          bonusSum,
-          finalValue: base !== null ? applyUpgradeBonus(base, bonusSum) : null,
-        };
-      }),
-      totalBonusSum: sumUpgradeBonuses(
-        this.rows.map((row) => row.def),
-        Object.fromEntries(this.rows.map((row) => [row.def.id, row.level])),
-      ),
+      formula: '최종값 = 기준값 × (1 + 보정 합) [합연산, src/meta/upgradeMath.ts]',
+      items: this.rows.map((row) => ({
+        id: row.def.id,
+        label: row.def.label,
+        level: row.level,
+        baseValue: this.baseValueOf(row.def),
+        baseSource: row.def.paramRef ?? '(파라미터 미도입)',
+        bonusSum: this.bonusSumAt(row.def, row.level),
+        finalValue: this.finalValueOf(row.def, row.level),
+        isDurationStat: DURATION_STATS.includes(row.def.id),
+      })),
+      totalCost: total,
+      creditsPerSortie: perSortie,
+      estimatedSorties: estimatedSortiesToAfford(total?.credits ?? null, perSortie),
+      sortieTargetRange: [4, 6],
+      pendingFields: pendingFields(this.rows.map((r) => r.def), safeEquipmentCatalog()),
     };
   }
 
   private async copyOutput(): Promise<void> {
-    this.renderOutputsOnly();
+    this.renderSummary();
     try {
       await navigator.clipboard.writeText(this.output.value);
     } catch {
-      // 클립보드 권한 없음 — textarea 선택으로 대체
       this.output.select();
     }
+  }
+}
+
+function safeEquipmentCatalog(): ReturnType<typeof loadEquipmentCatalog> | null {
+  try {
+    return loadEquipmentCatalog();
+  } catch {
+    return null;
   }
 }
 
