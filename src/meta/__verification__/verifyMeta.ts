@@ -34,8 +34,11 @@ import {
   CountingSavePort,
   DepartureCommand,
   EquipmentJudgeAdapter,
+  SortieSalvageSpawner,
+  composeSalvageSpawnPlan,
   createBaseScreenPort,
 } from '../../core/PveIntegration';
+import type { SalvagePlacementSource } from '../../contracts/officialParams';
 import { UpgradePurchaseSystem } from '../../systems/economy/UpgradePurchaseSystem';
 import { EquipmentSystem } from '../../systems/EquipmentSystem';
 import type { EquipmentCatalog, UpgradeEntry } from '../../tools/economyMath';
@@ -786,6 +789,148 @@ export function runMetaVerification(): VerificationResult[] {
       threw = true;
     }
     check('정산: 손실률 범위 밖(>1) 거부', threw, `threw=${threw}`);
+  }
+
+  // ── salvage 결합·스폰 (INT-CORE-011 — 로직 검증은 픽스처, 실제
+  //    economy.json 값 검증은 run.mjs 실파일 검사에서 수행) ──
+  {
+    const fixtureEconomy = {
+      dropTables: {
+        'salvage-chest': { credits: 7, rareParts: 0 },
+        'salvage-mineral': { credits: 3, rareParts: 0 },
+      },
+      salvageSpawns: [
+        { spawnId: 's-a', kind: 'chest', dropTableId: 'salvage-chest', rarePartId: null },
+        { spawnId: 's-b', kind: 'mineral', dropTableId: 'salvage-mineral', rarePartId: 'rare-x' },
+      ],
+    } as const;
+    const fixturePlacements: SalvagePlacementSource = {
+      placements: [
+        { spawnId: 's-a', worldPosition: { x: 1, y: -2, z: 3 } },
+        { spawnId: 's-b', worldPosition: { x: -4, y: -5, z: 6 }, orientationYawRadians: 0.5 },
+      ],
+    };
+
+    {
+      const plan = composeSalvageSpawnPlan(fixtureEconomy, fixturePlacements);
+      const a = plan.find((entry) => entry.spawnId === 's-a');
+      const b = plan.find((entry) => entry.spawnId === 's-b');
+      check(
+        'salvage 결합: 동일 spawnId 결합 성공 — 보상=economy·좌표=placement 파생',
+        plan.length === 2 &&
+          a?.credits === 7 &&
+          a.rarePartCount === 0 &&
+          a.worldPosition.x === 1 &&
+          b?.credits === 3 &&
+          b.rarePartId === 'rare-x' &&
+          b.rarePartCount === 1 &&
+          b.worldPosition.z === 6 &&
+          b.orientationYawRadians === 0.5,
+        JSON.stringify(plan),
+      );
+    }
+    {
+      let threw = false;
+      try {
+        composeSalvageSpawnPlan(fixtureEconomy, { placements: [fixturePlacements.placements[0]!] });
+      } catch {
+        threw = true;
+      }
+      check('salvage 결합: 배치 누락 spawnId 거부 (무시 금지)', threw, `threw=${threw}`);
+    }
+    {
+      let threw = false;
+      try {
+        composeSalvageSpawnPlan(fixtureEconomy, {
+          placements: [
+            ...fixturePlacements.placements,
+            { spawnId: 's-ghost', worldPosition: { x: 0, y: 0, z: 0 } },
+          ],
+        });
+      } catch {
+        threw = true;
+      }
+      check('salvage 결합: 경제에 없는 배치 spawnId 거부', threw, `threw=${threw}`);
+    }
+    {
+      let threw = false;
+      try {
+        composeSalvageSpawnPlan(fixtureEconomy, {
+          placements: [...fixturePlacements.placements, fixturePlacements.placements[0]!],
+        });
+      } catch {
+        threw = true;
+      }
+      check('salvage 결합: 중복 spawnId 거부', threw, `threw=${threw}`);
+    }
+    {
+      let threw = false;
+      try {
+        composeSalvageSpawnPlan(
+          {
+            dropTables: fixtureEconomy.dropTables,
+            salvageSpawns: [
+              { spawnId: 's-a', kind: 'chest', dropTableId: 'no-such-table', rarePartId: null },
+            ],
+          },
+          { placements: [fixturePlacements.placements[0]!] },
+        );
+      } catch {
+        threw = true;
+      }
+      check('salvage 결합: 미지 dropTableId 거부', threw, `threw=${threw}`);
+    }
+
+    {
+      const spawned: string[] = [];
+      const spawner = new SortieSalvageSpawner(fixtureEconomy, {
+        spawnSalvage: (kind) => {
+          spawned.push(kind);
+          return null;
+        },
+      });
+      const unwired = spawner.beginSortie();
+      check(
+        'salvage 스포너: 배치 미연결 = unwired — 임시 좌표·생성 없음',
+        unwired.status === 'unwired' && spawned.length === 0 && !spawner.placementWired,
+        `status=${unwired.status}, spawned=${spawned.length}`,
+      );
+
+      spawner.attachPlacementSource(fixturePlacements);
+      const first = spawner.beginSortie();
+      const again = spawner.spawnForSortie();
+      check(
+        'salvage 스포너: 출항당 1회 — 재호출은 alreadySpawned (파괴분 재생성 금지)',
+        first.status === 'spawned' &&
+          first.count === 2 &&
+          spawned.length === 2 &&
+          again.status === 'alreadySpawned',
+        `first=${JSON.stringify(first)}, again=${again.status}, spawned=${spawned.length}`,
+      );
+
+      const nextSortie = spawner.beginSortie();
+      check(
+        'salvage 스포너: 새 출항 = 재생성 (MVP 루프 규칙)',
+        nextSortie.status === 'spawned' && spawned.length === 4,
+        `next=${JSON.stringify(nextSortie)}, spawned=${spawned.length}`,
+      );
+    }
+    {
+      const spawned: string[] = [];
+      const spawner = new SortieSalvageSpawner(fixtureEconomy, {
+        spawnSalvage: (kind) => {
+          spawned.push(kind);
+          return null;
+        },
+      });
+      spawner.attachPlacementSource({ placements: [fixturePlacements.placements[0]!] });
+      const rejected = spawner.beginSortie();
+      check(
+        'salvage 스포너: 결합 거부 시 부분 생성 없음 (rejected·0건)',
+        rejected.status === 'rejected' && spawned.length === 0,
+        `status=${rejected.status}, spawned=${spawned.length}`,
+      );
+    }
   }
 
   return results;

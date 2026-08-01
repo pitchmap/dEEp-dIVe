@@ -23,9 +23,10 @@ import { GateMetricRecorder } from '../tools/GateMetricRecorder';
 import { LoadingTimer } from '../tools/LoadingTimer';
 import { STARTING_CANYON_LAYOUT } from '../world/startingCanyonLayout';
 import { MetaLoop } from '../meta/MetaLoop';
-import { PROVISIONAL_CREDIT_LOSS_ON_DESTROYED_RATIO } from '../meta/provisionalEconomy';
 import { defaultSaveStore } from '../meta/save/SaveStore';
-import { loadEquipmentCatalog, loadUpgradeCatalog } from '../tools/upgradeCalculator';
+import { loadEconomyParams } from '../tools/economyParams';
+import { loadAimingParams } from '../tools/aimingParams';
+import type { OfficialRuntimeParams } from '../contracts/officialParams';
 import { WebAudioSystem } from '../audio/WebAudioSystem';
 import { AudioCueRouter } from '../audio/AudioCueRouter';
 import {
@@ -36,6 +37,7 @@ import {
   MetaUiAdapter,
   SaveBridge,
   SortieEconomyBridge,
+  SortieSalvageSpawner,
   UpgradeState,
   createBaseScreenPort,
   createMetaUiPorts,
@@ -82,6 +84,10 @@ export class Game {
   private baseScreen: BaseScreenPort | null = null;
   /** 계측 가능한 저장 포트 — 명령당 호출 횟수 검증용 (저장 책임 표) */
   private savePort: CountingSavePort | null = null;
+  /** 공식 런타임 params 번들 — 로더 호출은 composeSystems 1회뿐 (INT-CORE-011) */
+  private officialParams: OfficialRuntimeParams | null = null;
+  /** 출항당 1회 salvage 스포너 — 좌표는 SalvagePlacementSource 전용 */
+  private salvageSpawner: SortieSalvageSpawner | null = null;
   /** 조립부가 건 EventBus 구독 해제 함수 — stop()에서 전부 해제한다 */
   private readonly unsubscribes: Array<() => void> = [];
 
@@ -172,6 +178,8 @@ export class Game {
         tubeSockets: this.tubeSockets,
         baseScreen: this.baseScreen,
         savePort: this.savePort,
+        officialParams: this.officialParams,
+        salvageSpawner: this.salvageSpawner,
       };
     }
 
@@ -207,6 +215,20 @@ export class Game {
   }
 
   private composeSystems(params: GameParams, scene: CanyonScene): GameplaySystems {
+    // ⓪-pre 공식 런타임 params (INT-CORE-011) — 툴링 로더를 **여기서만,
+    //   각 1회** 호출해 번들을 만들고 아래 소비자에 주입한다. 시스템·UI가
+    //   JSON이나 로더를 직접 호출하는 것은 계약 위반이다
+    //   (contracts/officialParams.ts — JSON → 시스템 단방향 주입).
+    const official: OfficialRuntimeParams = {
+      ...loadEconomyParams(),
+      aiming: loadAimingParams(),
+    };
+    this.officialParams = official;
+    console.info(
+      '[Game] 공식 경제 params 로드·검증 완료 (upgrades/equipment/economy/cargo + aiming) — ' +
+        `손실률 ${official.economy.creditLossOnDestroyedRatio} · salvage 배치 ${official.economy.salvageSpawns.length}건`,
+    );
+
     // ⓪ 상위 메타 루프 (리드 소유, src/meta — INT-CORE-006·007).
     //    하위 해역 세션은 SortieSessionPort 어댑터로만 접촉한다 (통신 3종 제한).
     //    이 어댑터가 계층 경계의 유일한 구현 지점이다 — 상위는 하위 내부 상태를
@@ -220,6 +242,21 @@ export class Game {
         // 잔탄·드롭이 이월되지 않게). 초회 출항에서는 갓 생성된 상태라 무해.
         const gameplay = this.gameplay;
         if (gameplay) gameplay.resetSortieSession(this.effectiveParams ?? params);
+        // 출항 월드 초기화 — salvage 확정 배치 (INT-CORE-011 production spawn
+        // 규칙: 출항당 1회, 보상=economy params·좌표=SalvagePlacementSource.
+        // 배치 미연결이면 임시 좌표를 만들지 않고 unwired로 기록만 한다).
+        const spawnReport = this.salvageSpawner?.beginSortie();
+        if (spawnReport) {
+          if (spawnReport.status === 'spawned') {
+            console.info(`[Game] salvage ${spawnReport.count}개 배치 완료 (economy.salvageSpawns)`);
+          } else if (spawnReport.status === 'unwired') {
+            console.warn(
+              '[Game] SalvagePlacementSource 미연결 — salvage 미생성 (그래픽스 배치 대기, INT-CORE-011)',
+            );
+          } else if (spawnReport.status === 'rejected') {
+            console.error(`[Game] salvage 결합 거부 — 생성 0건: ${spawnReport.message}`);
+          }
+        }
         if (this.stateMachine.state === 'BOOT') {
           // 첫 렌더 완료 후 호출됨 — 부트 완료 전환을 상위 루프가 소유한다
           this.stateMachine.transition('DEPARTURE');
@@ -235,15 +272,15 @@ export class Game {
       },
     };
     this.metaLoop = new MetaLoop(this.bus, sessionPort, {
-      // ⚠ R7 임시값 — params/economy.json 이관 대기 (INT-CORE-007)
-      creditLossOnDestroyedRatio: PROVISIONAL_CREDIT_LOSS_ON_DESTROYED_RATIO,
+      // 공식 params 소비 (INT-CORE-011) — provisional 이관 완료 [6차 결의 7: 0.5]
+      creditLossOnDestroyedRatio: official.economy.creditLossOnDestroyedRatio,
     });
     this.registry.register(this.metaLoop);
 
     // ⓪-b 저장 복원 — 부팅 시 1회, BASE 상태에서만. 저장 코드가 메타 상태
     //     머신을 조작하지 않도록 복원은 여기(조립부)에서만 수행한다.
     const loaded = defaultSaveStore.load();
-    const catalog = loadUpgradeCatalog();
+    const catalog = official.upgrades;
     this.upgrades = new UpgradeState(catalog, loaded.data.upgradeLevels);
     this.metaLoop.restoreWallet({
       credits: loaded.data.credits,
@@ -297,6 +334,16 @@ export class Game {
     // ②-a 경제 → 공식 이벤트 브리지 (lootDropped·guardShipRequested).
     //     게임플레이 뒤에 등록해 같은 프레임의 드롭·요청을 흘린다.
     this.registry.register(new SortieEconomyBridge(gameplay.economy));
+
+    // ②-a2 해저 재화 스포너 (INT-CORE-011) — economy.salvageSpawns(보상)와
+    //     SalvagePlacementSource(좌표, 월드·그래픽스 소유)를 spawnId로 결합해
+    //     게임플레이 spawn 어댑터를 호출한다. 좌표는 여기서 만들지 않는다 —
+    //     그래픽스 배치 구현체 도착 시 attachPlacementSource로 연결한다
+    //     (그 전까지 명시적 unwired: 출항 시 경고 로그, salvage 미생성).
+    this.salvageSpawner = new SortieSalvageSpawner(official.economy, {
+      spawnSalvage: (kind, x, y, z, rarePartId) =>
+        gameplay.economy.spawnSalvage(kind, x, y, z, rarePartId),
+    });
 
     // ①-c 업그레이드 구매 판정 시스템 (게임플레이 소유 — 조립부가 공식
     //     카탈로그와 실지갑 읽기 단면을 주입한다). **단계의 단일 저장소** —
@@ -380,7 +427,7 @@ export class Game {
     const baseScreen = createBaseScreenPort({
       meta: metaLoop,
       upgradeCatalog: catalog,
-      equipmentCatalog: loadEquipmentCatalog(),
+      equipmentCatalog: official.equipment,
       levelsOf: () => upgradePurchase.levelSnapshot,
       loadoutOf: () => gameplay.equipment.loadout,
       purchaseTx,

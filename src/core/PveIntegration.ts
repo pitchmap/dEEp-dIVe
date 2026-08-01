@@ -41,7 +41,12 @@ import { effectiveDurationSeconds, effectiveValue, modifierSumFor } from '../met
 import type { SaveData } from '../meta/save/saveSchema';
 import { createDefaultSave } from '../meta/save/saveSchema';
 import type { SaveStore } from '../meta/save/SaveStore';
-import type { EquipmentCatalog, UpgradeEntry } from '../tools/economyMath';
+import type { EconomyParams, EquipmentCatalog, UpgradeEntry } from '../tools/economyMath';
+import type {
+  SalvagePlacementSource,
+  SalvageSpawnPlanEntry,
+} from '../contracts/officialParams';
+import type { SalvageKind } from '../systems/economy/SalvageObject';
 import type {
   DeparturePort,
   EquipmentUiPort,
@@ -810,5 +815,159 @@ export class MetaUiAdapter implements GameSystem {
 
   dispose(): void {
     for (const part of this.parts) part.dispose();
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   ⑤ 해저 재화(salvage) 결합·스폰 (INT-CORE-011)
+   — 보상은 economy params에서, 좌표는 SalvagePlacementSource에서만
+   파생한다. 여기에는 드롭·회수 런타임이 없다 (게임플레이 소유).
+   ───────────────────────────────────────────────────────────── */
+
+/** 게임플레이 SalvageKind와의 정합 검증용 — 값 발명이 아니라 타입 가드다 */
+const SALVAGE_KINDS: readonly SalvageKind[] = ['chest', 'container', 'mineral'];
+
+function isSalvageKind(value: string): value is SalvageKind {
+  return (SALVAGE_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * 경제 params의 salvageSpawns와 월드·그래픽스의 배치를 spawnId로 결합한다.
+ *
+ * 거부(예외) 조건 — 존재하지 않는 spawnId를 무시하지 않는다:
+ *  - 경제 spawnId·배치 spawnId 중복
+ *  - 경제에만 있는 spawnId (배치 누락) / 배치에만 있는 spawnId (경제 미지)
+ *  - economy.dropTables에 없는 dropTableId
+ *  - 게임플레이 SalvageKind 밖의 kind
+ */
+export function composeSalvageSpawnPlan(
+  economy: Pick<EconomyParams, 'dropTables' | 'salvageSpawns'>,
+  placements: SalvagePlacementSource,
+): SalvageSpawnPlanEntry[] {
+  const placementById = new Map<string, SalvagePlacementSource['placements'][number]>();
+  for (const placement of placements.placements) {
+    if (placementById.has(placement.spawnId)) {
+      throw new Error(`[salvage] 배치 spawnId 중복: ${placement.spawnId}`);
+    }
+    placementById.set(placement.spawnId, placement);
+  }
+
+  const seenEconomyIds = new Set<string>();
+  const plan: SalvageSpawnPlanEntry[] = [];
+  for (const spawn of economy.salvageSpawns) {
+    if (seenEconomyIds.has(spawn.spawnId)) {
+      throw new Error(`[salvage] 경제 spawnId 중복: ${spawn.spawnId}`);
+    }
+    seenEconomyIds.add(spawn.spawnId);
+
+    const placement = placementById.get(spawn.spawnId);
+    if (!placement) {
+      throw new Error(`[salvage] 배치 누락 spawnId: ${spawn.spawnId} (경제에만 존재 — 무시 금지)`);
+    }
+    placementById.delete(spawn.spawnId);
+
+    if (!isSalvageKind(spawn.kind)) {
+      throw new Error(`[salvage] 미지 kind: ${spawn.kind} (spawnId ${spawn.spawnId})`);
+    }
+    const table = economy.dropTables[spawn.dropTableId];
+    if (!table) {
+      throw new Error(`[salvage] 미지 dropTableId: ${spawn.dropTableId} (spawnId ${spawn.spawnId})`);
+    }
+
+    plan.push({
+      spawnId: spawn.spawnId,
+      kind: spawn.kind,
+      dropTableId: spawn.dropTableId,
+      credits: table.credits,
+      rarePartId: spawn.rarePartId,
+      rarePartCount: spawn.rarePartId === null ? 0 : 1,
+      worldPosition: placement.worldPosition,
+      ...(placement.orientationYawRadians !== undefined
+        ? { orientationYawRadians: placement.orientationYawRadians }
+        : {}),
+    });
+  }
+
+  if (placementById.size > 0) {
+    const unknown = [...placementById.keys()].join(', ');
+    throw new Error(`[salvage] 경제에 없는 배치 spawnId: ${unknown} (무시 금지)`);
+  }
+  return plan;
+}
+
+/** 게임플레이 스폰 진입점의 최소 단면 — EconomySystem.spawnSalvage가 충족 */
+export interface SalvageSpawnAdapter {
+  spawnSalvage(kind: SalvageKind, x: number, y: number, z: number, rarePartId: string | null): unknown;
+}
+
+export type SalvageSpawnReport =
+  | { readonly status: 'spawned'; readonly count: number }
+  | { readonly status: 'alreadySpawned' }
+  | { readonly status: 'unwired' }
+  | { readonly status: 'rejected'; readonly message: string };
+
+/**
+ * 출항당 1회 salvage 스포너 (production spawn 규칙).
+ *
+ *  - `beginSortie()` — 세션 시작(월드 초기화 직후, `resetSortieSession` 다음)
+ *    에 조립부가 호출한다. 새 출항 가드를 리셋한 뒤 전체 plan을 1회 생성.
+ *  - `spawnForSortie()` — 같은 출항에서 두 번째 호출은 `alreadySpawned`
+ *    (파괴·회수된 salvage도 같은 출항 중 재생성하지 않는다 — 월드 잔존
+ *    개수가 아니라 출항당 플래그로 가드).
+ *  - 배치 소스 미연결이면 `unwired` — **임시 좌표를 만들지 않는다.**
+ *  - 결합 거부(누락·중복·미지 spawnId 등)는 `rejected` — 아무것도 생성하지
+ *    않는다 (부분 생성 없음: plan 결합이 생성보다 먼저 전부 수행된다).
+ */
+export class SortieSalvageSpawner {
+  private readonly economy: Pick<EconomyParams, 'dropTables' | 'salvageSpawns'>;
+  private readonly adapter: SalvageSpawnAdapter;
+  private placements: SalvagePlacementSource | null = null;
+  private spawnedThisSortie = false;
+
+  constructor(
+    economy: Pick<EconomyParams, 'dropTables' | 'salvageSpawns'>,
+    adapter: SalvageSpawnAdapter,
+  ) {
+    this.economy = economy;
+    this.adapter = adapter;
+  }
+
+  /** 월드·그래픽스 배치 도착 시 조립부가 연결한다 (null = 명시적 미연결) */
+  attachPlacementSource(source: SalvagePlacementSource | null): void {
+    this.placements = source;
+  }
+
+  get placementWired(): boolean {
+    return this.placements !== null;
+  }
+
+  /** 새 출항 시작 — 가드 리셋 후 1회 생성 */
+  beginSortie(): SalvageSpawnReport {
+    this.spawnedThisSortie = false;
+    return this.spawnForSortie();
+  }
+
+  spawnForSortie(): SalvageSpawnReport {
+    if (this.spawnedThisSortie) return { status: 'alreadySpawned' };
+    if (!this.placements) return { status: 'unwired' };
+
+    let plan: SalvageSpawnPlanEntry[];
+    try {
+      plan = composeSalvageSpawnPlan(this.economy, this.placements);
+    } catch (error) {
+      return { status: 'rejected', message: error instanceof Error ? error.message : String(error) };
+    }
+
+    for (const entry of plan) {
+      this.adapter.spawnSalvage(
+        entry.kind,
+        entry.worldPosition.x,
+        entry.worldPosition.y,
+        entry.worldPosition.z,
+        entry.rarePartId,
+      );
+    }
+    this.spawnedThisSortie = true;
+    return { status: 'spawned', count: plan.length };
   }
 }
