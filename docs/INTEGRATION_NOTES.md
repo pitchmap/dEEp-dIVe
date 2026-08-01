@@ -1202,3 +1202,81 @@ scene.attachCargoShipSource(gameplay.cargoShipState); // CargoShipStateSource �
    **경고 표시 / 구매 차단** 중 무엇을 택할지는 기획·리드 결정 사항이며,
    통합 창은 체력·소나 시스템을 만들지 않는다(스텁 포함 금지).
 2. `slotPositions`의 `BaseScreenPort` 계약 승격 여부.
+
+---
+
+### INT-TOOL-010 — [ECON][FACTION][B7] 스프린트 B 툴링 선행개발 산출 + 요청 4건
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 빌드·툴 (스프린트 B 선행개발 — 15차 결의 2 창 4 범위) |
+| 대상 시스템 | `params/economy.json`(기획 커밋 영역), `package.json`(스크립트), 게임플레이 `src/systems/`, 그래픽스 `src/render/`, 리드 `src/core/` |
+| 변경 이유 | B3·B6 경제 params 확장 + B1~B5 자동 검증 + B7 측정 로깅 인프라 (15차 결의 2·3) |
+| 관련 게이트 | B1~B7 |
+| 하위 호환 여부 | **추가만.** A 스프린트 경제 수치 무변경(`verify:sprint-a` 30/30 유지). 장비·업그레이드 스키마 무변경, 세이브 스키마 무변경 |
+| 개발 리드 결정 | **확인 대기** — 아래 요청 4건 |
+| 적용 커밋 | `6c77ecf`(params) · `3bc7b40`(검증기) · `e9d9cb3`(B7) · `0931dd9`(러너) |
+| 발효 상태 | **B 미발효.** 15차 결의 1에 따라 B 범위표 발효 조건 = A 통합 PR 병합. 이 산출물은 선행개발이며 dev·main 병합 근거가 아니다 |
+
+**확정된 것 (툴링·기획 영역)**
+
+- `factionRewards` — 세력 3종 보상 **정책**. 세력→드롭 테이블 매핑은 계약
+  `FACTION_RULES`가 정본이라 복제하지 않고, 검증기가 계약과 정책의 일치를
+  **기계적으로 대조**한다(어긋나면 로드 거부). `none`(확정 0)과
+  `pending`(미결정)을 구조로 구분해, pending에 0을 적는 경로를 막았다.
+- `highValueTransport`·`guardSpawn` — 스키마만. 수치는 전부 `null`.
+- 검증기 거부 규칙 11종, B7 로깅 거부 규칙 11종.
+- `npm run verify:sprint-b` — 자동 17/17 통과, 보류 5 · 차단 2 · 대기 4.
+
+**요청 ① — 게임플레이 (B1·B2·B4)**
+
+1. **중립 선박 정의·배치** — 현재 production에 `faction: 'hostile'`만 2지점
+   (`CargoShipSystem`). 적대·중립이 같은 출항에 있어야 B1이 성립한다.
+2. **`ShipIdentificationSource` 구현** — 판정측 데이터(세력·거리·
+   `tagDisplayable`). 미식별 동안 `displayLabelId`는 `null`이어야 한다.
+3. **`neutralShipHit` 발행** — production 발행 지점 0건. 유효 피해가 적용된
+   뒤 1회만 발행하고, 조준·발사·빗나감·중복·파괴 후에는 발행하지 않는다.
+   리드의 수신 경계(`NeutralIncidentBoundary`)와 스폰 배선(`GuardSpawnBridge`)은
+   이미 병합돼 있어 **발행만 시작하면 경로가 이어진다.**
+4. **`GuardSpawnLocationStrategy` 구현** — 월드 지식이 필요하므로 게임플레이·
+   월드 소유. 미연결이면 `noSpawnLocation`으로 끝난다(임의 좌표 금지).
+   ⚠ 이 전략에 넣을 **공식 수치가 없다** — `guardSpawn` params 5항목 전부
+   미확정이다. 기존 값을 승계할 수상함 스폰 규칙도 저장소에 없다.
+   수치가 필요하면 기획 결정을 먼저 받아야 하며, 툴링은 발명하지 않았다.
+
+**요청 ② — 그래픽스 (B2)**
+
+식별 태그 UI는 `ShipIdentificationSource`의 read model **만** 소비한다.
+모델명·클래스명·메시 이름으로 세력을 추측하는 코드는 계약 위반이며,
+`verify:sprint-b`의 `B2-noGuess`가 `src/render/`·`src/ui/`의
+`faction === '...'` 직접 분기를 정적 스캔한다(현재 위반 0). 표시는
+`identificationState`만 근거로 삼는다 — 미식별에서 세력이 새면 B2·B7이
+통째로 무의미해진다. 색·문구는 계약에 없으므로 그래픽스가 정한다.
+
+**요청 ③ — 리드 (B5 차단 해소)**
+
+`B5_BLOCKED_NO_DESTROYER_IMPLEMENTATION` — 저장소에 `DestroyerAI` 계약은
+있으나 **production 구현체가 없다**(`implements DestroyerAI` 정적 스캔 0건;
+`verifyMeta.ts`의 것은 어댑터 검증용 테스트 대역이다). B5 조건은 '기존
+구축함 AI 재사용'이므로 재사용할 원본이 없으면 성립할 수 없다.
+
+**빈 어댑터를 통과로 만들지 않았다.** 그렇게 하면 B5의 존재 이유(신규 AI
+코드 0을 구조로 보장)가 사라진다. 계약 `guard.ts` 주석대로 구축함 AI가
+스프린트 C 항목이라면, **B5는 C 이전에 통과할 수 없다** — 이 순서 문제
+(B1~B5 통과가 C 착수 방아쇠인데 B5가 C 산출물을 기다린다)는 리드 판단이
+필요하다.
+
+**요청 ④ — 기획 (B6)**
+
+고가치 배율·호위 이탈 거리는 12차 결의 3의 '배율은 튜닝표' 항목이고 공식
+수치가 없다. 제안: `docs/SPRINT_B_B6_PROPOSAL.md` (권고 P2 배율 1.8,
+범위 1.5~2.5). ⚠ 제안서의 핵심 발견 — **배율보다 등장 빈도가 보스 준비
+곡선의 지배 변수**이며, 고가치 수송선이 매 출항 등장하면 어떤 배율이든
+4~6회 목표를 깬다. 호위 이탈 거리는 근거로 삼을 실측이 없어 **제안 수치를
+내지 않았다**(호위 AI 구현 후 실측 항목).
+
+**경비함 격침 보상 미결정**
+
+`factionRewards.patrol`은 `pending`이다. 계약 `FACTION_RULES.patrol.dropTableId`도
+`null`이라 현재는 경비함을 격침해도 보상이 없다. 결정 시 **계약과 params를
+함께** 개정해야 한다(둘 중 하나만 바꾸면 검증기가 로드를 거부한다).
