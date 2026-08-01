@@ -51,11 +51,17 @@ sprint-a 자동 전 항목 · sprint-b 자동 23/23(차단 0)**
 | B4 | `neutralShipHit` 1건 · `attackCorrelationId="torpedo:1"` · `guardShipRequested` 1건(동일 id) · 중복 요청 `duplicateRequest` |
 | B5 | 경비함 1척 `patrol` 생성 · 초기 표적 `PLAYER_ENTITY_ID` · 수면 y=12 유지 · **거리 30.0 → 5.8 m 접근** · 방향 마커 실제 위치 |
 
-### A 회귀
+### A 회귀 — 전부 통과
 
-BASE 시작 · EconomyHud · 업그레이드 7/장비 4 · 공식 가격 · 출항 버튼 1개 ·
-구매(저장 1회) · 장비 4동작 · 저장 실패 rollback · 출항 저장 실패 시 기지 유지 ·
-새로고침 복원 · 명시적 빈 loadout 유지 · salvage 3종 · hostile 120 — 전부 통과.
+- **조준 10/10**: `periscope`(y 8.12) / `cruise`(3.95) / `deep`(−3.02) 3구간
+  진입 · 카메라 = `aimCameraSocket` 오차 0 · 자기 선체 layer 제외 ·
+  조준 유지 중 ΔY 0 · 소켓 `forwardY` = `sin(aimPitch)` 일치 · 콘솔 오류 0
+- **기지·경제**: BASE 시작 · EconomyHud · 업그레이드 7/장비 4 · 공식 가격 ·
+  출항 버튼 1개 · 구매(저장 1회) · 장비 4동작 · 저장 실패 rollback ·
+  출항 저장 실패 시 기지 유지 · 새로고침 복원 · 명시적 빈 loadout 유지
+- **출항 경제**: salvage 3종 배치·중복 없음 · hostile cargo 120
+
+**A 공식 인수 = 통과 (A1~A8).**
 
 ### 판정
 

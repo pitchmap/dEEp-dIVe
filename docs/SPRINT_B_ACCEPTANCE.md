@@ -284,6 +284,14 @@ B7 final pass/fail   = not evaluated
 | salvage 3종 배치 | ✅ `salvage-1/2/3` · 중복 생성 없음 |
 | hostile cargo 보상 | ✅ 120 |
 
+**salvage 회수 보상(총 125 크레딧 + 희귀 부품 1) 실측 — 미실시.** 배치·중복
+방지·보상 파생은 브라우저에서 확인했으나, 3종을 실제로 파괴·회수하는
+브라우저 시나리오는 어뢰 재장전 20초 × 반복 접근으로 시간이 과도해 이번
+회차에서 완주하지 못했다. 해당 수치는 `verify:gameplay`의 결정적 검증
+('salvage 총 보상 = 경제 params 파생 125 크레딧 + 희귀 부품 1개')이 덮고 있으며,
+`A8-income`의 출항 최대 수입 245(=120+125) 전제도 같은 경로로 확인된다.
+**브라우저 실측 항목으로는 미확인으로 남긴다.**
+
 ### 판정
 
 ```
@@ -295,3 +303,23 @@ B 공식 발효        = 불가    (발효 조건 = A 통합 PR 병합 — 아�
 ```
 
 B6·B7 pending은 B1~B5 실패가 아니다 (15차 결의 1·3: 병렬 최종 조건).
+
+### 브라우저 증거 (스크린샷 — `docs/screenshots/`)
+
+| 파일 | 내용 |
+|---|---|
+| `sprintAB_base_ui.png` | 기지 화면 — EconomyHud·업그레이드 7·장비 4·출항 버튼 |
+| `sprintAB_upgrade_purchase.png` | 업그레이드 구매 직후 |
+| `sprintAB_equipment.png` | 장비 장착·교체·해제 |
+| `sprintAB_hostile_neutral.png` | 적대·중립 동시 배치 |
+| `sprintAB_tag_hostile.png` · `sprintAB_tag_neutral.png` | 식별 태그 (적대/중립) |
+| `sprintAB_neutral_hit.png` | 중립 유효 피격 |
+| `sprintAB_neutral_no_reward.png` | 중립 격침 — 보상 0 |
+| `sprintAB_guard_spawn.png` | 경비함 실제 스폰 |
+| `sprintAB_guard_direction.png` | 등장 방향 마커 |
+| `sprintAB_tag_patrol.png` | 경비함 식별 태그 |
+| `sprintAB_guard_moving.png` | 경비함 접근 이동 |
+| `sprintAB_hostile_reward.png` | 적대 격침 — 120 |
+| `sprintAB_aim_surface.png` · `sprintAB_aim_cruise.png` · `sprintAB_aim_deep.png` | 3심도 조준 회귀 |
+
+`sprintAB_salvage_rewards.png`는 위 사유(회수 시나리오 미완주)로 없다.
