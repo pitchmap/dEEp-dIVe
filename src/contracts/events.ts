@@ -23,6 +23,13 @@ export type DepthLayerId = 'periscope' | 'cruise' | 'deep';
 /** 탐지 게이지 3단계 — 눈 아이콘 UI와 1:1 대응 (마스터 플랜 §5.6) */
 export type DetectionStage = 'safe' | 'searching' | 'detected';
 
+import type {
+  BossPhase,
+  LootSource,
+  MetaStateId,
+  SortieSettlement,
+} from './meta';
+
 /** 폭뢰 피해 구분 (마스터 플랜 §5.13) */
 export type DamageCause = 'direct' | 'near';
 
@@ -78,6 +85,48 @@ export interface GameEvents {
   /** 성능 샘플(약 1초 주기, 발행: core/Game).
    *  계측 오버레이·게이트 기록 툴이 구독한다 (G1·G2) */
   performanceSampled: { fps: number; averageFps: number; minFps: number };
+
+  /* ── PvE 메타 루프 계약 (INT-CORE-006, 회의록 10·11 근거) ── */
+
+  /** 상위 메타 루프 상태 전환 완료 시 (발행: meta/MetaLoop).
+   *  구독: 기지 화면(렌더·UI), 오디오(국면 음악). 하위 세션 상태
+   *  (gameStateChanged)와 별개 계층이다 */
+  metaStateChanged: { previous: MetaStateId | null; next: MetaStateId };
+
+  /** ① 메타 세션(출항) 시작 — 하위 해역 세션 재시작과 동시 발행
+   *  (발행: meta/MetaLoop). 구독: 렌더(해역 진입 연출), UI, 오디오 */
+  sortieStarted: { sortieNumber: number };
+
+  /** ② 해역 세션 결과 확정 — 귀환 정산 데이터 포함 (발행: meta/MetaLoop).
+   *  구독: 기지·정산 UI, 오디오. 파괴 시 크레딧 손실이 settlement에 반영된다 */
+  sortieEnded: { sortieNumber: number; settlement: SortieSettlement };
+
+  /** ③ 중도 귀환 요청 (발행: UI/입력 측 — Tab·기지 귀환 버튼).
+   *  구독: meta/MetaLoop (세션 포트 경유로 하위 정리 후 정산) */
+  returnToBaseRequested: Record<string, never>;
+
+  /** 드롭 결과 — 재화 획득 발생 (발행: 게임플레이 economy 판정).
+   *  구독: meta/MetaLoop(출항 집계 — 희귀 부품은 즉시 확정),
+   *  UI(획득 표시), 렌더·오디오(픽업 연출) */
+  lootDropped: { source: LootSource; credits: number; rareParts: number; x: number; z: number };
+
+  /** 경비함 출현 요청 — 중립 선박 공격 불이익 단일 [확정 6차 결의 3]
+   *  (발행: 게임플레이 판정). 구독: 경비함 AI(리드 — 구축함 AI 재활용 스폰) */
+  guardShipRequested: { x: number; z: number };
+
+  /** 저장 요청 (발행: meta/MetaLoop). cause:
+   *  'settlement' = 귀환 정산 확정 후 / 'rarePart' = 희귀 부품 획득 즉시
+   *  [확정 6차 결의 9 — 그 외 자동 저장 없음]. 구독: SaveSystem(툴링) */
+  saveRequested: { cause: 'settlement' | 'rarePart' };
+
+  /** 보스 단계 전환 (발행: 보스 AI — 리드). 구독: 렌더(단계 연출),
+   *  오디오(침묵 전환·음정 하강), UI */
+  bossPhaseChanged: { phase: BossPhase };
+
+  /** 보스 약점 활성 상태 변경 (발행: 게임플레이 약점 판정 — 판정 소유는
+   *  게임플레이, 발광·개방 연출은 렌더 [소회의 결의 5 경계]).
+   *  구독: 렌더, UI(조준 보조) */
+  bossWeakPointChanged: { active: boolean };
 }
 
 export type GameEventName = keyof GameEvents;

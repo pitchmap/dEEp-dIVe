@@ -198,6 +198,47 @@ blocks를 쓰므로 구 충돌 미러(15/16±3·sin)가 만들던 '보이지 않
 | params.movement → 프로펠러 | composition root가 `propellerIdleSpinRatio`·`maxSpeedMetersPerSecond` 값을 렌더에 주입 — 렌더 JSON에 중복 정의 금지 |
 | CanyonLayout → 렌더·충돌 | `STARTING_CANYON_LAYOUT`(src/world/startingCanyonLayout.ts) 동일 인스턴스를 양쪽에 주입 — 렌더는 blocks→메시, 게임플레이는 blocks→충돌체(AABB 근사는 소비측 규칙). 자체 수식 복제 금지 |
 
+## 2계층 상태 머신 — 상위 메타 루프 (PvE, INT-CORE-006·007)
+
+PvE 전환(회의록 10·11)의 구조 번역. **하위 해역 세션은 무수정 포장한다.**
+
+```
+[상위 — src/meta/MetaLoop (리드 소유, 신규)]
+BASE(기지) → SORTIE_PREP(출항 준비) → SORTIE(해역 세션) → DEBRIEF(귀환 정산) → BASE
+                          ↑ 취소 경로: SORTIE_PREP → BASE
+
+[하위 — core/GameStateMachine (기존, 무수정)]
+BOOT → DEPARTURE → APPROACH → ATTACK → ESCAPE → RESULT (→ DEPARTURE)
+```
+
+- **계층 간 통신 3종 제한** [확정 소회의 결의 2]: ① 세션 시작
+  (`SortieSessionPort.start`) ② 세션 결과(`MetaLoop.settleSortie(report)`)
+  ③ 중도 귀환(`returnToBaseRequested` 이벤트 → `port.requestReturnToBase`).
+  상위가 하위 내부 상태(gameStateChanged·게임 시스템)를 직접 읽는 것 금지.
+- 포트 어댑터는 composition root(`Game.composeSystems`)가 제공 — 계층
+  경계의 유일한 구현 지점. 이동·어뢰·탐지·AI 코어는 복제하지 않는다.
+- 출항 시 하위 세션 재시작 + 출항 집계 리셋. 정산 확정 후
+  `saveRequested('settlement')` 발행, 희귀 부품은 획득 즉시
+  `saveRequested('rarePart')` — 그 외 자동 저장 없음 [6차 결의 9].
+- 파괴(destroyed)는 일반 크레딧 일부 손실을 포함한 `SortieSettlement`로
+  전달되고, 희귀 부품·영구 성장 데이터는 보존된다.
+- 결정적 검증: `node src/meta/__verification__/run.mjs` (19항목).
+
+### 업그레이드 배율 레이어 (src/meta/upgradeMath.ts)
+
+**params JSON 원본 불변** — 업그레이드는 원본을 수정하지 않고 런타임
+`최종값 = 기준값 × (1 + 보정 합)` 을 통과시킨다 [확정 소회의 결의 4]:
+
+- **합연산만** (`mergeModifiers` — 곱연산 스택 금지, 기획 암산 가능성 우선).
+- 시간형 파라미터(재장전 등)는 `effectiveDurationSeconds`(단축 적용) 사용.
+- 실제 시스템과 툴 시뮬레이터가 **이 모듈의 동일 순수 함수**를 쓴다 —
+  계산 복제 금지. 게임플레이는 함수를 직접 부르지 않고 composition root가
+  계산한 유효 파라미터를 명시적 주입(applyParams 경로)으로 받는다.
+- 업그레이드 단계 데이터(메타 소유·저장 대상)와 게임 밸런스 정의
+  (params/*.json, 기획 소유)는 분리 — 코드→JSON 역기록 금지.
+- 신 스코프 가드(7항목·장비 4종)는 `UpgradeStatId`·`EquipmentId` 유니언
+  타입 상한으로 기계 강제.
+
 ## 게임 상태 전환과 장면 전환의 분리
 
 - **게임 상태(국면)** — `GameStateMachine`이 소유. 전환은 허용표 검증 후

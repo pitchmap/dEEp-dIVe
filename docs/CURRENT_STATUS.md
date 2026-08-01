@@ -61,10 +61,14 @@
   - **D+5 리뷰 후속 — 공통 규약 확정 (INT-CORE-002)**: `src/core/conventions.ts` 신규 (로컬 -Z=선수·+Z=선미·+Y=위, `bowDirectionXZ`/`sternDirectionXZ`/`meshYawRadians`/`cameraRecenterYawRadians`/`propellerSpinRatio`), `AimSystem` 계약(마우스·HUD 버튼 공용 진입점 — 별도 전투 시스템 금지) + `aimModeChanged` 이벤트, 프로펠러 공회전 비율 파라미터(`propellerIdleSpinRatio` 0.08, 0~1 검증). ARCHITECTURE.md '공통 공간·방향 규약'·'조준 입력 단일화' 章, INTERFACES.md §1·§2·§3 갱신
   - **D6 통합 전 상태 계약 확정 (INT-CORE-003)**: `SubmarinePoseSource`(positionX/Y/Z·heading·부호 있는 forwardSpeed — 렌더의 위치 차분 재계산 금지), `CargoShipStateSource`(id·pose·velocity·hit·sinkProgress·removed — 침몰 시간축 게임플레이 소유), `torpedoHit { targetId, x, z }` 이벤트, `contracts/layout.ts`(CanyonLayout — 렌더·충돌 공용 단일 소스, 인터페이스만), 파라미터 단일 소스 확정(renderVisualParams의 idleSpinRatio·fullSpinAtSpeedMps 중복 제거 지시), Game 조립 연결 지도(ARCHITECTURE 'Game 조립 계약') 문서화
   - **통합 차단 2건 해소 (INT-CORE-004)**: ① `src/world/startingCanyonLayout.ts` — CanyonLayout 단일 데이터 인스턴스(`STARTING_CANYON_LAYOUT`), 벽 높이는 그래픽 하향값(11/12±2·sin, 상단≤7<해수면 12) 최종 확정 — 구 충돌 미러(15/16±3·sin)의 '보이지 않는 약 4m 벽' 소멸 ② 카메라 리센터 이의 해소 — `cameraRecenterYawRadians` 폐기, `cameraRecenterOffsetDirectionXZ`(위치=선미 방향)·`cameraRecenterLookDirectionXZ`(시선=선수 방향) 분리 (하나의 yaw 재사용 금지, 검증 기준: 프로펠러가 카메라 쪽·W 전진 시 화면 안쪽)
+  - **PvE 전환 착수 (트랙 전환 — 회의록 10·11 반영):**
+    - **선행 계약 (INT-CORE-006, 커밋 `dcc6f7d`)** — `contracts/meta.ts`(Faction·재화 이원화·MetaState·SortieOutcome/Report/Settlement·SortieSessionPort·UpgradeStatId 7항목 상한·EquipmentId 4종 상한·BossPhase) + 이벤트 9종(metaStateChanged·sortieStarted/Ended·returnToBaseRequested·lootDropped·guardShipRequested·saveRequested·bossPhaseChanged·bossWeakPointChanged) + CargoShipStateSource.faction(선택→추후 필수)
+    - **[LOOP] 상위 메타 루프·업그레이드 배율 레이어 (INT-CORE-007)** — `src/meta/` 신규: MetaLoop(BASE→SORTIE_PREP→SORTIE→DEBRIEF, 하위 무수정 포장·통신 3종 제한), settlement(파괴 시 크레딧 손실·희귀 즉시 확정), upgradeMath(합연산 순수 함수 — params 불변, 툴 공용), provisionalEconomy(⚠ R7 손실률 50% 임시 — economy.json 이관 대기), 결정적 검증 19항목. Game 조립: metaLoop 최선두 등록, 세션 시작(BOOT→DEPARTURE)을 SortieSessionPort 어댑터로 이동 — 기지 화면 도입 전 임시 자동 출항
+    - **DECISIONS.md 개정** — PvE 결정 P1~P16 표 신설(1차 결의 1·4 개정·신 스코프 가드), 폐기 표 정리(영구 성장 금지 → P2 대체). FILE_OWNERSHIP: src/meta(리드, save/는 툴링)·systems/economy(게임플레이)·params 확장(기획)
 - **진행 중:** 없음
-- **다음 작업:** D6 통합 — 각 파트 INT-CORE-003·004 적용분(게임플레이 b7faf44·그래픽 cbcbf65·툴링 2f8b66f) feat→dev 병합 리뷰 + composeSystems 배선(AimSystem·CargoShipSystem·레이아웃 주입), 구축함 AI 착수
-- **차단 문제:** 없음
-- **변경된 계약:** INT-CORE-004 — `startingCanyonLayout` 데이터 모듈 신설(src/world/ 공용 영역, FILE_OWNERSHIP 갱신), conventions 카메라 함수 교체(`cameraRecenterYawRadians` 폐기 → Offset/Look 분리). 이전: INT-CORE-003(SubmarinePoseSource·CargoShipStateSource·torpedoHit·layout.ts), INT-CORE-002, INT-GAME-001
+- **다음 작업:** ① 각 파트 PvE 1단계 적용분(economy·save·기지 화면) 조립·병합 리뷰 ② D+9 성장 루프 완주 확인(저장 포함) ③ **보스 AI(3단계×패턴 풀)는 D+9 성장 루프 안정 판정 후 착수** — 돌진(이동+목표 벡터)·투사체(어뢰 역방향)·소환(어군 인스턴싱+소형 적)·약점(판정 태그) 재사용 부품이 게임플레이 합류분에 의존. R-P3 비상 컷 기준(패턴 4종 축소) 사전 확정 상태
+- **차단 문제:** 없음 (병목 인지: 기획 경제 수치표 PvE D+3 — R-P2 임시값 선진행 중)
+- **변경된 계약:** INT-CORE-006(PvE 선행 계약)·INT-CORE-007(메타 루프 구현·조립). 이전: INT-CORE-004·003·002, INT-GAME-001
 - **통합 주의사항:**
   - 각 파트는 자기 소유 영역에서 `GameSystem`(`src/core/GameSystem.ts`) 구현체를 export하고, 이 문서 자기 구역에 등록 요청을 남긴다. `src/core` 배선은 feat→dev 병합 시 리드가 수행
   - 파트 간 통신은 EventBus만 — 구현체 간 직접 참조(포즈 주입 등)는 composeSystems(composition root)에서만 잇는다
@@ -77,8 +81,10 @@
   - **[INT-CORE-003 적용 요청 — 그래픽스]** CanyonScene 로컬 `SubmarinePoseSource` Pick·`CargoShipStateSource`를 계약 import로 교체, Propeller 속도 입력을 poseSource.forwardSpeed로 교체(위치 차분 재계산 삭제), renderVisualParams.json의 `idleSpinRatio`·`fullSpinAtSpeedMps` 삭제(조립 주입으로 대체), 잠수함 Y는 poseSource.positionY 사용
   - **[INT-CORE-004 적용 요청 — 그래픽스]** `buildCanyonBlockout` 자체 수식 삭제 → 주입받은 `CanyonLayout.blocks`로 메시 생성 (수치는 현행 그래픽과 1:1 — 시각 변화 없음). CameraRig의 `cameraRecenterYawRadians(h) + π` 우회를 `cameraRecenterOffsetDirectionXZ` 기준 배치로 교체 (결과 동일: 선미 뒤 상단 → 선수 방향)
   - **[INT-CORE-003 적용 요청 — 빌드·툴]** 오디오 배관은 `torpedoHit`(과장 폭발음)·`aimModeChanged` 구독 항목을 사운드 세트(D+10) 배선 목록에 추가
-- **마지막 업데이트:** D+5 리뷰 후속 (공통 규약 확정 커밋)
-- **담당 브랜치:** `claude/deep-dive-core-lead-uyg77p` (리드 세션 — dev 병합분 머지 완료)
+  - **[PvE 적용 요청 — 전 파트]** INT-CORE-007 하단 '각 파트 적용 요청' 참조: 게임플레이(economy·Faction·세션 리셋 API·약점 판정), 툴링(src/meta/save·시뮬레이터는 upgradeMath 동일 함수·가드 빌드 경고·중도 귀환 버튼), 그래픽스(기지 화면 metaStateChanged 구독·보스 연출 이벤트 소비·분절 애니 스파이크), 기획(economy.json·upgrades.json — PvE D+3 병목)
+  - **계층 경계 [확정]:** 상위(src/meta)가 하위 세션 내부 상태를 읽는 코드, 하위가 메타 상태를 참조하는 코드는 리뷰 반려 대상 — 통신은 SortieSessionPort + 이벤트 3종뿐
+- **마지막 업데이트:** PvE 1단계 착수 (선행 계약 + [LOOP] 메타 루프 커밋)
+- **담당 브랜치:** `claude/deep-dive-core-lead-uyg77p` (리드 세션 — D+10 통합분 `6e62356` 머지 완료)
 
 ## 게임플레이
 
