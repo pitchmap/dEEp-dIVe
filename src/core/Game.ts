@@ -31,6 +31,7 @@ import {
   deriveEffectiveParams,
 } from './PveIntegration';
 import { EventBus } from './EventBus';
+import { TorpedoTubeSocketRig } from './TorpedoTubeSocketRig';
 import { GameLoop } from './GameLoop';
 import { GameStateMachine } from './GameStateMachine';
 import { SceneManager } from './SceneManager';
@@ -63,6 +64,8 @@ export class Game {
   private gameplay: GameplaySystems | null = null;
   /** 업그레이드 반영 유효 파라미터 (params 원본의 파생 복사본) */
   private effectiveParams: GameParams | null = null;
+  /** 선수 발사관 소켓 — 조준 카메라·어뢰 생성의 단일 소스 (INT-CORE-008·009) */
+  private tubeSockets: TorpedoTubeSocketRig | null = null;
   /** 조립부가 건 EventBus 구독 해제 함수 — stop()에서 전부 해제한다 */
   private readonly unsubscribes: Array<() => void> = [];
 
@@ -149,6 +152,7 @@ export class Game {
         equipment: gameplay.equipment,
         upgrades: this.upgrades,
         effectiveParams: this.effectiveParams,
+        tubeSockets: this.tubeSockets,
       };
     }
 
@@ -252,6 +256,16 @@ export class Game {
     );
     this.registry.register(gameplay);
     this.gameplay = gameplay;
+
+    // ①-a2 선수 발사관 소켓 (INT-CORE-008·009 — 스프린트 A 최종 조립 기준).
+    //     조준 카메라(그래픽스)와 어뢰 생성(게임플레이)이 이 단일 인스턴스를
+    //     소비한다 — 개별 오프셋 계산 금지. 각 창 합류 시 배선:
+    //       · 게임플레이 조준(FineAimSource 구현) → tubeSockets.attachFineAimSource(...)
+    //       · 게임플레이 어뢰 → torpedoSpawnSocket 소비 (자체 SPAWN_OFFSET 삭제)
+    //       · 그래픽스 조준 카메라 → aimCameraSocket 소비 (자기 선체는 조준
+    //         카메라 레이어 마스크에서만 제외 — 객체 전역 숨김 금지)
+    //     미세각 미연결 상태 = 0 (조준 해제 reset 기준 상태와 동일).
+    this.tubeSockets = new TorpedoTubeSocketRig(gameplay.poseSource);
 
     // ①-b 장비 배율 — 공식 UpgradeModifiers(계약)를 장비 시스템의 로컬
     //     보정 형태로 변환해 주입한다. 어뢰 속도 보정에 대응하는 공식
