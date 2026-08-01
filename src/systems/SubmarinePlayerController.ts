@@ -202,6 +202,20 @@ export class SubmarinePlayerController implements PlayerController, SubmarinePos
   }
 
   /**
+   * 출항 시작 위치·자세로 되돌린다 (재출항 세션 초기화 전용).
+   * 관성(전후·수직)도 함께 0으로 만든다 — 이전 출항의 속도가 새 출항에
+   * 이월되지 않게 하기 위함. 파라미터·상한은 건드리지 않는다.
+   */
+  resetTo(spawn: SubmarineSpawn): void {
+    this.x = spawn.x;
+    this.y = this.clampY(spawn.y);
+    this.z = spawn.z;
+    this.heading = normalizeAngle(spawn.headingRadians);
+    this.currentSpeed = 0;
+    this.currentVerticalSpeed = 0;
+  }
+
+  /**
    * 수직 위치 직접 설정 — DepthSystem의 층 단위 이동 요청
    * (requestAscend/Descend 계약 경로) 전용. 수직 관성은 초기화한다.
    */

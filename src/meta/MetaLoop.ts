@@ -93,6 +93,31 @@ export class MetaLoop implements GameSystem {
     this.unsubscribes.length = 0;
   }
 
+  /**
+   * 저장된 영구 지갑 복원 — 부팅 시 1회, BASE 상태에서만 허용한다.
+   *
+   * PvE 1차 통합 최소 보완: 지갑은 증가 경로(collectLoot·settleSortie)만
+   * 있어 저장 데이터를 되돌릴 수 없었다. 저장 코드가 메타 상태 머신을
+   * 직접 조작하지 않는다는 원칙을 지키기 위해, 복원은 이 명시적 API
+   * 하나로만 들어온다 (상태 전이는 일으키지 않는다).
+   * 출항 중 호출은 집계와 충돌하므로 거부한다.
+   */
+  restoreWallet(wallet: CurrencyBundle): void {
+    if (this.state !== 'BASE') {
+      throw new Error(
+        `[MetaLoop] 지갑 복원은 BASE 상태에서만 가능합니다 (현재: ${this.state})`,
+      );
+    }
+    if (!Number.isFinite(wallet.credits) || wallet.credits < 0) {
+      throw new Error(`[MetaLoop] 복원 크레딧이 올바르지 않습니다: ${wallet.credits}`);
+    }
+    if (!Number.isFinite(wallet.rareParts) || wallet.rareParts < 0) {
+      throw new Error(`[MetaLoop] 복원 희귀 부품 수가 올바르지 않습니다: ${wallet.rareParts}`);
+    }
+    this.walletCredits = Math.floor(wallet.credits);
+    this.walletRareParts = Math.floor(wallet.rareParts);
+  }
+
   /** 기지 → 출항 준비 */
   beginSortiePrep(): void {
     this.transition('SORTIE_PREP');

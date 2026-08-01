@@ -70,6 +70,16 @@ export class RunEconomy {
     return true;
   }
 
+  /**
+   * 미정산 출항 적립분 폐기 — 재출항 세션 초기화 전용.
+   * 정산(settleSortie)을 거친 뒤에는 이미 0이므로 통상 무해하며, 정산
+   * 없이 세션이 재시작되는 경우에 이전 출항분이 이월되는 것을 막는다.
+   * 확정 크레딧·희귀 부품(영구분)은 건드리지 않는다.
+   */
+  discardUnsettledSortieCredits(): void {
+    this.sortie = 0;
+  }
+
   /** 희귀 부품 즉시 저장 신호 구독 (툴링 저장 시스템 연결점) */
   onRarePartAcquired(listener: (partId: string) => void): () => void {
     this.rarePartListeners.add(listener);

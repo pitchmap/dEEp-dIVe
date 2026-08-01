@@ -24,11 +24,11 @@
       "note": "기준값은 90도 소요 시간(작을수록 빠름) — 보정의 적용 방향은 게임플레이 배율 레이어가 결정"
     },
     {
-      "id": "diveDepth",
+      "id": "maxDepth",
       "label": "잠항 수심",
       "bonusPerLevel": 0.1,
       "maxLevel": 5,
-      "note": "기준값은 레이아웃 수직 한계 파생 — 레벨 데이터 이관(INT-GAME-004) 후 연결"
+      "note": "기준값은 레이아웃 수직 한계 파생 — 레벨 데이터 이관(INT-GAME-004) 후 연결. id는 공식 계약 UpgradeStatId 'maxDepth'로 통일 (PvE 1차 통합, 구 'diveDepth')"
     },
     {
       "id": "torpedoDamage",

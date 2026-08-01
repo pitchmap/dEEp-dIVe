@@ -137,11 +137,27 @@ export class EconomySystem implements Updatable {
     return this.wallet.settleSortie('return', 0);
   }
 
+  /**
+   * 재출항 세션 초기화 — 월드에 남은 드롭·해저 재화·경비 요청과 표적
+   * 처리 이력을 비운다. 지갑(RunEconomy)의 **확정 크레딧·희귀 부품은
+   * 영구분이므로 건드리지 않는다** — 미정산 출항 적립분만 정리한다.
+   * 회수 통지 구독(조립부 브리지)은 유지한다.
+   */
+  resetForNewSortie(): void {
+    for (const entry of this.salvages) entry.unregister();
+    this.salvages = [];
+    this.guardRequests = [];
+    this.dropField.clear();
+    this.processedTargetIds.clear();
+    this.wallet.discardUnsettledSortieCredits();
+  }
+
   dispose(): void {
     for (const entry of this.salvages) entry.unregister();
     this.salvages = [];
     this.guardRequests = [];
     this.dropField.clear();
+    this.dropField.disposeListeners();
   }
 
   /** 함선 피격 상태 전이 감시 — 세력별 반응 (1표적 1회) */
@@ -153,7 +169,13 @@ export class EconomySystem implements Updatable {
       if (ship.faction === 'hostile') {
         const table = ship.dropTableId ? PROVISIONAL_DROP_TABLES[ship.dropTableId] : undefined;
         if (table) {
-          this.dropField.spawnCredits(ship.positionX, ship.positionY, ship.positionZ, table.credits);
+          this.dropField.spawnCredits(
+            ship.positionX,
+            ship.positionY,
+            ship.positionZ,
+            table.credits,
+            'cargoShip',
+          );
         }
       } else if (ship.faction === 'neutral') {
         // 중립 공격 — 크레딧 없음, 경비함 출현 요청 (구축함 AI 재사용은 리드 소유)
@@ -177,6 +199,9 @@ export class EconomySystem implements Updatable {
         continue;
       }
       entry.unregister();
+      // 해저 재화(chest/container/mineral)의 공식 출처 태그 — 난파선 인양은
+      // 별도 배치가 도입될 때 'wreckSalvage'로 구분한다 (계약 LootSource).
+      const salvageSource = 'seabedCache' as const;
       const table = PROVISIONAL_DROP_TABLES[entry.object.dropTableId];
       if (table) {
         this.dropField.spawnCredits(
@@ -184,6 +209,7 @@ export class EconomySystem implements Updatable {
           entry.object.positionY,
           entry.object.positionZ,
           table.credits,
+          salvageSource,
         );
       }
       if (entry.object.rarePartId) {
@@ -192,6 +218,7 @@ export class EconomySystem implements Updatable {
           entry.object.positionY,
           entry.object.positionZ,
           entry.object.rarePartId,
+          salvageSource,
         );
       }
     }

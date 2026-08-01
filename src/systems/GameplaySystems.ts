@@ -166,6 +166,31 @@ export class GameplaySystems implements GameSystem {
     this.torpedo.applyCombatParams(params.combat);
   }
 
+  /**
+   * 재출항 세션 초기화 — 상위 메타 루프가 출항을 시작할 때
+   * (SortieSessionPort.start) 조립부가 호출하는 진입점이다.
+   *
+   * 되돌리는 것: 잠수함 위치·자세·관성, 어뢰 잔량·재장전·주행 중 어뢰,
+   * 조준 상태, 입력 눌림 상태, 화물선, 월드 드롭·해저 재화·경비 요청,
+   * 미정산 출항 크레딧.
+   * 유지하는 것: 확정 크레딧·희귀 부품(영구분), 장비 장착·업그레이드 배율,
+   * 협곡 레이아웃·충돌체(정적 지형은 세션마다 바뀌지 않는다).
+   */
+  resetSortieSession(params: GameParams): void {
+    this.aim.endAim();
+    this.input.reset();
+    this.mouse.reset();
+    this.player.resetTo({
+      x: this.layout.submarineSpawn.x,
+      y: 0,
+      z: this.layout.submarineSpawn.z,
+      headingRadians: this.layout.submarineSpawn.headingRadians,
+    });
+    this.torpedo.resetForNewSortie(params.combat.torpedoCapacity.value);
+    this.cargoShip.resetForNewSortie(this.targets);
+    this.economy.resetForNewSortie();
+  }
+
   /** 실제 게임에서는 attachInput(window, document) — initialize가 호출 */
   attachInput(keySource: KeyEventSource, visibilitySource?: VisibilitySource): void {
     this.input.attach(keySource, visibilitySource);

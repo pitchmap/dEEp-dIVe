@@ -220,6 +220,24 @@ export class CargoShipSystem implements Updatable, CargoShipStateSource, CombatT
   }
 
   /** 제거·정리 — 등록 해제 및 상태 종결 (조립 해제 시 GameplaySystems가 호출) */
+  /**
+   * 재출항 세션 초기화 — 시작 웨이포인트에서 미피격 상태로 되살린다.
+   * 격침된 표적은 등록이 해제돼 있으므로 표적 등록도 다시 수행한다.
+   */
+  resetForNewSortie(targets: TargetRegistry): void {
+    this.releaseTargetRegistration();
+    this.x = this.config.waypointA.x;
+    this.z = this.config.waypointA.z;
+    this.movingTowardB = true;
+    this.hitFlag = false;
+    this.sinkElapsed = 0;
+    this.removedFlag = false;
+    this.velX = 0;
+    this.velZ = 0;
+    this.faceCurrentWaypoint();
+    this.unregisterFromTargets = targets.register(this);
+  }
+
   dispose(): void {
     this.releaseTargetRegistration();
     this.removedFlag = true;

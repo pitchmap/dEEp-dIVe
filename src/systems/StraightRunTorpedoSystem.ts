@@ -119,6 +119,16 @@ export class StraightRunTorpedoSystem implements TorpedoSystem {
   }
 
   /** 검증 완료된 전투 파라미터 재적용 (개발 모드 핫리로드 전용) */
+  /**
+   * 재출항 세션 초기화 — 잔량을 정원으로 되돌리고, 재장전 타이머와
+   * 주행 중 어뢰를 비운다. 파라미터(정원·재장전 시간)는 유지한다.
+   */
+  resetForNewSortie(capacity: number): void {
+    this.ammo = Math.max(0, Math.floor(capacity));
+    this.reloadTimer = 0;
+    this.active = [];
+  }
+
   applyCombatParams(combat: CombatParams): void {
     this.reloadSeconds = combat.torpedoReloadSeconds.value;
     this.reloadTimer = Math.min(this.reloadTimer, this.reloadSeconds);
