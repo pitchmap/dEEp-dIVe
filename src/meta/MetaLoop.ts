@@ -76,6 +76,16 @@ export class MetaLoop implements GameSystem, WalletTransactionPort {
     return { credits: this.walletCredits, rareParts: this.walletRareParts };
   }
 
+  /** 이번 출항에서 획득했지만 아직 정산되지 않은 크레딧 (파괴 시 손실 대상 — UI 표시용) */
+  get sortieCreditsEarned(): number {
+    return this.tallyCredits;
+  }
+
+  /** 이번 출항에서 획득한 희귀 부품 수 (획득 즉시 지갑 확정 — 표시 구분용) */
+  get sortieRarePartsSecured(): number {
+    return this.tallyRareParts;
+  }
+
   initialize(_context: SystemContext): void {
     // 드롭 집계 — 발행은 게임플레이 economy, 집계·확정은 메타 계층 소유
     this.unsubscribes.push(

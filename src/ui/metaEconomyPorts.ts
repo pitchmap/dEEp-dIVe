@@ -32,14 +32,18 @@ export interface SortieEarningsSource {
   readonly rarePartsSecuredThisSortie: number;
 }
 
-/** 구매·장착 불가 사유 5종(과제 §8) + 저장 실패 */
+/** 구매·장착 불가 사유 5종(과제 §8) + 저장 실패
+ *  + economyDataUnavailable(공식 경제 params 미확정)·invalidState(기지 밖 명령)
+ *  [INT-CORE-010 — 리드 조립부가 결과 코드 정합을 위해 최소 확장. DOM·스타일 무변경] */
 export type MetaCommandFailure =
   | 'insufficientCredits'
   | 'insufficientRareParts'
   | 'maxLevel'
   | 'slotFull'
   | 'alreadyEquipped'
-  | 'saveFailed';
+  | 'saveFailed'
+  | 'economyDataUnavailable'
+  | 'invalidState';
 
 export type MetaCommandResult = 'ok' | MetaCommandFailure;
 
@@ -67,6 +71,10 @@ export function resultMessage(result: MetaCommandResult): string {
       return '✕ 이미 장착 중인 장비입니다.';
     case 'saveFailed':
       return `✕ ${SAVE_FAILED_MESSAGE}`;
+    case 'economyDataUnavailable':
+      return '✕ 가격 데이터 대기 — 경제 수치표 확정 전에는 구매할 수 없습니다.';
+    case 'invalidState':
+      return '✕ 지금은 수행할 수 없는 명령입니다.';
   }
 }
 

@@ -12,24 +12,36 @@ import { Renderer } from '../render/Renderer';
 import { CanyonScene } from '../render/CanyonScene';
 import { CameraInputAdapter } from '../render/CameraInputAdapter';
 import { GameplaySystems } from '../systems/GameplaySystems';
+import { UpgradePurchaseSystem } from '../systems/economy/UpgradePurchaseSystem';
+import { PurchaseTransaction } from '../meta/PurchaseTransaction';
+import { EquipmentTransaction } from '../meta/EquipmentTransaction';
 import { PerformanceOverlay } from '../ui/PerformanceOverlay';
 import { ControlsHud } from '../ui/ControlsHud';
+import { EconomyHud } from '../ui/EconomyHud';
+import { SortiePrepScreen } from '../ui/SortiePrepScreen';
 import { GateMetricRecorder } from '../tools/GateMetricRecorder';
 import { LoadingTimer } from '../tools/LoadingTimer';
 import { STARTING_CANYON_LAYOUT } from '../world/startingCanyonLayout';
 import { MetaLoop } from '../meta/MetaLoop';
 import { PROVISIONAL_CREDIT_LOSS_ON_DESTROYED_RATIO } from '../meta/provisionalEconomy';
 import { defaultSaveStore } from '../meta/save/SaveStore';
-import { loadUpgradeCatalog } from '../tools/upgradeCalculator';
+import { loadEquipmentCatalog, loadUpgradeCatalog } from '../tools/upgradeCalculator';
 import { WebAudioSystem } from '../audio/WebAudioSystem';
 import { AudioCueRouter } from '../audio/AudioCueRouter';
 import {
   AudioSystemAdapter,
+  CountingSavePort,
+  DepartureCommand,
+  EquipmentJudgeAdapter,
+  MetaUiAdapter,
   SaveBridge,
   SortieEconomyBridge,
   UpgradeState,
+  createBaseScreenPort,
+  createMetaUiPorts,
   deriveEffectiveParams,
 } from './PveIntegration';
+import type { BaseScreenPort } from '../contracts/meta';
 import { EventBus } from './EventBus';
 import { TorpedoTubeSocketRig } from './TorpedoTubeSocketRig';
 import { GameLoop } from './GameLoop';
@@ -66,6 +78,10 @@ export class Game {
   private effectiveParams: GameParams | null = null;
   /** 선수 발사관 소켓 — 조준 카메라·어뢰 생성의 단일 소스 (INT-CORE-008·009) */
   private tubeSockets: TorpedoTubeSocketRig | null = null;
+  /** production 기지 화면 포트 — UI·HUD의 유일한 명령 진입점 (INT-CORE-010) */
+  private baseScreen: BaseScreenPort | null = null;
+  /** 계측 가능한 저장 포트 — 명령당 호출 횟수 검증용 (저장 책임 표) */
+  private savePort: CountingSavePort | null = null;
   /** 조립부가 건 EventBus 구독 해제 함수 — stop()에서 전부 해제한다 */
   private readonly unsubscribes: Array<() => void> = [];
 
@@ -124,9 +140,10 @@ export class Game {
       // 기지 → 출항. 상태 전이는 상위 메타 루프 소유이며 HUD는 요청만 한다
       // (기지 화면 UI가 도입되면 그 화면의 출항 버튼으로 대체된다).
       launchSortie: () => {
-        if (this.metaLoop?.metaState !== 'BASE') return;
-        this.metaLoop.beginSortiePrep();
-        this.metaLoop.launchSortie();
+        // 출항의 유일한 경로 = Departure command (출항 확정 직전 저장 포함,
+        // 저장 실패 시 전환 없음 — INT-CORE-010 저장 책임 표). 결과 표시는
+        // SortiePrepScreen이 같은 baseScreen 포트로 수행한다.
+        this.baseScreen?.confirmDeparture();
       },
     });
 
@@ -153,6 +170,8 @@ export class Game {
         upgrades: this.upgrades,
         effectiveParams: this.effectiveParams,
         tubeSockets: this.tubeSockets,
+        baseScreen: this.baseScreen,
+        savePort: this.savePort,
       };
     }
 
@@ -279,27 +298,126 @@ export class Game {
     //     게임플레이 뒤에 등록해 같은 프레임의 드롭·요청을 흘린다.
     this.registry.register(new SortieEconomyBridge(gameplay.economy));
 
-    // ②-b 저장 브리지 — saveRequested(리드 발행) 구독 → SaveStore 기록.
-    //     주기 저장 없음: 정산 확정·희귀 부품 획득 두 시점만.
+    // ①-c 업그레이드 구매 판정 시스템 (게임플레이 소유 — 조립부가 공식
+    //     카탈로그와 실지갑 읽기 단면을 주입한다). **단계의 단일 저장소** —
+    //     저장·UI·유효 파라미터가 전부 이 시스템의 levelSnapshot에서 파생된다.
+    //     비용 resolver는 공식 params만 사용 — provisional 기본값을 쓰지
+    //     않는다. null(미확정)은 BaseScreenPort가 트랜잭션 진입 전에
+    //     economyDataUnavailable로 차단하므로 여기 방어 분기는 도달 불가
+    //     (도달 시 무한대 비용 = 구매 거부로 수렴, 상태·저장 무변경).
     const metaLoop = this.metaLoop;
-    const upgrades = this.upgrades;
-    this.registry.register(
-      new SaveBridge(
-        defaultSaveStore,
-        {
-          get wallet() {
-            return metaLoop.wallet;
-          },
-          get upgradeLevels() {
-            return upgrades.currentLevels;
-          },
-          get equippedGear() {
-            return gameplay.equipment.slots.filter((slot) => slot !== null);
-          },
+    const upgradePurchase = new UpgradePurchaseSystem(
+      catalog.map((entry) => ({
+        id: entry.id,
+        maxLevel: entry.maxLevel,
+        // 판정 경로에서는 미사용(보정 산출은 UpgradeState 소유) — 표기용 전달만
+        bonusPerLevel: entry.effectBonus.find((value) => value !== null) ?? 0,
+      })),
+      {
+        get credits() {
+          return metaLoop.wallet.credits;
         },
-        loaded.data,
-      ),
+        get rareParts() {
+          return metaLoop.wallet.rareParts;
+        },
+        applyDelta: (creditsDelta: number, rarePartsDelta: number): void => {
+          // 지갑 변경은 리드 PurchaseTransaction(WalletTransactionPort) 경유만 —
+          // 이 경로가 호출되면 조립 규칙 위반이다 (지갑 불변 유지, 로그만).
+          console.error(
+            `[Game] applyDelta(${creditsDelta}, ${rarePartsDelta}) 직접 호출 감지 — 무시됨 (저장 책임 표)`,
+          );
+        },
+      },
+      (statId, nextLevel) => {
+        const entry = catalog.find((candidate) => candidate.id === statId);
+        const credits = entry?.costCredits[nextLevel - 1] ?? null;
+        const rareParts = entry?.costRareParts[nextLevel - 1] ?? null;
+        if (credits === null || rareParts === null) {
+          return { credits: Number.POSITIVE_INFINITY, rareParts: Number.POSITIVE_INFINITY };
+        }
+        return { credits, rareParts };
+      },
     );
+    upgradePurchase.restoreLevels(loaded.data.upgradeLevels);
+    // 장비 저장 포트는 연결하지 않는다 — 장비 저장은 리드 EquipmentTransaction
+    // 한 곳(저장 책임 표, 이중 저장 금지). 내부 커밋 경로는 무저장으로 동작.
+    gameplay.attachBaseEconomy(upgradePurchase, null);
+
+    // ②-b 저장 브리지 — saveRequested(리드 발행: 정산·희귀 2종) 구독 →
+    //     SaveStore 기록. 구매·장비·출항 저장은 아래 CountingSavePort를
+    //     트랜잭션·Departure command가 직접 호출한다 (동일 명령 1회 보장).
+    const upgrades = this.upgrades;
+    const saveBridge = new SaveBridge(
+      defaultSaveStore,
+      {
+        get wallet() {
+          return metaLoop.wallet;
+        },
+        get upgradeLevels() {
+          // 단일 저장소 = 판정 시스템의 확정 단계 (UpgradeState는 파생 뷰)
+          return upgradePurchase.levelSnapshot;
+        },
+        get equippedGear() {
+          return gameplay.equipment.slots.filter((slot) => slot !== null);
+        },
+      },
+      loaded.data,
+    );
+    this.registry.register(saveBridge);
+
+    // ②-c production 기지 경제 조립 (INT-CORE-010) — 저장 책임 단일화.
+    //     savePort: 명령당 호출 횟수 계측 가능 (CountingSavePort.callCount).
+    const savePort = new CountingSavePort({
+      save: () => {
+        saveBridge.writeSnapshot();
+        return saveBridge.lastSaveSucceeded;
+      },
+    });
+    this.savePort = savePort;
+    const purchaseTx = new PurchaseTransaction(upgradePurchase, metaLoop, upgradePurchase, savePort);
+    const equipmentTx = new EquipmentTransaction(new EquipmentJudgeAdapter(gameplay.equipment), savePort);
+    const departure = new DepartureCommand(metaLoop, savePort);
+    const baseScreen = createBaseScreenPort({
+      meta: metaLoop,
+      upgradeCatalog: catalog,
+      equipmentCatalog: loadEquipmentCatalog(),
+      levelsOf: () => upgradePurchase.levelSnapshot,
+      loadoutOf: () => gameplay.equipment.loadout,
+      purchaseTx,
+      equipmentTx,
+      departure,
+      // 구매 확정 후 파생 상태 갱신: 유효 파라미터(다음 출항부터 적용)·
+      // 장비 배율·외형 단계. UpgradeState는 파생 뷰로만 동기화한다.
+      onPurchaseCommitted: () => {
+        upgrades.setLevels(upgradePurchase.levelSnapshot);
+        this.effectiveParams = deriveEffectiveParams(params, upgrades.modifiers);
+        gameplay.equipment.setUpgradeModifiers({
+          torpedoSpeedBonus: 0,
+          torpedoDamageBonus: upgrades.modifiers.torpedoDamage ?? 0,
+        });
+        const tiers = upgrades.visualTiers;
+        scene.setSubmarineVisualTiers(tiers.hull, tiers.weapon);
+      },
+    });
+    this.baseScreen = baseScreen;
+
+    // ②-d production 경제 UI 마운트 (그래픽스 소유 컴포넌트 — 조립부는 포트만
+    //     주입한다. DOM·스타일 무접촉). QA 데모(econUiQaDemo)는 ?econdemo
+    //     플래그 전용이며 이 production 경로에 포함되지 않는다.
+    const uiPorts = createMetaUiPorts({
+      baseScreen,
+      rawCatalog: catalog,
+      slotsOf: () => gameplay.equipment.slots,
+    });
+    const economyHud = new EconomyHud(this.container);
+    economyHud.attachWalletSource(metaLoop);
+    economyHud.attachSortieEarningsSource(uiPorts.earningsSource);
+    const prepScreen = new SortiePrepScreen(this.container);
+    prepScreen.attachWalletSource(metaLoop);
+    prepScreen.attachUpgradePort(uiPorts.upgradePort);
+    prepScreen.attachEquipmentPort(uiPorts.equipmentPort);
+    prepScreen.attachDeparturePort(uiPorts.departurePort);
+    this.registry.register(new MetaUiAdapter([economyHud, prepScreen]));
 
     // ④ 표현 연동 — 렌더 소유 카메라 입력(회전·리센터). 이동키와 중복 없음.
     this.registry.register(new CameraInputAdapter(scene.cameraRig));
