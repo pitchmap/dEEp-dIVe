@@ -40,3 +40,19 @@ jobs:
 
       - name: 게임플레이 결정적 검증
         run: npm run verify:gameplay
+
+      - name: 메타 루프 결정적 검증 [LOOP]
+        run: npm run verify:meta
+
+      # 스프린트 A 인수 검증 — A1~A8 + A5-T1~T6 + 문서 회귀(§8).
+      # 타 창 미병합 항목은 '수동 확인' 구역으로 분리 출력되며 종료 코드에
+      # 반영되지 않는다 (회의 14 결의 3: 판정은 dev 통합 빌드에서).
+      #
+      # continue-on-error: A 미통과는 '아직 다른 창이 병합되지 않았다'는 정상
+      # 상태이기도 하므로, 현 시점에 이 단계로 전 파트의 CI를 막지 않는다.
+      # 스프린트 A 통과 판정 권한은 통합 창에 있다 — 통합 창이 dev에서 이
+      # 명령을 돌려 전 항목 통과를 확인한 뒤 통합 PR을 연다.
+      # 차단으로 승격할지는 리드 결정 (INTEGRATION_NOTES INT-TOOL-008).
+      - name: 스프린트 A 인수 검증 [LOOP][ECON]
+        continue-on-error: true
+        run: npm run verify:sprint-a

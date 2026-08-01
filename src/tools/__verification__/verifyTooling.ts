@@ -17,12 +17,8 @@ import {
   SaveStore,
   type StorageLike,
 } from '../../meta/save/SaveStore';
-import {
-  applyUpgradeBonus,
-  sumUpgradeBonuses,
-  validateUpgradeCatalog,
-  type UpgradeDefinition,
-} from '../upgradeMath';
+import { effectiveDurationSeconds, effectiveValue } from '../../meta/upgradeMath';
+import { validateUpgradeCatalog } from '../economyMath';
 import { detectKeyboardLockSupport, KeyboardLockManager } from '../KeyboardLockManager';
 import { AudioCueRouter, type AudioCueId } from '../../audio/AudioCueRouter';
 import { WebAudioSystem } from '../../audio/WebAudioSystem';
@@ -200,52 +196,56 @@ export function runToolingVerification(): CheckResult[] {
     return '정상 백업 보존 (손상본 승격 차단)';
   });
 
-  // ── 업그레이드 계산 (합연산 공용 함수) ──────────────────────
-
-  const catalog: UpgradeDefinition[] = [
-    { id: 'a', label: 'A', bonusPerLevel: 0.1, maxLevel: 5 },
-    { id: 'b', label: 'B', bonusPerLevel: 0.05, maxLevel: 3 },
-  ];
+  // ── 업그레이드 계산 (리드 정본 src/meta/upgradeMath 사용 — 복제 금지) ──
 
   check('업그레이드: 합연산 공식 (곱연산 스택 아님)', () => {
-    const sum = sumUpgradeBonuses(catalog, { a: 3 });
-    const final = applyUpgradeBonus(10, sum);
-    assert(Math.abs(sum - 0.3) < 1e-9, `보정 합 0.3 기대, 실제 ${sum}`);
-    assert(Math.abs(final - 13) < 1e-9, `합연산 13 기대 (곱연산이면 13.31), 실제 ${final}`);
-    return '10 × (1 + 0.1×3) = 13';
+    // 보정 합 0.3 = 0.1 × 3단계. 곱연산이면 13.31이 나온다
+    const final = effectiveValue(10, 0.3);
+    assert(Math.abs(final - 13) < 1e-9, `합연산 13 기대, 실제 ${final}`);
+    return '10 × (1 + 0.3) = 13';
   });
 
-  check('업그레이드: 단계 클램프·미지 id 무시', () => {
-    const sum = sumUpgradeBonuses(catalog, { a: 99, b: -4, unknown: 7 });
-    assert(Math.abs(sum - 0.5) < 1e-9, `a는 max 5로 클램프(0.5), b는 0, 미지 무시 — 실제 ${sum}`);
-    return 'clamp(99→5)·음수→0·미지 id 무시';
+  check('업그레이드: 시간형은 단축 적용 (업그레이드가 페널티가 되지 않음)', () => {
+    const seconds = effectiveDurationSeconds(20, 0.25);
+    assert(Math.abs(seconds - 16) < 1e-9, `20 ÷ 1.25 = 16 기대, 실제 ${seconds}`);
+    return '재장전 20s → 16s';
   });
 
-  check('업그레이드: 카탈로그 7항목 검증 통과', () => {
+  check('업그레이드: 공식 카탈로그(7항목·단계 배열) 검증 통과', () => {
     const seven = {
       items: Array.from({ length: 7 }, (_, i) => ({
-        id: `u${i}`,
+        id: [
+          'hullIntegrity',
+          'maxSpeed',
+          'turnRate',
+          'maxDepth',
+          'torpedoDamage',
+          'reloadSpeed',
+          'sonarRange',
+        ][i],
         label: `U${i}`,
-        bonusPerLevel: 0.1,
-        maxLevel: 5,
+        maxLevel: 2,
+        costCredits: [10, 20],
+        costRareParts: [0, 1],
+        effectBonus: [0.1, 0.2],
       })),
     };
     assert(validateUpgradeCatalog(seven).length === 7, '7개 통과');
-    return '7/7 허용';
+    return '7/7 허용 (공식 ID·단계 배열)';
   });
 
   check('업그레이드: 8항목 → 신 스코프 가드 거부', () => {
-    const eight = {
-      items: Array.from({ length: 8 }, (_, i) => ({
-        id: `u${i}`,
-        label: `U${i}`,
-        bonusPerLevel: 0.1,
-        maxLevel: 5,
-      })),
+    const item = {
+      id: 'maxSpeed',
+      label: 'U',
+      maxLevel: 1,
+      costCredits: [1],
+      costRareParts: [0],
+      effectBonus: [0.1],
     };
     let threw = false;
     try {
-      validateUpgradeCatalog(eight);
+      validateUpgradeCatalog({ items: Array.from({ length: 8 }, () => item) });
     } catch {
       threw = true;
     }
@@ -253,20 +253,26 @@ export function runToolingVerification(): CheckResult[] {
     return '로더 차원 가드 작동';
   });
 
-  check('업그레이드: 중복 id 거부', () => {
+  check('업그레이드: 계약 밖 id 거부', () => {
     let threw = false;
     try {
       validateUpgradeCatalog({
         items: [
-          { id: 'dup', label: 'A', bonusPerLevel: 0.1, maxLevel: 5 },
-          { id: 'dup', label: 'B', bonusPerLevel: 0.1, maxLevel: 5 },
+          {
+            id: 'luckyCharm',
+            label: 'X',
+            maxLevel: 1,
+            costCredits: [1],
+            costRareParts: [0],
+            effectBonus: [0.1],
+          },
         ],
       });
     } catch {
       threw = true;
     }
-    assert(threw, '중복 id는 거부되어야 함');
-    return '중복 id 차단';
+    assert(threw, '계약(UpgradeStatId) 밖 id는 거부되어야 함');
+    return '미지 id 차단';
   });
 
   // ── Keyboard Lock 폴백 ──────────────────────────────────────

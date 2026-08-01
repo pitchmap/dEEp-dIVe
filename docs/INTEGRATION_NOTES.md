@@ -56,6 +56,46 @@
 
 ## 제안 목록
 
+### INT-TOOL-008 — [LOOP][ECON] 스프린트 A 툴링 산출물 + 이관·문서 회귀 차단 요청
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 빌드·툴 (스프린트 A 창 4 — 회의 14 범위표) |
+| 대상 시스템 | `params/aiming.json`·`params/upgrades.json`·`params/equipment.json`(기획 커밋 영역), `package.json`(스크립트), `.github/workflows/ci.yml`, 게임플레이·통합 관리자 문서 |
+| 필요한 변경 | ① **aiming.json 신설** — 4항목(yaw 15 / up 10 / down 15 / 감도 0.5), 양수 크기 저장·부호는 `src/tools/aimingMath.ts` 단일 지점에서만 적용, `aimReturnBehavior` 미포함(보완분 결의 9). **카메라(그래픽스)·조준(게임플레이)은 반드시 `src/tools/aimingParams.ts`의 동일 로더·`pitchLimitsDegrees()`/`clampAimOffsetDegrees()`를 사용할 것** — 각자 JSON을 읽거나 음수를 붙이면 이중 부호 오류 ② **경제·장비 공식 params 구조 확정** — upgrades.json을 단계 배열 구조(costCredits·costRareParts·effectBonus, 길이 = maxLevel)로 전환, equipment.json 신설(가격·희귀 부품·슬롯). **수치는 전부 `null` = 기획 경제 수치표 미도착** — 임의 값을 발명하지 않았다(7차 결의 4의 병목). 기획이 값을 채우면 `[ECON]` 태그로 커밋 ③ **계산 복제 제거** — 툴링 `src/tools/upgradeMath.ts` 삭제, 시뮬레이터가 리드 정본 `src/meta/upgradeMath.ts`를 직접 사용(INT-CORE-007 적용 요청 이행) ④ scripts 2종 추가(`verify:meta`·`verify:sprint-a`) |
+| 변경 이유 | 스프린트 A 창 4 범위(aiming params·경제 validator·저장 실패 주입·A1~A8 러너·문서 회귀 확인)의 산출 |
+| 관련 게이트 | A1·A2·A3(파라미터 측면), A5·A6·A7(저장 원자성), A8(이관 상태), §8 문서 회귀 |
+| 영향을 받는 파일 | params 3종, src/tools/{aimingMath,aimingParams,economyMath,upgradeCalculator,UpgradeSimulator}.ts, src/meta/save/{FaultInjectingStorage,atomicSave}.ts, scripts/verify-sprint-a.mjs, docs/SPRINT_A_ACCEPTANCE.md |
+| 하위 호환 여부 | upgrades.json 스키마가 `bonusPerLevel` 단일값 → 단계 배열로 **변경**됨(구 구조 소비자는 툴링 시뮬레이터뿐이며 동시 갱신 완료). 세이브 스키마는 무변경(마이그레이션 불필요) |
+| 개발 리드 결정 | **확인 대기** — 특히 ②의 'null = 미확정' 표기 방식과 ③의 정본 일원화 승인 요청 |
+| 적용 커밋 | (이 브랜치의 스프린트 A 툴링 커밋) |
+
+**[A8/§8 차단 보고 — 다른 창 소유 파일의 제거 필요 항목]**
+
+`npm run verify:sprint-a`의 자동 판정이 현재 **2건 실패**다. 둘 다 툴링 창이
+고칠 수 없는(소유 밖) 대상이므로 해당 창에 제거를 요청한다:
+
+1. **§8 문서 회귀 7건** — 7차 결의 1-⑦('잠망경 심도 전용'을 전 문서에서 삭제,
+   코드-문서 동시 갱신)의 미이행분. 회의록 원문 2건은 역사 기록으로 자동 분류·제외됨.
+
+   | 위치 | 소유 |
+   |---|---|
+   | `src/systems/PeriscopeAimSystem.ts:9` "잠망경 심도에서만" | 게임플레이 |
+   | `src/systems/__verification__/verifyGameplay.ts:670` "잠망경 심도 전용" | 게임플레이 |
+   | `docs/CURRENT_STATUS.md:94` (게임플레이 구역) | 게임플레이 |
+   | `docs/PROJECT_STATE.md:138·167` | 통합 관리자 |
+   | `docs/NEXT_SPRINT.md:25` | 통합 관리자 |
+   | `docs/D10_INTEGRATION_CHECKLIST.md:56` | 통합 관리자 |
+
+   ※ `docs/deep_dive_master_plan.md:245`도 같은 문구를 담고 있으나 게이트 전
+   수정 금지 문서라 역사 기록으로 분류했다 — 마스터 플랜 각주 처리 여부는 리드 판단.
+
+2. **A8 이관 미완** — 미확정 필드 114개(= 기획 수치표 미도착), 잔여 provisional
+   경제 파일 2건: `src/meta/provisionalEconomy.ts`(리드), `src/systems/provisionalCargo.ts`(게임플레이).
+   게임플레이 브랜치의 `src/systems/economy/provisionalEconomy.ts`·`provisionalEquipment.ts`도
+   병합 시 같은 목록에 잡힌다. **A8은 기획 경제 수치표(PvE D+3 절대 마감)가
+   도착해야 통과 가능**하다 — 툴링은 그릇(구조·검증기)만 완성했다.
+
 <<<<<<< HEAD
 ### INT-TOOL-007 — [LOOP][ECON] PvE 툴링 배선 요청: 저장 시점·경제/기지 이벤트 계약·병행 키 E·보스 오디오
 

@@ -1,56 +1,70 @@
 {
-  "$comment": "영구 업그레이드 1층 7항목 (6차 대회의 결의 5) [R-P2 임시 기본값 — 기획 경제 수치표(D+3 절대 마감) 확정 전 선진행, 확정 밸런스 아님]. 적용 공식은 합연산 배율 레이어(소회의 결의 4): 최종값 = 기준값 × (1 + 단계별 보정 합). params 원본 불변 — 업그레이드가 이 파일을 수정하지 않는다. 신 스코프 가드: 항목 7개 이하 (scripts/check-scope-guard.mjs + 로더가 기계 강제). paramRef는 기준값이 이미 존재하는 파라미터 경로, 없는 항목은 대상 시스템 params 도입 시 연결. [ECON]",
+  "$comment": "영구 업그레이드 1층 7항목 — 공식 파일 (6차 결의 5 / 7차 결의 4 '데이터 → UI' 순서). id는 계약 src/contracts/meta.ts UpgradeStatId와 1:1. 단계별 배열 길이 = maxLevel. **null = 기획 경제 수치표(PvE D+3 절대 마감, 스프린트 A 병목) 미도착** — 임의의 확정 숫자를 넣지 않는다. 적용 공식은 합연산(src/meta/upgradeMath.ts): 최종값 = 기준값 × (1 + 보정 합), 시간형(turnRate·reloadSpeed)은 단축 적용. params 원본 불변. 검증: src/tools/economyMath.ts (7항목 초과·미지 id·음수 가격·단계 배열 누락·미존재 paramRef 거부). [ECON]",
   "items": [
     {
       "id": "hullIntegrity",
       "label": "선체 체력",
-      "bonusPerLevel": 0.1,
       "maxLevel": 5,
-      "note": "기준값 파라미터 미존재 — 내구도 시스템 params 도입 시 paramRef 연결"
+      "costCredits": [null, null, null, null, null],
+      "costRareParts": [null, null, null, null, null],
+      "effectBonus": [null, null, null, null, null],
+      "note": "기준값 파라미터 미존재 — 내구도 시스템 params 도입(C9, [COMBAT]) 시 paramRef 연결"
     },
     {
       "id": "maxSpeed",
       "label": "최고 속도",
       "paramRef": "movement.maxSpeedMetersPerSecond",
-      "bonusPerLevel": 0.1,
-      "maxLevel": 5
+      "maxLevel": 5,
+      "costCredits": [null, null, null, null, null],
+      "costRareParts": [null, null, null, null, null],
+      "effectBonus": [null, null, null, null, null]
     },
     {
       "id": "turnRate",
       "label": "선회 속도",
       "paramRef": "movement.turn90Seconds",
-      "bonusPerLevel": 0.1,
       "maxLevel": 5,
-      "note": "기준값은 90도 소요 시간(작을수록 빠름) — 보정의 적용 방향은 게임플레이 배율 레이어가 결정"
+      "costCredits": [null, null, null, null, null],
+      "costRareParts": [null, null, null, null, null],
+      "effectBonus": [null, null, null, null, null],
+      "note": "시간형 기준값(90도 소요 시간) — effectiveDurationSeconds로 단축 적용"
     },
     {
-      "id": "diveDepth",
+      "id": "maxDepth",
       "label": "잠항 수심",
-      "bonusPerLevel": 0.1,
       "maxLevel": 5,
+      "costCredits": [null, null, null, null, null],
+      "costRareParts": [null, null, null, null, null],
+      "effectBonus": [null, null, null, null, null],
       "note": "기준값은 레이아웃 수직 한계 파생 — 레벨 데이터 이관(INT-GAME-004) 후 연결"
     },
     {
       "id": "torpedoDamage",
       "label": "어뢰 피해",
-      "bonusPerLevel": 0.1,
       "maxLevel": 5,
-      "note": "기준값 파라미터 미존재 — 피해 수치 params 도입(INT-GAME-006 후속) 시 연결"
+      "costCredits": [null, null, null, null, null],
+      "costRareParts": [null, null, null, null, null],
+      "effectBonus": [null, null, null, null, null],
+      "note": "기준값 파라미터 미존재 — 어뢰 피해 params 도입(INT-GAME-006/008) 시 연결"
     },
     {
       "id": "reloadSpeed",
       "label": "재장전 속도",
       "paramRef": "combat.torpedoReloadSeconds",
-      "bonusPerLevel": 0.1,
       "maxLevel": 5,
-      "note": "기준값은 재장전 시간(작을수록 빠름) — 보정의 적용 방향은 게임플레이 배율 레이어가 결정"
+      "costCredits": [null, null, null, null, null],
+      "costRareParts": [null, null, null, null, null],
+      "effectBonus": [null, null, null, null, null],
+      "note": "시간형 기준값(재장전 시간) — effectiveDurationSeconds로 단축 적용"
     },
     {
       "id": "sonarRange",
       "label": "소나 거리",
-      "bonusPerLevel": 0.1,
       "maxLevel": 5,
-      "note": "기준값 파라미터 미존재 — 탐지 시스템 params 도입(D10~12) 시 연결"
+      "costCredits": [null, null, null, null, null],
+      "costRareParts": [null, null, null, null, null],
+      "effectBonus": [null, null, null, null, null],
+      "note": "기준값 파라미터 미존재 — 탐지 시스템 params 도입(C9, [COMBAT]) 시 연결"
     }
   ]
 }
