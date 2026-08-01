@@ -409,15 +409,20 @@ export class Game {
     this.guardAdapter = guardAdapter;
     const guardSpawn = new GuardSpawnCoordinator(guardLedger, guardAdapter, null);
     this.guardSpawn = guardSpawn;
+    //     스폰 위치 전략 — 월드 지식(협곡 bounds·지형·사건 위치·플레이어
+    //     선체 회피)이 필요하므로 게임플레이·월드 소유 정본을 연결한다.
+    //     **정확히 1회** 호출. 원점·플레이어 위치 fallback을 두지 않는다 —
+    //     전략이 자리를 못 찾으면 `noSpawnLocation`으로 끝나야 한다.
+    guardSpawn.attachLocationStrategy(gameplay.guardSpawnLocation);
     //     범용 구축함 AI 팩토리 (INT-CORE-013 — B5 개정). 판단은 리드 소유
     //     `DestroyerAIController`(production 유일 구현체), 실제 이동은
     //     게임플레이 소유 `SurfaceShipMotionPort`다. 이동 포트 팩토리가
-    //     도착하면 아래 상수만 교체하면 되고, 그 전까지 팩토리는 이동 포트를
-    //     만들지 못해 `create()`가 null → 스폰은 `spawnFailed`로 끝난다
-    //     (가짜 이동·대체 AI 생성 금지).
-    const surfaceMotionPorts: SurfaceShipMotionPortFactory = {
-      create: () => null, // 게임플레이 motion adapter 도착 시 교체 (1줄)
-    };
+    //     도착했으므로 게임플레이 production 팩토리(`PatrolShipFleet`)를 그대로
+    //     연결한다 — 테스트 더블 없음. 팩토리는 스폰마다 독립 `PatrolShipEntity`
+    //     와 그 entity에 붙은 포트를 만들며, AI는 transform을 소유하지 않는다
+    //     (pose 정본 = 게임플레이 entity 하나).
+    const surfaceMotionPorts: SurfaceShipMotionPortFactory =
+      gameplay.surfaceShipMotionPortFactory;
     guardAdapter.attachFactory(createProductionDestroyerAIFactory(surfaceMotionPorts));
     this.registry.register(new NeutralIncidentBoundary(guardLedger));
     this.registry.register(new GuardSpawnBridge(guardSpawn));
