@@ -94,7 +94,7 @@ results['조작 안내 초기 표시'] = (await q('.controls-guide'))?.hidden ==
 results['화면 버튼 초기 표시'] = (await q('.hud-buttons'))?.hidden === false;
 results['일시정지 오버레이 초기 숨김'] = (await q('.resume-overlay'))?.hidden === true;
 const guideText = (await q('.controls-guide'))?.text ?? '';
-results['안내에 8개 조작 포함'] = ['W / S', 'A / D', 'Shift / Ctrl', 'Space', '우클릭', '좌클릭', 'H', 'Esc'].every(
+results['안내에 8개 조작 포함'] = ['W / S', 'A / D', 'Ctrl / E · Shift', 'Space', '우클릭', '좌클릭', 'H', 'Esc'].every(
   (k) => guideText.includes(k),
 );
 results['발사 버튼 잔량 표시 (3발)'] = (await fireState())?.label.includes('3발');
@@ -114,31 +114,35 @@ results['contextmenu 기본 동작 차단'] = await page.evaluate(() => {
   return e.defaultPrevented;
 });
 
-// ── 4) 순항 심도(시작 y=0): 조준 거부·발사 불발
+// ── 4) 순항 심도(시작 y=0): **전 심도 조준 가능** (A1 — 구 '잠망경 심도
+//      전용' 규칙은 7차 결의 1로 폐기, 재도입 금지). 비조준 발사는 불발.
+let m0 = await metrics();
+let fs0 = await fireState();
+results['조준 전 발사 → 불발(잔량 3발 유지)'] = fs0.label.includes('3발') && !fs0.disabled;
 await aimBtn.click();
 let m = await metrics();
-results['조준 버튼 — 잠망경 심도 아님 → 거부(비활성 유지)'] =
-  (await aimActive()) === false && m.buttonAimCount === 1;
+results['A1 전 심도 조준 — 순항 심도에서도 조준 진입 가능'] =
+  (await aimActive()) === true && m.buttonAimCount === 1;
+await aimBtn.click(); // 원상 복귀(해제)
+results['조준 버튼 재클릭 → 해제(비활성)'] = (await aimActive()) === false;
 await fireBtn.click();
 m = await metrics();
 let fs = await fireState();
 results['발사 버튼 1클릭 → 요청 1회 (마우스 경로 0)'] =
   m.buttonFireRequestCount === 1 && m.mouseFireRequestCount === 0;
-results['조준 없이 발사 → 불발(잔량 3발 유지)'] = fs.label.includes('3발') && !fs.disabled;
 results['첫 발사 요청 시각 기록'] = typeof m.firstFireRequestMs === 'number' && m.firstFireRequestMs > 0;
+void m0;
 
-// ── 5) Shift 상승 → 잠망경 도달 → 조준 토글
-await page.keyboard.down('Shift');
-let aimed = false;
-for (let i = 0; i < 30 && !aimed; i++) {
-  await sleep(500);
-  await aimBtn.click();
-  aimed = await aimActive();
-}
-await page.keyboard.up('Shift');
-results['잠망경 심도 도달 → 조준 버튼 활성(aimModeChanged)'] = aimed === true;
+// ── 5) 상승 후에도 조준 가능 (심도와 무관 — A1). Ctrl = 상승 / Shift = 하강.
+await page.keyboard.down('Control');
+await sleep(1500);
+await page.keyboard.up('Control');
+await sleep(200);
 await aimBtn.click();
-results['조준 버튼 재클릭 → 해제(비활성)'] = (await aimActive()) === false;
+const aimed = await aimActive();
+results['A1 심도 변경 후에도 조준 진입 가능 (aimModeChanged)'] = aimed === true;
+await aimBtn.click();
+results['조준 해제(비활성) — 심도 변경 후'] = (await aimActive()) === false;
 
 // ── 6) 버튼 실발사 → 재장전·잔량
 await aimBtn.click();

@@ -36,7 +36,7 @@
       "costCredits": [null, null, null, null, null],
       "costRareParts": [null, null, null, null, null],
       "effectBonus": [null, null, null, null, null],
-      "note": "기준값은 레이아웃 수직 한계 파생 — 레벨 데이터 이관(INT-GAME-004) 후 연결"
+      "note": "기준값은 레이아웃 수직 한계 파생 — 레벨 데이터 이관(INT-GAME-004) 후 연결. id는 공식 계약 UpgradeStatId 'maxDepth' (구 'diveDepth'에서 통일)"
     },
     {
       "id": "torpedoDamage",

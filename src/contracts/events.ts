@@ -115,9 +115,12 @@ export interface GameEvents {
   guardShipRequested: { x: number; z: number };
 
   /** 저장 요청 (발행: meta/MetaLoop). cause:
-   *  'settlement' = 귀환 정산 확정 후 / 'rarePart' = 희귀 부품 획득 즉시
-   *  [확정 6차 결의 9 — 그 외 자동 저장 없음]. 구독: SaveSystem(툴링) */
-  saveRequested: { cause: 'settlement' | 'rarePart' };
+   *  'settlement' = 귀환 정산 확정 후 / 'rarePart' = 희귀 부품 획득 즉시 /
+   *  'sortieLaunch' = 출항 확정 직전 [13차 결의 4 — 저장 시점 5종 중 이벤트
+   *  경로 3종. 나머지 2종(구매 성공·장비 변경 직후)은 트랜잭션이 SavePort를
+   *  직접 호출해 결과를 동기 확인하므로 이벤트를 중복 발행하지 않는다].
+   *  그 외 자동·주기 저장 없음. 구독: SaveSystem(툴링) */
+  saveRequested: { cause: 'settlement' | 'rarePart' | 'sortieLaunch' };
 
   /** 보스 단계 전환 (발행: 보스 AI — 리드). 구독: 렌더(단계 연출),
    *  오디오(침묵 전환·음정 하강), UI */

@@ -112,3 +112,108 @@ export interface EquipmentLoadout {
 
 /** 보스 단계 [확정 6차 결의 8 — 3단계 구조] */
 export type BossPhase = 1 | 2 | 3;
+
+/* ── 구매·장비 트랜잭션 (스프린트 A — 7차 결의 4·13차 결의 7) ── */
+
+/**
+ * 일반 구매·장비 변경 불가 사유 — **정확히 5종** [확정 7차 결의 4].
+ * '선행 업그레이드 미충족' 등 미구현 기능의 사유는 코드·UI 어디에도 만들지
+ * 않는다 (테크 트리 MVP 기각 — 스텁 금지 준용).
+ * 저장 실패는 불가 사유가 아니라 트랜잭션 실패(saveFailedRolledBack)다.
+ */
+export type PurchaseDenialReason =
+  | 'insufficientCredits'
+  | 'insufficientRareParts'
+  | 'maxLevelReached'
+  | 'noFreeSlot'
+  | 'alreadyEquipped';
+
+/**
+ * 트랜잭션 결과 — 성공 / 조건 불충족 / 저장 실패 롤백 [13차 결의 7].
+ * 내부 예외 문자열을 담는 필드는 의도적으로 없다 — 오류 원인은 개발 로그로만
+ * 남기고 UI에는 이 판별 결과만 전달한다.
+ */
+export type TransactionResult =
+  | { readonly status: 'success' }
+  | { readonly status: 'denied'; readonly reason: PurchaseDenialReason }
+  | { readonly status: 'saveFailedRolledBack' };
+
+/** 구매 비용 (판정 포트가 산출 — 가격 정의는 게임플레이·기획 소유) */
+export interface PurchaseCost {
+  readonly credits: number;
+  readonly rareParts: number;
+}
+
+/**
+ * 업그레이드 구매 판정 포트 — **내용은 게임플레이 소유** (틀=리드/내용=게임플레이
+ * 경계, 14차 창 분할). 상태를 변경하지 않고 판정만 한다. throw 금지 —
+ * 불가 사유 또는 null(가능)을 반환한다.
+ */
+export interface UpgradePurchaseJudgePort {
+  evaluateUpgradePurchase(id: UpgradeStatId): {
+    readonly denial: PurchaseDenialReason | null;
+    readonly cost: PurchaseCost;
+  };
+}
+
+/** 장비 변경 요청 — equip/replace(점유 슬롯 대상 equip)/unequip */
+export type EquipmentChangeRequest =
+  | {
+      readonly kind: 'equip' | 'replace';
+      readonly slotIndex: number;
+      readonly equipmentId: EquipmentId;
+    }
+  | { readonly kind: 'unequip'; readonly slotIndex: number };
+
+/**
+ * 장비 변경 판정·적용 포트 — 내용은 게임플레이(EquipmentSystem) 소유.
+ * evaluate는 무변경 판정, apply는 적용, snapshot/restore는 롤백용 전체
+ * loadout 보존·복원. 전부 throw 금지.
+ */
+export interface EquipmentChangeJudgePort {
+  evaluateEquipmentChange(request: EquipmentChangeRequest): PurchaseDenialReason | null;
+  applyEquipmentChange(request: EquipmentChangeRequest): void;
+  snapshotLoadout(): EquipmentLoadout;
+  restoreLoadout(loadout: EquipmentLoadout): void;
+}
+
+/** 지갑 트랜잭션 포트 — 구현은 MetaLoop(리드, 지갑 소유자) */
+export interface WalletTransactionPort {
+  snapshotWallet(): CurrencyBundle;
+  /** 잔액 부족이면 false·무변경 (구매 가능 여부 재검증 겸용) */
+  spendFromWallet(cost: PurchaseCost): boolean;
+  restoreWallet(wallet: CurrencyBundle): void;
+}
+
+/** 업그레이드 단계 포트 — 구현은 UpgradeState(리드, 단계 보관자) */
+export interface UpgradeLevelsPort {
+  snapshotLevels(): Readonly<Record<string, number>>;
+  /** 구매 확정 후보 적용 — 해당 항목 단계 +1 */
+  applyPurchasedLevel(id: UpgradeStatId): void;
+  restoreLevels(levels: Readonly<Record<string, number>>): void;
+}
+
+/**
+ * 영속 저장 포트 — 구현(어댑터)은 빌드·툴 소유(SaveStore 경유).
+ * 실패는 false 반환 — **throw 금지** (저장 실패가 게임 루프·부팅을 깨지 않는다).
+ */
+export interface SavePort {
+  save(): boolean;
+}
+
+/**
+ * 기지 화면 소비 포트 (스프린트 A 출항 준비 흐름) — UI는 MetaLoop·상태 객체를
+ * 직접 수정하지 않고 이 포트의 읽기 상태와 명령만 사용한다.
+ * 구현은 composition root가 조립한다 (그래픽스 UI는 이 계약만 import).
+ */
+export interface BaseScreenPort {
+  readonly wallet: CurrencyBundle;
+  readonly upgradeLevels: Readonly<Record<string, number>>;
+  readonly loadout: EquipmentLoadout;
+  /** 기지(BASE) 상태에서만 true — 출항 명령 가능 여부 */
+  readonly canLaunchSortie: boolean;
+  /** 출항 — 성공 시 true (BASE 밖에서는 false·무동작) */
+  launchSortie(): boolean;
+  purchaseUpgrade(id: UpgradeStatId): TransactionResult;
+  changeEquipment(request: EquipmentChangeRequest): TransactionResult;
+}

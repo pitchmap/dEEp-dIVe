@@ -27,7 +27,7 @@
 | `returnToBaseRequested` | UI/입력 | (없음) | meta/MetaLoop | 중도 귀환 입력 시 (③) | SORTIE 상태 밖 요청은 무시 |
 | `lootDropped` | 게임플레이 economy | source, credits, rareParts, x, z | meta(집계·희귀 즉시 확정), UI, 렌더·오디오 | 드롭 발생 시 | 음수 금지(발행측 책임) |
 | `guardShipRequested` | 게임플레이 판정 | x, z | 경비함 AI(리드 — 구축함 AI 재활용) | 중립 선박 공격 시 | MVP 불이익 단일 [6차 결의 3] |
-| `saveRequested` | meta/MetaLoop | cause('settlement'/'rarePart') | SaveSystem(툴링, src/meta/save) | 정산 확정·희귀 획득 즉시 | 그 외 자동 저장 없음 [6차 결의 9] |
+| `saveRequested` | meta/MetaLoop | cause('settlement'/'rarePart'/'sortieLaunch') | SaveSystem(툴링, src/meta/save) | 정산 확정·희귀 획득 즉시·출항 확정 직전 | 저장 시점 5종 [13차 결의 4] 중 이벤트 3종 — 구매·장비 변경 직후 2종은 트랜잭션이 SavePort 직접 호출(중복 이벤트 금지). 그 외 자동 저장 없음 |
 | `bossPhaseChanged` | 보스 AI (리드) | phase(1/2/3) | 렌더(단계 연출), 오디오(침묵 전환·음정 하강), UI | 단계 전환 시 | — |
 | `bossWeakPointChanged` | 게임플레이 약점 판정 | active | 렌더(발광·개방 연출), UI | 약점 활성/해제 시 | 판정=게임플레이 / 연출=렌더 경계 [소회의 결의 5] |
 
@@ -38,7 +38,7 @@
 | `PlayerController` | 게임플레이 | WASD 입력, movement.json | positionX/Z, headingRadians, speed | (소음 산출 경유 noiseChanged) | 매 프레임 update | 입력 없음 = 관성 감속 |
 | `DepthSystem` | 게임플레이 | Shift/Ctrl, detection.json 보정 | currentLayer | depthChanged | 매 프레임 + 요청 시 | 범위 밖 층 요청 무시 |
 | `DetectionSystem` ★허브 | 게임플레이 | reportNoise, reportTorpedoLaunch, 거리·심도·엄폐 | gauge, stage | detectionChanged | 매 프레임 | 임시→본 구현 교체 시 인터페이스 불변 [확정] |
-| `AimSystem` | 게임플레이 | beginAim/endAim/fireTorpedo — **마우스·HUD 버튼 공용 진입점** (별도 전투 시스템 금지, 어댑터 연결은 composition root) | aiming | aimModeChanged | 매 프레임 + 입력 시 | 잠망경 심도 아니면 beginAim false / 조준 중 아니면 fireTorpedo false (throw 금지) |
+| `AimSystem` | 게임플레이 | beginAim/endAim/fireTorpedo — **마우스·HUD 버튼 공용 진입점** (별도 전투 시스템 금지, 어댑터 연결은 composition root) | aiming | aimModeChanged | 매 프레임 + 입력 시 | **전 심도 조준 [7차 결의 1 — 구 전 심도 조준(구 심도 전용 규칙 폐기) 규칙 폐기·재도입 금지]**, 조준이 심도·위치를 바꾸지 않음. 해제 시 미세각 reset. 조준 중 아니면 fireTorpedo false (throw 금지) |
 | `TorpedoSystem` | 게임플레이 | fire(), combat.json | remaining, reloadRemainingSeconds | torpedoFired | 매 프레임 + 발사 시 | 불가 시 false 반환 (throw 금지) |
 | `DepthChargeSystem` | 게임플레이 | AI 투하 명령, combat.json | activeCount | depthChargeEnteredWater/Exploded | 매 프레임 | 동시 수 상한 초과 투하는 거부 |
 | `DestroyerAI` | 리드 | detectionChanged, notifyLastKnownPosition | state (patrol/alert/attack/lost) | (폭뢰 시스템 호출) | 매 프레임 | VS는 alert·attack 2상태 우선 [확정] |
@@ -53,6 +53,8 @@
 | `SubmarinePoseSource` (systems.ts) | 게임플레이 (PlayerController 구현체) | positionX/Y/Z, headingRadians, forwardSpeedMetersPerSecond(부호: + 선수/− 선미) | 렌더 장면·카메라·프로펠러·블롭 섀도 | 렌더는 소비만 — 위치 차분으로 속도 재계산 금지. 프로펠러는 forwardSpeed + conventions.propellerSpinRatio()만 사용 |
 | `CargoShipStateSource` (systems.ts) | 게임플레이 (CargoShipSystem) | id, positionX/Y/Z, headingRadians, velocityX/Z, hit, sinkProgress(0~1), removed | 렌더(CargoShipVisual), TargetRegistry, UI | 침몰 시간축 소유는 게임플레이 — 렌더는 sinkProgress 매핑만(자체 타이머 금지), removed로 시각 자원 정리. VS 화물선 1척 = 단일 상태 |
 | `CanyonLayout` (layout.ts) | 리드 승인 데이터 모듈 `src/world/startingCanyonLayout.ts` `STARTING_CANYON_LAYOUT` (정식 블록아웃은 레벨 디자인 산출물 반영 시 데이터만 교체) | floorY −6, seaSurfaceY 12, submarineSpawn (0,0,0), blocks[](중심 XZ·크기·Y요, 블록 바닥=floorY — 벽 높이는 그래픽 하향값 11/12±2·sin 확정, 상단≤7<해수면) | 렌더(메시), 게임플레이(충돌·시작 구역) | 단일 소스 — composition root가 같은 인스턴스를 양쪽에 주입. 자체 수식 복제 금지 (구 startingArea 미러·buildCanyonBlockout 수식은 이 데이터 소비로 교체) |
+| `FineAimSource` (systems.ts) | 게임플레이 (AimSystem 구현체) | aimYawRadians·aimPitchRadians (잠수함 로컬, 비조준 시 0) | TorpedoTubeSocketRig(리드) | 클램프는 conventions.clampAimYaw/PitchRadians 동일 함수만 — 개별 제한 계산·이중 부호 금지. 해제 시 0 reset [13차 결의 3·8·9] |
+| `TorpedoTubeSocketSource` (systems.ts) | 리드 (core/TorpedoTubeSocketRig — 앵커 데이터: world/torpedoTubeAnchor) | aimCameraSocket·torpedoSpawnSocket (SocketPose: 월드 위치+전방 단위 벡터) | 그래픽스(조준 카메라), 게임플레이(어뢰 생성) | **단일 앵커·동일 전방축, 십자선=탄도** [7차 결의 1·13차 결의 2]. 안전 오프셋은 spawn 소켓 정의 한 곳뿐 — 시스템별 숫자 오프셋 계산 금지. Three.js 객체 비노출 |
 
 ## 2c. PvE 메타 계약 (contracts/meta.ts — INT-CORE-006)
 
@@ -64,6 +66,10 @@
 | `UpgradeStatId`(7항목 상한)·`UpgradeModifiers` | 합연산 보정 집합 — 최종값 = 기준값 × (1 + 보정 합), params 원본 불변 | 계산은 src/meta/upgradeMath.ts 순수 함수만 (툴 시뮬레이터 동일 함수). 8항목째 추가는 계약 개정 사안 |
 | `EquipmentId`(4종 상한)·`EquipmentLoadout` | 장비 교체 슬롯 — 상위호환 금지 | 장착 상태는 메타 소유, 장비 로직은 게임플레이 |
 | `BossPhase` | 보스 3단계 | 단계 소유는 보스 AI(리드), 약점 판정은 게임플레이, 연출은 렌더 |
+| `PurchaseDenialReason`(5종 고정)·`TransactionResult` | 크레딧 부족/부품 부족/최대 단계/슬롯 부족/이미 장착 — success/denied/saveFailedRolledBack | 미구현 기능 사유 문구 금지 [7차 결의 4]. 저장 실패 ≠ 구매 불가 사유. 내부 예외 문자열 UI 비노출 [13차 결의 7] |
+| `UpgradePurchaseJudgePort`·`EquipmentChangeJudgePort` | 판정·적용·loadout 스냅샷/복원 | 내용(가격·상한·슬롯 규칙)은 게임플레이 소유, throw 금지 — 틀(순서·롤백)은 리드 트랜잭션 |
+| `WalletTransactionPort`·`UpgradeLevelsPort`·`SavePort` | 지갑 스냅샷/차감/복원(MetaLoop) · 단계 스냅샷/+1/복원(UpgradeState) · save():boolean(툴링 SaveStore 어댑터 — throw 금지) | 트랜잭션 오케스트레이터(리드 src/meta)만 호출 — UI·렌더 직접 호출 금지 |
+| `BaseScreenPort` | wallet·upgradeLevels·loadout·canLaunchSortie + launchSortie/purchaseUpgrade/changeEquipment | 기지 UI(그래픽스)의 유일한 진입점 — MetaLoop·상태 객체 직접 수정 금지. 조립은 composition root |
 
 ## 3. 파라미터 계약
 
@@ -73,6 +79,7 @@
 | `params/detection.json` | 기획 | 게이지 만충 8s [5~15], 심도 3층 보정, 침묵 항행 배율 | 4층 이상 추가 → 거부 |
 | `params/combat.json` | 기획 | 어뢰 3발·재장전 20s [10~30], 신관 3.0s [3.0~4.0 하한 고정], 동시 폭뢰 4 [2~6], 밀려남 8m [4~15] | 신관 하한 <3.0 → 거부 |
 | `params/crew.json` | 기획 | 4인 쿨다운 [30~120], 어뢰수 재장전 20→8s [5~12] | 5인째 추가 → 거부 |
+| `params/aiming.json` (신설 예정 — 툴링 창 4) | 기획 | yaw 한계 15° [10~25], 상향 10° [5~15], 하향 15° [10~25] — **전부 양수 크기(음수 하향각 저장 금지)**, 감도 0.5 [0.3~1.0]. `aimReturnBehavior` 없음(reset 단일 — 스키마 포함 금지) | 계약 원본: contracts/params.ts AimingParams (INT-CORE-008). 음수·범위 밖 → 로드 거부 |
 
 수치 변경 = 관찰 근거 + `[Gx]` 태그 커밋 + `docs/templates/TUNING_LOG.md` 기록 (마스터 플랜 §11).
 

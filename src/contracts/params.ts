@@ -94,6 +94,30 @@ export interface CrewParams {
   torpedoOperatorReloadSeconds: Tunable;
 }
 
+/**
+ * params/aiming.json — 미세 조준각 (13차 결의 3·8·9, 스프린트 A).
+ *
+ * 규칙:
+ *  - 상향·하향 제한값은 **모두 양의 크기**로 저장한다 — JSON에 음수 하향각
+ *    금지. 하향 방향의 음수 적용은 계산(conventions.clampAimPitchRadians)
+ *    에서만 한다 [13차 결의 8].
+ *  - `aimReturnBehavior`는 존재하지 않는다 — 스프린트 A는 reset 단일 동작이며
+ *    미구현 선택지는 스키마에도 넣지 않는다 [13차 결의 9].
+ *  - json 파일·validator·GameParams 편입은 빌드·툴 창 범위(스프린트 A 창 4) —
+ *    이 타입이 그 작업의 계약 원본이다. 초기값: yaw 15 [10~25] /
+ *    pitchUp 10 [5~15] / pitchDown 15 [10~25] / 감도 0.5 [0.3~1.0].
+ */
+export interface AimingParams {
+  /** 좌우 미세각 한계 (도, ± 대칭) — 큰 각은 A/D 선체 선회 담당 */
+  aimYawLimitDegrees: Tunable;
+  /** 상향 한계 크기 (도, 양수) */
+  aimPitchUpLimitDegrees: Tunable;
+  /** 하향 한계 크기 (도, 양수 — 계산에서만 음수 적용) */
+  aimPitchDownLimitDegrees: Tunable;
+  /** 조준 중 마우스 감도 (일반 카메라 대비 배율) */
+  aimMouseSensitivity: Tunable;
+}
+
 /** 로드·검증 완료된 전체 파라미터 집합 */
 export interface GameParams {
   movement: MovementParams;

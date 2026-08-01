@@ -54,6 +54,40 @@
 결정만 잔여 — 백로그 이월 (R7 임시값 상태 유지, D+10 게이트 데이터에
 '임시 초기 테스트값' 표기). HUD·화물선·EventBus 배선은 D+10 통합에서 채택·적용 완료.
 
+## 계약 이름 통합 결정 (PvE MVP 1차 통합 — 통합 담당)
+
+> 우선순위: ① 개발 리드가 확정한 공식 계약 ② 기존 저장소 계약
+> ③ 게임플레이·툴링이 요청한 추가 payload.
+> **동일 의미의 이벤트·타입을 여럿 남기지 않는다.** 기능 삭제로 충돌을
+> 해결하지 않으며, 계약에 정보가 부족하면 이름은 유지하고 payload만 보완한다.
+> 상세 표: `docs/PVE_MVP_INTEGRATION_MANIFEST.md` §5.
+
+| # | 충돌한 이름 | 채택(공식) | 폐기·전환 | 근거 |
+|---|---|---|---|---|
+| 1 | `guard` / `patrol` (세력 태그) | **`patrol`** (`contracts/meta.ts`) | 게임플레이 로컬 `FactionId` 정의 삭제 → 공식 계약 재수출 | 우선순위 ① — 판정 로직·기능 변경 없음 |
+| 2 | `applyUpgradeBonus` / `effectiveValue` (동일 수식 이중 구현) | **`meta/upgradeMath.effectiveValue`** | 툴링 함수는 위임 래퍼로 잔존(호출부 이름 유지) | "계산식을 중복 구현하지 않는다" — 툴링의 카탈로그 검증·단계 합산은 보존 |
+| 3 | `diveDepth` / `maxDepth` (업그레이드 항목 id) | **`maxDepth`** | `params/upgrades.json` id 교정 | 우선순위 ① — `UpgradeStatId` 유니언과 일치시켜 기계 강제 가능 |
+| 4 | `guardSpawnRequested` / `guardShipRequested` | **`guardShipRequested`** | 게임플레이 큐 API(`consumeGuardSpawnRequests`)는 유지, 조립부 브리지가 공식 이름으로 발행 | 우선순위 ① — 기능 삭제 없이 이름만 단일화. `provokedByTargetId`는 공식 payload에 없어 미전달(필요 시 계약 보완 절차) |
+| 5 | `creditsChanged` / `creditsGained` / `lootDropped` | **`lootDropped`** | 신규 이벤트 미신설 | 우선순위 ① — 메타 루프가 이미 구독 중 |
+| 6 | `rarePartAcquired` / `saveRequested(cause='rarePart')` | **`saveRequested`** | 신규 이벤트 미신설 | 우선순위 ① — 저장 이벤트 단일화(cause 구분) 결정 유지 |
+| 7 | `baseStateChanged` / `metaStateChanged` | **`metaStateChanged`** | 신규 이벤트 미신설 | 우선순위 ① — 기지 화면·HUD 버튼 표시 모두 이 이벤트 소비 |
+
+### 계약 최소 보완 (기능 삭제 없이 추가만 — 보완 사유)
+
+| 보완 | 사유 |
+|---|---|
+| `MetaLoop.restoreWallet(CurrencyBundle)` | 지갑에 증가 경로만 있어 저장 데이터를 되돌릴 수 없었다. 저장 코드가 상태 머신을 직접 조작하지 않도록 **명시적 복원 API 하나**로 제한하고, BASE 상태에서만 허용한다 |
+| `WorldDrop.source: LootSource` + `CreditDropField.onCollected()` | 공식 `lootDropped` payload의 `source`를 회수 시점에 채울 수 없었다(회수 후 출처 소실). 경제 시스템은 이벤트를 직접 발행하지 않고 조립부 브리지가 발행한다 |
+| `GameplaySystems.resetSortieSession(params)` + 하위 리셋 4종 | 재출항 시 전투 세션 초기화 API가 없어 이전 출항의 위치·잔탄·드롭이 이월됐다. 확정 크레딧·희귀 부품·업그레이드는 유지한다 |
+| `ControlsHudOptions.launchSortie?` + 귀환/출항 버튼 | `returnToBaseRequested`는 **구독자만 있고 발행자가 없었다**. HUD가 요청만 발행하고 정산·전이는 상위 메타 루프가 소유한다 |
+| `CanyonScene.setMetaBaseActive()` | 기지 화면이 `?base=1` QA 플래그로만 도달 가능했다. 렌더가 메타 상태를 판정하지 않도록 조립부가 `metaStateChanged`로 호출한다 |
+
+### 미해소로 남긴 것 (후속)
+
+- `guardShipRequested` **소비자 없음** — 구축함/경비함 AI 미구현. 이벤트는 발행되지만 스폰은 일어나지 않는다. 새 경비함 AI 클래스를 복제하지 않는다는 원칙에 따라 기존 구축함 AI 도입 시 연결한다
+- 게임플레이 로컬 `UpgradeModifiers{torpedoSpeedBonus,torpedoDamageBonus}`는 공식 `UpgradeModifiers`(Partial\<Record\<UpgradeStatId,number\>\>)와 형태가 다르다. 조립부가 변환 주입하며, 어뢰 속도에 대응하는 공식 스탯이 7항목 상한 안에 없어 해당 보정은 0이다(장비 기능은 유지)
+- R7 임시값 4종 잔존: `meta/provisionalEconomy`(손실률), `systems/economy/provisionalEconomy`(드롭·픽업), `provisionalEquipment`, `provisionalCombat`/`provisionalCargo` — 기획 경제 수치표 도착 시 `params/economy.json` 이관
+
 ## 제안 목록
 
 ### INT-TOOL-008 — [LOOP][ECON] 스프린트 A 툴링 산출물 + 이관·문서 회귀 차단 요청
@@ -75,13 +109,13 @@
 `npm run verify:sprint-a`의 자동 판정이 현재 **2건 실패**다. 둘 다 툴링 창이
 고칠 수 없는(소유 밖) 대상이므로 해당 창에 제거를 요청한다:
 
-1. **§8 문서 회귀 7건** — 7차 결의 1-⑦('잠망경 심도 전용'을 전 문서에서 삭제,
+1. **§8 문서 회귀 7건** — 7차 결의 1-⑦('전 심도 조준(구 심도 전용 규칙 폐기)'을 전 문서에서 삭제,
    코드-문서 동시 갱신)의 미이행분. 회의록 원문 2건은 역사 기록으로 자동 분류·제외됨.
 
    | 위치 | 소유 |
    |---|---|
-   | `src/systems/PeriscopeAimSystem.ts:9` "잠망경 심도에서만" | 게임플레이 |
-   | `src/systems/__verification__/verifyGameplay.ts:670` "잠망경 심도 전용" | 게임플레이 |
+   | `src/systems/PeriscopeAimSystem.ts:9` "전 심도에서(구 규칙 폐기)" | 게임플레이 |
+   | `src/systems/__verification__/verifyGameplay.ts:670` "전 심도 조준(구 심도 전용 규칙 폐기)" | 게임플레이 |
    | `docs/CURRENT_STATUS.md:94` (게임플레이 구역) | 게임플레이 |
    | `docs/PROJECT_STATE.md:138·167` | 통합 관리자 |
    | `docs/NEXT_SPRINT.md:25` | 통합 관리자 |
@@ -96,7 +130,148 @@
    병합 시 같은 목록에 잡힌다. **A8은 기획 경제 수치표(PvE D+3 절대 마감)가
    도착해야 통과 가능**하다 — 툴링은 그릇(구조·검증기)만 완성했다.
 
-<<<<<<< HEAD
+
+
+### INT-RENDER-008 — [LOOP][ECON] Sprint A 조준 시각·성장 UI 배선·상태 요청 (검증 완료 코드 예시 포함)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스 (Sprint A 창3 — 회의록 13·14) |
+| 대상 시스템 | core/Game(조립 배선), 게임플레이(미세 조준각·전 심도 조준·출항 집계), 리드(구매·장착·출항 저장 트랜잭션), contracts(소켓·포트 이관 여부) |
+| 필요한 변경 | 아래 ①~④ |
+| 변경 이유 | 렌더·UI 구현은 완료 — 실상태·command 배선 지점이 보호 파일(core/Game)과 타 파트 소유라 배선 없이는 실사용 경로가 열리지 않음 |
+| 관련 게이트 | [LOOP] 조준 시각 · [ECON] 구매 트랜잭션 UX |
+| 영향을 받는 파일 | src/core/Game.ts(배선), src/meta/MetaLoop.ts(집계 getter), 게임플레이 조준 시스템, src/ui/* (수신 측 — 구현 완료) |
+| 하위 호환 여부 | 전부 추가 — 기존 구독·시스템 영향 없음 |
+| 개발 리드 결정 | **대기** |
+| 적용 커밋 | — |
+
+**① 리드 배선 요청 (core/Game — 아래 코드는 TEMP-WIRING으로 실측 검증 후 원복한 예시다).**
+`composeSystems()` 말미(메타 루프·업그레이드 생성 이후)에:
+
+```ts
+import { EconomyHud } from '../ui/EconomyHud';
+import { SortiePrepScreen } from '../ui/SortiePrepScreen';
+import { createEquipmentUiPort } from '../ui/metaEconomyPorts';
+
+const metaLoop = this.metaLoop; const upgrades = this.upgrades;
+const walletSource = {
+  get metaState() { return metaLoop.metaState; },
+  get wallet() { return metaLoop.wallet; },
+};
+const hud = new EconomyHud(this.container);
+hud.attachWalletSource(walletSource);
+const screen = new SortiePrepScreen(this.container);
+screen.attachWalletSource(walletSource);
+screen.attachUpgradePort({
+  listOffers: () => catalog.map((def) => ({
+    statId: def.id, displayName: def.label,
+    currentLevel: upgrades.currentLevels[def.id] ?? 0,
+    maxLevel: def.maxLevel,
+    nextEffectText: `${def.label} +${Math.round(def.bonusPerLevel * 100)}%`,
+    cost: null, // 공식 경제 params 부재 — 가격 미표시 (UI 가격 발명 금지)
+  })),
+  purchase: null, // ③ 구매 트랜잭션 배선 시 교체
+});
+screen.attachEquipmentPort(createEquipmentUiPort(gameplay.equipment));
+screen.attachDeparturePort({ confirmDeparture: () => { /* ④ 참조 */ } });
+// 매 프레임: hud.update(); screen.update(); — Game.update() 또는 registry 시스템로
+```
+
+기지 화면 UI가 배선되면 `render()`의 자동 출항 2줄과 ControlsHud의
+`launchSortie` 옵션은 이 화면의 출항 버튼으로 대체된다(중복 진입점 금지 —
+Game.ts 주석의 예정 사항 그대로). 검증 결과: 실지갑(세이브 로드 0/0) 표시,
+실카탈로그(params/upgrades.json label·maxLevel) 표시, 실 EquipmentSystem
+장착/해제/교체 command 왕복, 출항 버튼 → SORTIE 전환·화면 자동 숨김 확인.
+
+**② 게임플레이 상태 요청.**
+- **미세 조준각 소스**: `CanyonScene.attachAimAngleSource({ yawRadians, pitchRadians })`
+  (구조적 인터페이스 `AimAngleSource`, CanyonScene 수출). aiming.json 한계각·
+  감도·복귀(13차 결의 4)는 게임플레이가 판정하고 렌더는 결과 각만 소켓
+  로컬축(yaw=로컬 Y·양수 좌, pitch=로컬 X·양수 위)에 더한다. 미주입 시 0(정면).
+- **전 심도 조준**: 현 PeriscopeAimSystem은 잠망경 심도 게이트가 남아 있다.
+  렌더 측은 심도 분기가 없어(소켓 추종) 게이트 제거 즉시 전 심도 동작한다.
+- **출항 중 획득 집계 getter**: MetaLoop 내부 집계(tally)의 읽기 전용 공개
+  (예: `creditsEarnedThisSortie`/`rarePartsSecuredThisSortie`). UI는 임시
+  지갑 금지 원칙으로 lootDropped 합산을 하지 않는다 — getter 배선 전까지
+  '집계 배선 대기'로 표기 중. `EconomyHud.attachSortieEarningsSource()` 수신.
+
+**③ 리드 구매 트랜잭션 요청.** `UpgradePurchasePort.purchase(statId)`가
+결과 코드(`'ok' | 'insufficientCredits' | 'insufficientRareParts' | 'maxLevel'
+| 'slotFull' | 'alreadyEquipped' | 'saveFailed'`)를 돌려주는 구현. 판정·차감·
+단계 반영·**구매 직후 저장, 실패 시 rollback**(13차 저장 시점 개정)은 전부
+트랜잭션 소유 — UI는 결과 코드를 문구로 표시만 한다(저장 실패 문구는
+`SAVE_FAILED_MESSAGE` 지정 문구, 내부 예외 문자열 비노출). 장착 변경 직후
+저장도 동일 — 배선 시 `createEquipmentUiPort` 어댑터를 트랜잭션 포트로 교체.
+
+**④ 툴링·리드 출항 확정 직전 저장.** `DeparturePort.confirmDeparture()` 구현
+예시: `beginSortiePrep()` → `SaveBridge.writeSnapshot()`(툴링 저장 구조) →
+실패 시 `cancelSortiePrep()` + `'saveFailed'` 반환(**해역 전환 없음**, §10)
+→ 성공 시 `launchSortie()` + `'ok'`. `saveRequested` cause에 구매·장착·출항
+3종 추가는 리드 계약 개정 사안(13차 결의 5).
+
+### INT-GAME-009 — 스프린트 A 계약 요청: 앵커·2소켓 / 구매 트랜잭션 / 지갑·저장 포트 / 조준 params
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 (스프린트 A 창 2) |
+| 대상 시스템 | 리드 창(창 1) 산출물: `torpedoTubeAnchor`·`aimCameraSocket`·`torpedoSpawnSocket`, 구매 트랜잭션 구조, 조준·구매·장비·저장 계약 / 툴링 창(창 4) 산출물: `params/aiming.json`(+validator), 경제 가격 params |
+| 필요한 변경 | ① **앵커·2소켓 계약** [13차 결의 2] — 현재 게임플레이가 `src/systems/collision/torpedoTubeSocket.ts`에 소비 지점 겸 **안전 오프셋 단일 정의**를 두고 선진행 중(수치는 새로 만들지 않고 기존 `submarineHull` 기하에서 파생). 리드 계약 도착 시 이 파일은 계약을 읽는 어댑터로 축소되거나 삭제된다 ② **구매 트랜잭션 틀** [보완분 결의 7] — 순서·롤백 규격은 회의록대로 구현했고(스냅샷→재검증→차감→적용→저장→확정/롤백), 판정 내용(사유 5종)은 게임플레이 소유. 리드의 공식 구조가 오면 `economy/purchaseTypes.ts`의 결과 타입을 그 계약으로 승격 요청 ③ **지갑·저장 포트** — `PurchaseWalletPort`(credits·rareParts·applyDelta)·`PurchaseSavePort`(save(): boolean)를 조립부가 리드 `MetaLoop` 지갑과 툴링 `SaveStore`에 바인딩해야 한다. 게임플레이는 `GameplaySystems.attachBaseEconomy(purchase, savePort)` 진입점을 제공한다 ④ **조준 params** — `aiming.json` 4종(yaw 15 / pitchUp 10 / pitchDown 15 / sensitivity 0.5, 전부 양수 크기)이 오면 `provisionalAiming.ts` 삭제. 추가로 **조준 감도 기준값**(일반 카메라 라디안/픽셀 = 렌더 `ORBIT_RADIANS_PER_PIXEL` 0.005)이 현재 렌더와 게임플레이에 **중복 정의**되어 있다 — 공통 기준을 `aiming.json` 또는 리드 계약에 두기를 요청 ⑤ **가격 params** — `upgrades.json`에 가격 필드가 없어 `economy/provisionalUpgradeCost.ts`로 선진행(단계 선형). 공식 경제 수치표 도착 시 주입 교체 |
+| 변경 이유 | 스프린트 A 창 2 범위(전 심도 조준·미세 조준·탄도 일치·구매 판정·장비 변경·롤백) 구현 완료. 회의 14 병합 순서는 리드→게임플레이인데 리드 창 계약이 원격에 아직 없어, **계약 복제 없이** 소비 지점 단일화로 선진행함 |
+| 관련 게이트 | A1~A8 (특히 A5 저장 실패 롤백 T1~T6, A7 재접속 유지) |
+| 영향을 받는 파일 | `src/systems/SubmarineAimSystem.ts`·`aimGeometry.ts`·`provisionalAiming.ts`·`collision/torpedoTubeSocket.ts`·`StraightRunTorpedoSystem.ts`·`EquipmentSystem.ts`·`economy/{UpgradePurchaseSystem,purchaseTypes,provisionalUpgradeCost}.ts`, 조립부 `src/core/Game.ts`(지갑·저장 포트 바인딩) |
+| 하위 호환 여부 | 깨짐 없음 — 계약 파일 무수정, 게임플레이 내부 구현·주입 지점만. `AimSystem` 계약 시그니처 불변(toggleAim 등은 구현체 확장) |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
+
+### INT-CORE-009 — 스프린트 A 리드 구현: 소켓 rig·트랜잭션 오케스트레이터·조립 기준
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (창 1 — INT-CORE-008 계약의 리드 파트 구현) |
+| 대상 시스템 | `src/world/torpedoTubeAnchor.ts`(신규 — 앵커·안전 오프셋 단일 정의), `src/core/TorpedoTubeSocketRig.ts`(신규 — TorpedoTubeSocketSource 단일 구현), `src/meta/PurchaseTransaction.ts`·`EquipmentTransaction.ts`(신규 — 원자성 틀), `src/meta/MetaLoop.ts`(WalletTransactionPort 구현·sortieLaunch 저장), `src/core/PveIntegration.ts`(UpgradeState = UpgradeLevelsPort), `src/core/Game.ts`(rig 조립·디버그 핸들) |
+| 필요한 변경 | 위 신규 4파일 + 기존 2파일 확장. 앵커 수치는 기존 동작 보존(중심에서 3.35m 생성 유지 — 구 SPAWN_OFFSET과 동일) |
+| 관련 게이트 | A3(십자선=탄도)·A5(A5-T1~T6)·A6·A7·A8 지원 구조 |
+| 하위 호환 여부 | 기존 시스템 무변경 — 게임플레이·렌더 파일 미수정. 메타 검증 35/35(신규 16 포함)·게임플레이 100/100 유지 |
+| 개발 리드 결정 | 승인 (창 1 소유 범위). 트랜잭션 실배선은 게임플레이 판정 포트 병합 후(아래 지침) — 더미 판정·any 캐스팅으로 선배선하지 않는다 |
+| 적용 커밋 | (본 브랜치 [LOOP] 구현·배선 커밋) |
+
+**각 창 적용 지침 (스프린트 A — 병합 순서: 리드 → 게임플레이 → 그래픽스 → 툴링):**
+
+- **게임플레이 창**: ① 조준 재작성 — 전 심도 허용·자동 부상 제거·조준 중 기동, `FineAimSource` 구현(로컬 yaw/pitch, 클램프는 `conventions.clampAimYaw/PitchRadians`만, 해제 시 0 reset). `PeriscopeAimSystem`의 잠망경 조건·이름 정리(파일 소유권 게임플레이 — 리드는 수정하지 않았음) ② 어뢰 생성 — `tubeSockets.torpedoSpawnSocket` 소비(위치+전방 3D), 자체 `SPAWN_OFFSET_METERS`·`bowDirectionXZ` 방향 계산 삭제 ③ `UpgradePurchaseJudgePort`·`EquipmentChangeJudgePort` 구현(불가 사유 5종 산출 — 가격·상한은 params/경제 수치표) ④ 세션 리셋에 조준 미세각 0 포함
+- **그래픽스 창**: ① 조준 카메라 — `tubeSockets.aimCameraSocket` 소비(자체 오프셋 계산 금지), 자기 선체 제외는 조준 카메라 레이어 마스크 한정 ② 기지·구매·장비 UI는 `BaseScreenPort`만 소비(MetaLoop·지갑 직접 접근 금지), 불가 사유 5종 + 저장 실패 문구 구분 표시(내부 예외 비노출)
+- **툴링 창**: ① `params/aiming.json` + validator + `GameParams.aiming` 편입(계약: contracts/params.ts `AimingParams` — 양수 크기 검증, `aimReturnBehavior` 키 거부) ② SavePort 어댑터: `{ save: () => { saveBridge.writeSnapshot(); return saveBridge.lastSaveSucceeded; } }` ③ 저장 실패 강제 테스트 저장소로 A5-T1~T6 검증(트랜잭션 계약 테스트 16항목은 `npm run verify:meta`에 이미 포함) ④ '전 심도 조준(구 심도 전용 규칙 폐기)' 문서 제거 확인 — 잔존 위치: `src/systems/PeriscopeAimSystem.ts`·`verifyGameplay.ts`(게임플레이 창 수정분), PROJECT_STATE.md(통합 담당)
+- **통합 창 (리드 병합 시 배선 스니펫 — 게임플레이 판정 포트 병합 후 composeSystems에 추가):**
+
+```ts
+const savePort = { save: () => { saveBridge.writeSnapshot(); return saveBridge.lastSaveSucceeded; } };
+const purchaseTx = new PurchaseTransaction(gameplay.purchaseJudge, this.metaLoop, this.upgrades, savePort);
+const equipmentTx = new EquipmentTransaction(gameplay.equipmentJudge, savePort);
+this.tubeSockets.attachFineAimSource(gameplay.aim); // FineAimSource 구현 후
+const baseScreen: BaseScreenPort = {
+  get wallet() { return metaLoop.wallet; },
+  get upgradeLevels() { return upgrades.currentLevels; },
+  get loadout() { return gameplay.equipment.loadout; },
+  get canLaunchSortie() { return metaLoop.metaState === 'BASE'; },
+  launchSortie: () => { /* 기존 HUD launchSortie 경로 이관 */ return true; },
+  purchaseUpgrade: (id) => purchaseTx.run(id),
+  changeEquipment: (request) => equipmentTx.run(request),
+};
+```
+
+### INT-CORE-008 — 스프린트 A 선행 계약: 발사관 소켓·미세 조준·구매/장비 트랜잭션·저장 시점
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (14차 소회의 창 1 — 계약 생산자. 근거: 7차 대회의 결의 1~9 + 13차 소회의 결의 2·3·4·7·8·9) |
+| 대상 시스템 | `src/contracts/systems.ts`(AimSystem 개정 + FineAimSource·SocketPose·TorpedoTubeSocketSource), `src/contracts/params.ts`(AimingParams), `src/contracts/meta.ts`(PurchaseDenialReason 5종·TransactionResult·판정/지갑/단계/저장 포트·EquipmentChangeRequest·BaseScreenPort), `src/contracts/events.ts`(saveRequested cause + sortieLaunch), `src/core/conventions.ts`(clampAimYaw/PitchRadians·aimForwardDirection) |
+| 필요한 변경 | ① **폐기 규칙 제거**: AimSystem 계약에서 '전 심도 조준(구 심도 전용 규칙 폐기)' 문구 삭제 — 전 심도 조준·심도 불변·해제 시 미세각 reset으로 개정 (재도입 금지 명문화) ② 소켓 2구조: torpedoTubeAnchor → aimCameraSocket(정위치)·torpedoSpawnSocket(+고정 안전 오프셋, 정의 단일 지점) — 동일 좌표계·동일 전방축, 십자선=탄도, 시스템별 오프셋 계산 금지, Three.js 비노출 ③ 미세 조준: AimingParams 4종(양수 크기 규칙, aimReturnBehavior 없음) + 공용 클램프·전방 벡터 함수(카메라·조준·테스트 동일 함수) ④ 구매 불가 5종·트랜잭션 결과 3종(저장 실패는 별도 status — 내부 예외 UI 비노출) ⑤ 원자적 구매·장비 트랜잭션 포트(스냅샷→재검증→차감→적용→저장→commit/rollback — 틀=리드/내용=게임플레이) ⑥ 저장 시점 5종: 이벤트 3(settlement·rarePart·**sortieLaunch 신설**) + 트랜잭션 직접 저장 2(구매·장비 — 중복 이벤트 금지) ⑦ 기지 화면 BaseScreenPort(UI의 유일 진입점) |
+| 변경 이유 | 스프린트 A 4개 창(게임플레이 조준·판정 / 그래픽스 조준 카메라·UI / 툴링 aiming.json·저장 테스트)이 전부 이 계약의 소비자 — 선행 확정 없이는 각 창이 임시 인터페이스·개별 오프셋을 만들게 됨 (7차 결의 1-① 금지 조항) |
+| 관련 게이트 | A1~A8 전부 (특히 A3 십자선=탄도, A5 트랜잭션, A7 저장 유지) |
+| 영향을 받는 파일 | 계약 4파일 + conventions + INTERFACES.md. 소비: 게임플레이(조준 재작성·판정 포트 구현), 그래픽스(소켓 소비 카메라·UI), 툴링(aiming.json+validator+GameParams.aiming 편입·SavePort 어댑터·A5-T 테스트) |
+| 하위 호환 여부 | 기존 코드 무변경(추가+doc 개정만) — AimSystem 시그니처 불변이라 PeriscopeAimSystem 컴파일 유지(동작 개정은 게임플레이 창 몫). AimingParams는 GameParams 미편입 상태로 선행(편입은 툴링 창이 json·validator와 동시에) |
+| 개발 리드 결정 | 승인 — 창 1 소유 범위. 소켓 rig 구현·트랜잭션 오케스트레이터는 후속 커밋(INT-CORE-009) |
+| 적용 커밋 | (본 브랜치 선행 계약 커밋) |
 ### INT-TOOL-007 — [LOOP][ECON] PvE 툴링 배선 요청: 저장 시점·경제/기지 이벤트 계약·병행 키 E·보스 오디오
 
 | 필드 | 내용 |
@@ -124,7 +299,34 @@
 | 하위 호환 여부 | 기존 스크립트·의존성 무변경 (추가만) |
 | 개발 리드 결정 | **확인 대기 + 정책 선택지 보고** — 스코프 가드 위반 처리: 회의 문언은 '빌드 **경고**'(소회의 결의 4), 이번 작업 지시는 'CI **실패** 가능하면'. 현재 구성 = 로컬 기본 경고 / CI `--strict` 실패. 회의 문언 우선 시 CI에서 `--strict`만 제거하면 됨 |
 | 적용 커밋 | (이 브랜치의 PvE 툴링 커밋) |
-=======
+
+
+### INT-RENDER-007 — 기지 화면·외형 단계(visualTier) 메타 배선 요청 (PvE 단계 2)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스 (feat/render — PvE 성장 루프 시각 준비분) |
+| 대상 시스템 | 리드 메타 루프 상태 머신(신규, 11차 결의 2)·`src/core/Game.ts`(장면 전환 배선) |
+| 필요한 변경 | ① 기지 상태 진입 시 `BaseSceneView`(src/render — ManagedScene 구현)를 SceneManager 활성 장면으로 전환, 해역 진입 시 CanyonScene 복귀 ② 메타 상태의 외형 단계를 렌더에 주입: 기지 = `baseView.applyMetaVisualState({ hullVisualTier, weaponVisualTier })`, 해역 = `scene.setSubmarineVisualTiers(hull, weapon)` — **렌더는 명시적 visualTier만 소비**하며 업그레이드 수치·저장 데이터를 읽지 않는다 ③ 기지 상태에서 전투 HUD 숨김(툴링 협의) |
+| 변경 이유 | D+9 성장 루프 빌드(출항→파밍→귀환→강화)의 기지 화면·성장 외형이 렌더에 준비 완료 — 메타 루프(리드 신규 작성)와의 연결점만 필요. 그 전까지 QA 경로(`?base=1`·`?tiers=<h>,<w>`)로 검수 가능 |
+| 관련 게이트 | PvE 단계 2 Exit Criteria (D+9 빌드) |
+| 영향을 받는 파일 | 리드 메타 루프(위치 미정), `src/core/Game.ts`, (렌더 측 준비 완료: `BaseSceneView.ts`·`SubmarineVisual.ts`) |
+| 하위 호환 여부 | 깨짐 없음 — 미배선 시 기존 해역 장면만 동작 |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
+
+### INT-RENDER-006 — 어뢰 상태 주입 배선 요청 (어뢰 가시화·기포 항적, 5차 결의 2)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스 (feat/render) |
+| 대상 시스템 | `src/core/Game.ts` (공통 보호 — composeSystems 1줄) |
+| 필요한 변경 | `scene.attachEventBus(this.bus);` 다음 줄에:<br>`scene.attachTorpedoSource(gameplay.torpedo);`<br>— 렌더의 `TorpedoStateSource`(읽기 전용 `torpedoes` 스냅샷 + `torpedoSpeedMetersPerSecond`)는 `StraightRunTorpedoSystem`이 이미 구조적으로 충족 |
+| 변경 이유 | 어뢰 로우폴리 모델·기포 항적(TorpedoVisuals — 풀링+인스턴싱 1드로우)과 조준경 내 리드샷 보조선이 어뢰 상태·속력을 소비해야 함. 임시 배선으로 실측 검증 완료(발사→어뢰·항적 표시, 스크린샷 확보) 후 원복 — 보호 파일 미수정 |
+| 관련 게이트 | G3(발사 피드백)·G7, 5차 결의 2(리드샷 학습 피드백 P1) |
+| 영향을 받는 파일 | `src/core/Game.ts` 1줄 (렌더 측 준비 완료: `TorpedoVisuals.ts`·`attachTorpedoSource` 포트) |
+| 하위 호환 여부 | 깨짐 없음 — 미배선 시 어뢰·항적 미표시(기존 판정·투명 어뢰 상태와 동일) |
+| 개발 리드 결정 | (대기) |
 ### INT-CORE-007 — 상위 메타 루프·업그레이드 배율 레이어 구현과 조립
 
 | 필드 | 내용 |
@@ -161,7 +363,20 @@
 | 하위 호환 여부 | 깨짐 없음 — 전부 추가. `faction`은 선택 필드(미지정 = hostile 과도기 호환, 게임플레이 태그 작업 후 필수 승격 예정) |
 | 개발 리드 결정 | 승인 — 신 스코프 가드(업그레이드 7항목·장비 4종)를 유니언 타입 상한으로 기계 강제. 계층 통신 3종 제한을 포트+이벤트로 고정. 저장 이벤트는 `saveRequested` 단일(cause 구분)로 통합 |
 | 적용 커밋 | (본 브랜치 선행 계약 커밋) |
->>>>>>> 187536e
+
+### INT-GAME-008 — PvE 경제·전투 계약 패키지 (이벤트·params·EffectiveParams·보스 포트)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 (PvE 전환 1·2단계 작업 창 — 회의 09·11 반영) |
+| 대상 시스템 | `src/contracts/events.ts`, `src/contracts/params.ts`+`/params/economy.json`·`/params/upgrades.json`(신설 — 회의 11 결의 7), `src/contracts/systems.ts`(EffectiveParams·보스 단계 포트·Faction 승격) |
+| 필요한 변경 | ① **이벤트 신설**: `aimRequired`(비조준 발사 시도 안내 — 결의 2), `creditsChanged { total, sortie }`, `guardSpawnRequested { x, z, provokedByTargetId }`, `rarePartAcquired { partId }`(즉시 저장 트리거 — 툴링 저장 소비), `bossWeakPointHit { kind, appliedDamage }` — 현재는 게임플레이 읽기 전용 상태·consume API·콜백(aimRequiredCount / consumeGuardSpawnRequests / RunEconomy.onRarePartAcquired / BossWeakPointTarget.onHit)으로 선진행 ② **경제·장비 params 이관** (기획 수치표 D+3 병목): 드롭 테이블·픽업 반경(6m)·손실률(0.4) → `src/systems/economy/provisionalEconomy.ts`, 장비 4종 수치·슬롯 수(2)·디코이 → `src/systems/provisionalEquipment.ts`, 보스 약점 배율(2.0/0.25) → `BossWeakPointTarget.provisionalBossWeakPointConfig` — 전부 R7 선진행 중 ③ **EffectiveParams 계약**: 업그레이드 합연산 배율 레이어(회의 11 결의 4)의 공급 측 계약 — 게임플레이는 `EquipmentSystem.setUpgradeModifiers(UpgradeModifiers)` 동등 주입점으로 선진행, 계약 확정 시 소비 경로 교체 ④ **보스 단계 포트**: `BossPhasePort { phase, weakPointOpen }` — 리드 보스 AI가 공급(게임플레이는 AI 내부 접근 없음) ⑤ CombatTarget의 `faction`·`dropTableId`·`hullBox`(어뢰·잠수함 충돌 공유 박스 — 5차 결의 1) 계약 승격 검토 |
+| 변경 이유 | D+4(재화 획득)·D+9(성장 루프) 게임플레이 로직 구현 완료 — 표현·저장·AI 계층과의 정식 연결점과 수치 단일 소스만 남음 |
+| 관련 게이트 | [ECON][LOOP][BOSS] 전반, G3(비조준 발사 차단) |
+| 영향을 받는 파일 | 계약 3파일, params 2종(신설), `src/systems/economy/*`, `EquipmentSystem.ts`, `BossWeakPointTarget.ts`, `PeriscopeAimSystem.ts`, 툴링 저장·오디오 배관, 렌더 연출 |
+| 하위 호환 여부 | 깨짐 없음 — 전부 추가. 선진행 상태·콜백은 이벤트 확정 후에도 폴링 경로로 유지 가능 |
+| 개발 리드 결정 | (대기 — PvE 1차 통합에서 항목별 처리, 아래 '계약 이름 통합 결정' 참조) |
+| 적용 커밋 | — |
 
 ### INT-CORE-005 — D+10 통합 배선·검증 핸들 (통합 담당 기록)
 

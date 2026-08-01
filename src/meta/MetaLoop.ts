@@ -25,7 +25,9 @@ import type {
   CurrencyBundle,
   MetaStateId,
   SortieReport,
+  PurchaseCost,
   SortieSessionPort,
+  WalletTransactionPort,
 } from '../contracts/meta';
 import type { EventBus, Unsubscribe } from '../core/EventBus';
 import type { GameSystem, SystemContext } from '../core/GameSystem';
@@ -37,7 +39,7 @@ export interface MetaLoopOptions {
   creditLossOnDestroyedRatio: number;
 }
 
-export class MetaLoop implements GameSystem {
+export class MetaLoop implements GameSystem, WalletTransactionPort {
   readonly id = 'metaLoop';
 
   private readonly bus: EventBus;
@@ -93,6 +95,55 @@ export class MetaLoop implements GameSystem {
     this.unsubscribes.length = 0;
   }
 
+  /**
+   * 저장된 영구 지갑 복원 — 부팅 시 1회, BASE 상태에서만 허용한다.
+   *
+   * PvE 1차 통합 최소 보완: 지갑은 증가 경로(collectLoot·settleSortie)만
+   * 있어 저장 데이터를 되돌릴 수 없었다. 저장 코드가 메타 상태 머신을
+   * 직접 조작하지 않는다는 원칙을 지키기 위해, 복원은 이 명시적 API
+   * 하나로만 들어온다 (상태 전이는 일으키지 않는다).
+   * 출항 중 호출은 집계와 충돌하므로 거부한다.
+   */
+  restoreWallet(wallet: CurrencyBundle): void {
+    if (this.state !== 'BASE') {
+      throw new Error(
+        `[MetaLoop] 지갑 복원은 BASE 상태에서만 가능합니다 (현재: ${this.state})`,
+      );
+    }
+    if (!Number.isFinite(wallet.credits) || wallet.credits < 0) {
+      throw new Error(`[MetaLoop] 복원 크레딧이 올바르지 않습니다: ${wallet.credits}`);
+    }
+    if (!Number.isFinite(wallet.rareParts) || wallet.rareParts < 0) {
+      throw new Error(`[MetaLoop] 복원 희귀 부품 수가 올바르지 않습니다: ${wallet.rareParts}`);
+    }
+    this.walletCredits = Math.floor(wallet.credits);
+    this.walletRareParts = Math.floor(wallet.rareParts);
+  }
+
+  /* ── WalletTransactionPort (구매 트랜잭션 전용 — 지갑 소유자로서 구현) ── */
+
+  /** 트랜잭션 스냅샷용 — wallet getter와 동일한 복사본 */
+  snapshotWallet(): CurrencyBundle {
+    return this.wallet;
+  }
+
+  /**
+   * 구매 비용 차감 — 잔액 부족·유효하지 않은 비용·기지 밖이면 false·무변경
+   * (throw 금지 계약). 구매는 기지(BASE)에서만 일어난다 — 출항 중 차감은
+   * 출항 집계·정산과 충돌하므로 거부한다.
+   */
+  spendFromWallet(cost: PurchaseCost): boolean {
+    if (this.state !== 'BASE') return false;
+    const credits = Math.floor(cost.credits);
+    const rareParts = Math.floor(cost.rareParts);
+    if (!Number.isFinite(credits) || !Number.isFinite(rareParts)) return false;
+    if (credits < 0 || rareParts < 0) return false;
+    if (this.walletCredits < credits || this.walletRareParts < rareParts) return false;
+    this.walletCredits -= credits;
+    this.walletRareParts -= rareParts;
+    return true;
+  }
+
   /** 기지 → 출항 준비 */
   beginSortiePrep(): void {
     this.transition('SORTIE_PREP');
@@ -108,6 +159,11 @@ export class MetaLoop implements GameSystem {
    * 기지에서 출항하면 기존 전투 세션이 초기화되는 규칙의 진입점.
    */
   launchSortie(): void {
+    // 출항 확정 직전 저장 [13차 결의 4 — 저장 시점 5종] — 아직 SORTIE_PREP
+    // 상태에서 발행한다 (허용표 밖 상태면 발행 없이 아래 transition이 던진다)
+    if (this.state === 'SORTIE_PREP') {
+      this.bus.emit('saveRequested', { cause: 'sortieLaunch' });
+    }
     this.transition('SORTIE');
     this.sortieCount += 1;
     this.tallyCredits = 0;
