@@ -54,7 +54,69 @@
 결정만 잔여 — 백로그 이월 (R7 임시값 상태 유지, D+10 게이트 데이터에
 '임시 초기 테스트값' 표기). HUD·화물선·EventBus 배선은 D+10 통합에서 채택·적용 완료.
 
+## 계약 이름 통합 결정 (PvE MVP 1차 통합 — 통합 담당)
+
+> 우선순위: ① 개발 리드가 확정한 공식 계약 ② 기존 저장소 계약
+> ③ 게임플레이·툴링이 요청한 추가 payload.
+> **동일 의미의 이벤트·타입을 여럿 남기지 않는다.** 기능 삭제로 충돌을
+> 해결하지 않으며, 계약에 정보가 부족하면 이름은 유지하고 payload만 보완한다.
+> 상세 표: `docs/PVE_MVP_INTEGRATION_MANIFEST.md` §5.
+
+| # | 충돌한 이름 | 채택(공식) | 폐기·전환 | 근거 |
+|---|---|---|---|---|
+| 1 | `guard` / `patrol` (세력 태그) | **`patrol`** (`contracts/meta.ts`) | 게임플레이 로컬 `FactionId` 정의 삭제 → 공식 계약 재수출 | 우선순위 ① — 판정 로직·기능 변경 없음 |
+| 2 | `applyUpgradeBonus` / `effectiveValue` (동일 수식 이중 구현) | **`meta/upgradeMath.effectiveValue`** | 툴링 함수는 위임 래퍼로 잔존(호출부 이름 유지) | "계산식을 중복 구현하지 않는다" — 툴링의 카탈로그 검증·단계 합산은 보존 |
+| 3 | `diveDepth` / `maxDepth` (업그레이드 항목 id) | **`maxDepth`** | `params/upgrades.json` id 교정 | 우선순위 ① — `UpgradeStatId` 유니언과 일치시켜 기계 강제 가능 |
+| 4 | `guardSpawnRequested` / `guardShipRequested` | **`guardShipRequested`** | 게임플레이 큐 API(`consumeGuardSpawnRequests`)는 유지, 조립부 브리지가 공식 이름으로 발행 | 우선순위 ① — 기능 삭제 없이 이름만 단일화. `provokedByTargetId`는 공식 payload에 없어 미전달(필요 시 계약 보완 절차) |
+| 5 | `creditsChanged` / `creditsGained` / `lootDropped` | **`lootDropped`** | 신규 이벤트 미신설 | 우선순위 ① — 메타 루프가 이미 구독 중 |
+| 6 | `rarePartAcquired` / `saveRequested(cause='rarePart')` | **`saveRequested`** | 신규 이벤트 미신설 | 우선순위 ① — 저장 이벤트 단일화(cause 구분) 결정 유지 |
+| 7 | `baseStateChanged` / `metaStateChanged` | **`metaStateChanged`** | 신규 이벤트 미신설 | 우선순위 ① — 기지 화면·HUD 버튼 표시 모두 이 이벤트 소비 |
+
+### 계약 최소 보완 (기능 삭제 없이 추가만 — 보완 사유)
+
+| 보완 | 사유 |
+|---|---|
+| `MetaLoop.restoreWallet(CurrencyBundle)` | 지갑에 증가 경로만 있어 저장 데이터를 되돌릴 수 없었다. 저장 코드가 상태 머신을 직접 조작하지 않도록 **명시적 복원 API 하나**로 제한하고, BASE 상태에서만 허용한다 |
+| `WorldDrop.source: LootSource` + `CreditDropField.onCollected()` | 공식 `lootDropped` payload의 `source`를 회수 시점에 채울 수 없었다(회수 후 출처 소실). 경제 시스템은 이벤트를 직접 발행하지 않고 조립부 브리지가 발행한다 |
+| `GameplaySystems.resetSortieSession(params)` + 하위 리셋 4종 | 재출항 시 전투 세션 초기화 API가 없어 이전 출항의 위치·잔탄·드롭이 이월됐다. 확정 크레딧·희귀 부품·업그레이드는 유지한다 |
+| `ControlsHudOptions.launchSortie?` + 귀환/출항 버튼 | `returnToBaseRequested`는 **구독자만 있고 발행자가 없었다**. HUD가 요청만 발행하고 정산·전이는 상위 메타 루프가 소유한다 |
+| `CanyonScene.setMetaBaseActive()` | 기지 화면이 `?base=1` QA 플래그로만 도달 가능했다. 렌더가 메타 상태를 판정하지 않도록 조립부가 `metaStateChanged`로 호출한다 |
+
+### 미해소로 남긴 것 (후속)
+
+- `guardShipRequested` **소비자 없음** — 구축함/경비함 AI 미구현. 이벤트는 발행되지만 스폰은 일어나지 않는다. 새 경비함 AI 클래스를 복제하지 않는다는 원칙에 따라 기존 구축함 AI 도입 시 연결한다
+- 게임플레이 로컬 `UpgradeModifiers{torpedoSpeedBonus,torpedoDamageBonus}`는 공식 `UpgradeModifiers`(Partial\<Record\<UpgradeStatId,number\>\>)와 형태가 다르다. 조립부가 변환 주입하며, 어뢰 속도에 대응하는 공식 스탯이 7항목 상한 안에 없어 해당 보정은 0이다(장비 기능은 유지)
+- R7 임시값 4종 잔존: `meta/provisionalEconomy`(손실률), `systems/economy/provisionalEconomy`(드롭·픽업), `provisionalEquipment`, `provisionalCombat`/`provisionalCargo` — 기획 경제 수치표 도착 시 `params/economy.json` 이관
+
 ## 제안 목록
+
+### INT-TOOL-007 — [LOOP][ECON] PvE 툴링 배선 요청: 저장 시점·경제/기지 이벤트 계약·병행 키 E·보스 오디오
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 빌드·툴 (PvE 성장 루프 기반 작업 — 회의록 10·11 위임분) |
+| 대상 시스템 | 메타 루프(리드, 신규), `src/contracts/events.ts`(이벤트 제안 — 미수정), 게임플레이 입력, 보스 상태 머신(리드) |
+| 필요한 변경 | ① **저장 시점 배선(리드)**: 기지 귀환 정산 확정 시 + 희귀 부품 획득 즉시 `defaultSaveStore.save()` 호출 (`src/meta/save/` — docs/SAVE_SYSTEM.md). 그 외 자동 저장 금지 [확정] ② **이벤트 계약 제안(승인 대기 — 계약 파일 미수정)**: `creditsGained { amount }` / `rarePartAcquired { partId }` / `baseStateChanged { docked: boolean }` — 발행: 경제·메타 루프, 구독: AudioCueRouter(획득음·기지 전환음)·UI. 승인 시 AudioCueRouter 구독 1줄씩 추가 ③ **병행 키 E(게임플레이)**: 5차 결의 4의 E=상승 병행 키가 코드 미반영 — 입력 안내(1회 토스트)가 이미 E를 안내하므로 **D+9 빌드 전 바인딩 필수** (Ctrl/Shift 스왑 반영과 함께) ④ **보스 오디오(리드→툴링)**: 침묵 전환은 `WebAudioSystem.setMusicSilenced()` 배관 준비 완료 — 호출 시점(단계 전환 판정)은 보스 상태 머신 소유. 단계 이벤트 계약(예: `bossPhaseChanged`)은 보스 구현 착수 시 제안 |
+| 변경 이유 | 저장·오디오 배관은 완성됐으나 호출 지점(메타 루프·경제 판정)이 다른 파트 소유 — 배선 없이는 저장이 실행되지 않음 |
+| 관련 게이트 | [LOOP] 2단계 Exit Criteria (출항→파밍→귀환→강화 저장 포함 완주) |
+| 영향을 받는 파일 | 메타 루프 신규 코드(리드), events.ts(승인 시), src/audio/AudioCueRouter.ts(구독 추가), 게임플레이 KeyboardInput |
+| 하위 호환 여부 | 이벤트 추가만 — 기존 구독자 영향 없음 |
+| 개발 리드 결정 | **대기** |
+| 적용 커밋 | — |
+
+### INT-TOOL-006 — [LOOP] 보호 파일 선반영: package.json 스크립트·playwright-core devDep·CI 스코프 가드 단계
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 빌드·툴 (PvE 툴링 작업 — CI·검증 러너·빌드 설정은 세션 위임 소유) |
+| 대상 시스템 | `package.json`(공통 보호), `.github/workflows/ci.yml`(툴링 소유) |
+| 필요한 변경 | ① scripts 4종 추가: `check:scope`(스코프 가드) / `verify:tooling`(세이브·업그레이드·폴백 26항목) / `verify:gameplay`(기존 러너 별칭) / `verify:hud`(브라우저 33항목 — Chromium 필요, CI 제외) ② devDependency `playwright-core@^1.62.1` (브라우저 다운로드 없음 — verify:hud 전용) ③ CI에 `check:scope --strict`·`verify:tooling`·`verify:gameplay` 단계 추가 |
+| 변경 이유 | 소회의(11) 결의 4 "가드를 도구가 지키게" + 검증 러너 재현성(스크래치패드 스크립트의 저장소 반입) |
+| 관련 게이트 | [LOOP][ECON] 스코프 가드 기계 강제 |
+| 영향을 받는 파일 | package.json, package-lock.json, .github/workflows/ci.yml, scripts/check-scope-guard.mjs·verify-hud.mjs(신규) |
+| 하위 호환 여부 | 기존 스크립트·의존성 무변경 (추가만) |
+| 개발 리드 결정 | **확인 대기 + 정책 선택지 보고** — 스코프 가드 위반 처리: 회의 문언은 '빌드 **경고**'(소회의 결의 4), 이번 작업 지시는 'CI **실패** 가능하면'. 현재 구성 = 로컬 기본 경고 / CI `--strict` 실패. 회의 문언 우선 시 CI에서 `--strict`만 제거하면 됨 |
+| 적용 커밋 | (이 브랜치의 PvE 툴링 커밋) |
 
 ### INT-RENDER-007 — 기지 화면·외형 단계(visualTier) 메타 배선 요청 (PvE 단계 2)
 
@@ -82,6 +144,56 @@
 | 영향을 받는 파일 | `src/core/Game.ts` 1줄 (렌더 측 준비 완료: `TorpedoVisuals.ts`·`attachTorpedoSource` 포트) |
 | 하위 호환 여부 | 깨짐 없음 — 미배선 시 어뢰·항적 미표시(기존 판정·투명 어뢰 상태와 동일) |
 | 개발 리드 결정 | (대기) |
+
+### INT-CORE-007 — 상위 메타 루프·업그레이드 배율 레이어 구현과 조립
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (PvE 1단계 — INT-CORE-006 계약의 리드 파트 구현) |
+| 대상 시스템 | `src/meta/`(신규 — MetaState·MetaLoop·upgradeMath·settlement·provisionalEconomy·__verification__), `src/core/Game.ts`(메타 루프 등록·세션 포트 어댑터·부트 전환 이동) |
+| 필요한 변경 | ① 2계층 상태 머신 상위(BASE→SORTIE_PREP→SORTIE→DEBRIEF, 허용표 밖 throw) — 하위 무수정 포장, 통신 3종 제한 ② 정산: 파괴 시 크레딧 손실(임시 50%)·희귀 즉시 확정·저장 요청 발행 ③ 업그레이드 합연산 순수 함수(effectiveValue·effectiveDurationSeconds·mergeModifiers — params 불변) ④ Game 조립: metaLoop 최선두 등록, BOOT→DEPARTURE 전환을 SortieSessionPort 어댑터로 이동(세션 시작이 상위 루프 경유), 기지 화면 도입 전 임시 자동 출항 ⑤ 결정적 검증 19항목(`node src/meta/__verification__/run.mjs`) |
+| 변경 이유 | PvE 소회의 결의 2·4의 리드 담당 구현. 각 파트(경제·저장·기지 UI)가 붙을 골격 선행 제공 |
+| 관련 게이트 | PvE D+4(메타 루프에서 세션 시작·정산 전달)·D+9(성장 루프 완주) Exit Criteria |
+| 영향을 받는 파일 | src/meta/* (신규), src/core/Game.ts |
+| 하위 호환 여부 | 하위 세션 코드 무수정 — 기존 결정적 검증 75/75 유지. 부트 전환 경로만 first render → 포트 어댑터로 이동 (동작 동일) |
+| 개발 리드 결정 | 승인 (자기 소유 영역). **R7 임시값 1건**: 파괴 손실률 0.5 [30~70%] — `src/meta/provisionalEconomy.ts` 한 곳, 기획 경제 수치표(D+3 병목) 도착 시 `params/economy.json` 이관·파일 삭제 |
+| 적용 커밋 | (본 브랜치 [LOOP] 구현 커밋) |
+
+**각 파트 적용 요청 (INT-CORE-006·007 소비):**
+- **게임플레이**: ① `src/systems/economy/` — Faction 태그 부여(화물선 hostile부터), 드롭 테이블, `lootDropped` 발행, 중립 공격 판정 → `guardShipRequested` 발행 ② 세션 리셋 API(재출항 시 전투 세션 초기화 — SortieSessionPort 어댑터가 호출할 진입점) 제공 ③ 세션 종료 판정(파괴·귀환 지점 도달) 시 `MetaLoop.settleSortie` 호출 경로는 리드와 조립 협의 ④ 보스 약점 판정 →`bossWeakPointChanged` 발행 (판정 소유)
+- **빌드·툴**: ① `src/meta/save/` — SaveSystem(스키마 버전+마이그레이션 틀+이중 슬롯), `saveRequested` 구독, 저장 데이터는 MetaLoop.wallet 등 스냅숏 주입으로 수신 ② 업그레이드 시뮬레이터 — **`src/meta/upgradeMath.ts` 동일 함수 사용**(계산 복제 금지) ③ 스코프 가드 빌드 경고(upgrades.json 8항목↑) ④ HUD에 중도 귀환 버튼 → `returnToBaseRequested` 발행
+- **그래픽스**: 기지 화면(`metaStateChanged` 구독 — BASE에서 표시), 보스 연출은 `bossPhaseChanged`·`bossWeakPointChanged` 구독만(판정 계산 금지), 보스 분절 애니 1주차 스파이크(P13)
+- **기획**: `params/economy.json`(손실률 50% [30~70]·드롭량)·`params/upgrades.json`(7항목 단계·비용) 작성 — PvE D+3 절대 마감(병목), [ECON] 태그
+
+**PROJECT_STATE.md 갱신용 사실 목록 (통합 담당 최종 갱신 — 리드 기록):**
+① 코드 트랙이 PvE 1단계 착수 상태로 진입 — 상위 메타 루프(src/meta)·PvE 계약(contracts/meta.ts) 반영 ② '아직 없는 것' 목록에 PvE 항목 추가 필요: 기지 화면·저장·업그레이드 화면·economy·보스 ③ 조작표는 유효하나 상단 배너의 "PvE 전환 코드 미반영" 문구는 본 브랜치 병합 시 갱신 대상 ④ 구 세션형 범위 설명(§1 '한눈에 보기'의 세션형 정의)은 회의록 10 결의 1·P1로 대체
+
+### INT-CORE-006 — PvE 전환 선행 계약 (메타 루프·경제·업그레이드·보스)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (6차 대회의 `meetings/10`·개발팀 소회의 `meetings/11` 결의의 계약 번역 — PvE 1단계 착수 선행분) |
+| 대상 시스템 | `src/contracts/meta.ts`(신규), `src/contracts/events.ts`(이벤트 9종 추가), `src/contracts/systems.ts`(CargoShipStateSource.faction 선택 필드) |
+| 필요한 변경 | ① 메타 타입: `MetaStateId`(BASE/SORTIE_PREP/SORTIE/DEBRIEF)·`SortieOutcome`(returned/aborted/destroyed)·`SortieReport`·`SortieSettlement`(earned/lost/net/희귀 확정)·`SortieSessionPort`(start/requestReturnToBase — 계층 통신 3종 중 상위→하위) ② 경제: `FactionId`(hostile/neutral/patrol 태그)·`LootSource`·`CurrencyBundle`(크레딧·희귀 부품 이원화) ③ 업그레이드: `UpgradeStatId` 7항목 상한·`UpgradeModifiers`(합연산 — 최종값 = 기준값 × (1+보정 합)) ④ 장비: `EquipmentId` 4종 상한·`EquipmentLoadout` ⑤ 보스: `BossPhase`(1/2/3) ⑥ 이벤트: `metaStateChanged`·`sortieStarted`·`sortieEnded`·`returnToBaseRequested`·`lootDropped`·`guardShipRequested`·`saveRequested`(settlement/rarePart)·`bossPhaseChanged`·`bossWeakPointChanged` |
+| 변경 이유 | PvE 전환 작업(게임플레이 Faction·드롭, 툴링 저장·시뮬레이터, 렌더 기지·보스 연출)이 전부 이 계약에 의존 — 각 창이 서로 다른 형태로 임시 정의하기 전에 선행 확정 필요 |
+| 관련 게이트 | PvE 트랙 전체 (D+9 성장 루프·D+16 완주 Exit Criteria) |
+| 영향을 받는 파일 | 계약 3파일 + INTERFACES.md §1·§2c. 소비 측: src/meta(리드), src/systems/economy(게임플레이), src/meta/save(툴링), 렌더 기지·보스 연출 |
+| 하위 호환 여부 | 깨짐 없음 — 전부 추가. `faction`은 선택 필드(미지정 = hostile 과도기 호환, 게임플레이 태그 작업 후 필수 승격 예정) |
+| 개발 리드 결정 | 승인 — 신 스코프 가드(업그레이드 7항목·장비 4종)를 유니언 타입 상한으로 기계 강제. 계층 통신 3종 제한을 포트+이벤트로 고정. 저장 이벤트는 `saveRequested` 단일(cause 구분)로 통합 |
+| 적용 커밋 | (본 브랜치 선행 계약 커밋) |
+
+### INT-GAME-008 — PvE 경제·전투 계약 패키지 (이벤트·params·EffectiveParams·보스 포트)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 (PvE 전환 1·2단계 작업 창 — 회의 09·11 반영) |
+| 대상 시스템 | `src/contracts/events.ts`, `src/contracts/params.ts`+`/params/economy.json`·`/params/upgrades.json`(신설 — 회의 11 결의 7), `src/contracts/systems.ts`(EffectiveParams·보스 단계 포트·Faction 승격) |
+| 필요한 변경 | ① **이벤트 신설**: `aimRequired`(비조준 발사 시도 안내 — 결의 2), `creditsChanged { total, sortie }`, `guardSpawnRequested { x, z, provokedByTargetId }`, `rarePartAcquired { partId }`(즉시 저장 트리거 — 툴링 저장 소비), `bossWeakPointHit { kind, appliedDamage }` — 현재는 게임플레이 읽기 전용 상태·consume API·콜백(aimRequiredCount / consumeGuardSpawnRequests / RunEconomy.onRarePartAcquired / BossWeakPointTarget.onHit)으로 선진행 ② **경제·장비 params 이관** (기획 수치표 D+3 병목): 드롭 테이블·픽업 반경(6m)·손실률(0.4) → `src/systems/economy/provisionalEconomy.ts`, 장비 4종 수치·슬롯 수(2)·디코이 → `src/systems/provisionalEquipment.ts`, 보스 약점 배율(2.0/0.25) → `BossWeakPointTarget.provisionalBossWeakPointConfig` — 전부 R7 선진행 중 ③ **EffectiveParams 계약**: 업그레이드 합연산 배율 레이어(회의 11 결의 4)의 공급 측 계약 — 게임플레이는 `EquipmentSystem.setUpgradeModifiers(UpgradeModifiers)` 동등 주입점으로 선진행, 계약 확정 시 소비 경로 교체 ④ **보스 단계 포트**: `BossPhasePort { phase, weakPointOpen }` — 리드 보스 AI가 공급(게임플레이는 AI 내부 접근 없음) ⑤ CombatTarget의 `faction`·`dropTableId`·`hullBox`(어뢰·잠수함 충돌 공유 박스 — 5차 결의 1) 계약 승격 검토 |
+| 변경 이유 | D+4(재화 획득)·D+9(성장 루프) 게임플레이 로직 구현 완료 — 표현·저장·AI 계층과의 정식 연결점과 수치 단일 소스만 남음 |
+| 관련 게이트 | [ECON][LOOP][BOSS] 전반, G3(비조준 발사 차단) |
+| 영향을 받는 파일 | 계약 3파일, params 2종(신설), `src/systems/economy/*`, `EquipmentSystem.ts`, `BossWeakPointTarget.ts`, `PeriscopeAimSystem.ts`, 툴링 저장·오디오 배관, 렌더 연출 |
+| 하위 호환 여부 | 깨짐 없음 — 전부 추가. 선진행 상태·콜백은 이벤트 확정 후에도 폴링 경로로 유지 가능 |
+| 개발 리드 결정 | (대기 — PvE 1차 통합에서 항목별 처리, 아래 '계약 이름 통합 결정' 참조) |
 | 적용 커밋 | — |
 
 ### INT-CORE-005 — D+10 통합 배선·검증 핸들 (통합 담당 기록)

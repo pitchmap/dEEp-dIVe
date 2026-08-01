@@ -13,13 +13,19 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "check:size": "node scripts/check-build-size.mjs",
-    "status": "node scripts/print-project-status.mjs"
+    "status": "node scripts/print-project-status.mjs",
+    "check:scope": "node scripts/check-scope-guard.mjs",
+    "verify:tooling": "node src/tools/__verification__/run.mjs",
+    "verify:gameplay": "node src/systems/__verification__/run.mjs",
+    "verify:meta": "node src/meta/__verification__/run.mjs",
+    "verify:hud": "node scripts/verify-hud.mjs"
   },
   "dependencies": {
     "three": "^0.185.1"
   },
   "devDependencies": {
     "@types/three": "^0.185.1",
+    "playwright-core": "^1.62.1",
     "typescript": "^7.0.2",
     "vite": "^8.2.0"
   }

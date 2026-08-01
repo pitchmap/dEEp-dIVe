@@ -10,6 +10,7 @@
 import type { EventBus, Unsubscribe } from '../core/EventBus';
 import type { GateMetricRecorder } from '../tools/GateMetricRecorder';
 import type { LoadingTimer } from '../tools/LoadingTimer';
+import { UpgradeSimulator } from '../tools/UpgradeSimulator';
 
 export interface OverlayDeps {
   loadingTimer: LoadingTimer;
@@ -26,6 +27,7 @@ export class PerformanceOverlay {
   private readonly root: HTMLDivElement;
   private readonly text: HTMLDivElement;
   private readonly unsubscribe: Unsubscribe;
+  private simulator: UpgradeSimulator | null = null;
 
   constructor(
     container: HTMLElement,
@@ -34,6 +36,11 @@ export class PerformanceOverlay {
   ) {
     this.root = document.createElement('div');
     this.root.className = 'perf-overlay';
+    // 오버레이·시뮬레이터 조작이 window의 전투 입력(MouseCombatInput)으로
+    // 새지 않게 전파를 끊는다 (조준 중 다운로드 클릭 = 발사 방지)
+    for (const type of ['pointerdown', 'mousedown', 'mouseup', 'click'] as const) {
+      this.root.addEventListener(type, (e) => e.stopPropagation());
+    }
 
     this.text = document.createElement('div');
     this.root.appendChild(this.text);
@@ -43,6 +50,17 @@ export class PerformanceOverlay {
     download.textContent = '게이트 기록 다운로드 (JSON)';
     download.addEventListener('click', () => this.deps.recorder.download());
     this.root.appendChild(download);
+
+    // 업그레이드 시뮬레이터 (소회의 11 결의 4) — 계측 오버레이와 같은
+    // 개발·디버그 노출 조건을 공유한다. 지연 생성으로 게임 부팅 비용 0.
+    const simToggle = document.createElement('button');
+    simToggle.type = 'button';
+    simToggle.textContent = '업그레이드 시뮬레이터';
+    simToggle.addEventListener('click', () => {
+      if (!this.simulator) this.simulator = new UpgradeSimulator(container);
+      this.simulator.toggle();
+    });
+    this.root.appendChild(simToggle);
 
     container.appendChild(this.root);
     this.renderText(null);
@@ -69,6 +87,8 @@ export class PerformanceOverlay {
 
   dispose(): void {
     this.unsubscribe();
+    this.simulator?.dispose();
+    this.simulator = null;
     this.root.remove();
   }
 }

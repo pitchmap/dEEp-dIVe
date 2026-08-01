@@ -21,6 +21,8 @@ import type { EventBus } from '../core/EventBus';
 
 export class PeriscopeAimSystem implements AimSystem {
   private isAiming = false;
+  /** 비조준 발사 시도 누적 — '조준이 필요합니다' 안내(결의 2)의 폴링 신호 */
+  private aimRequiredSignals = 0;
 
   // 생성자 매개변수 프로퍼티 미사용 — 검증 러너(run.mjs)의 Node 타입
   // 스트리핑 호환(삭제 가능 문법만)을 위해 명시적 필드로 둔다.
@@ -36,6 +38,29 @@ export class PeriscopeAimSystem implements AimSystem {
 
   get aiming(): boolean {
     return this.isAiming;
+  }
+
+  /**
+   * 비조준 상태 발사 시도 누적 횟수 (단조 증가) — HUD가 변화를 감지해
+   * '조준이 필요합니다' 안내를 띄운다 (5차 결의 2). 정식 `aimRequired`
+   * 이벤트 계약은 INTEGRATION_NOTES INT-GAME-008 제안 중 — 승인 시 이벤트
+   * 발행으로 교체하고 이 카운터는 유지(폴링 겸용)한다.
+   */
+  get aimRequiredCount(): number {
+    return this.aimRequiredSignals;
+  }
+
+  /**
+   * 조준경 토글 (5차 결의 3 — 우클릭 토글): 조준 중이면 해제, 아니면 진입
+   * 시도. 반환값 = 토글 후 조준 여부. 마우스 우클릭과 HUD 조준 버튼이
+   * 같은 이 경로를 쓴다 (진입 가능 여부 판정은 beginAim 단일 규칙).
+   */
+  toggleAim(): boolean {
+    if (this.isAiming) {
+      this.endAim();
+      return false;
+    }
+    return this.beginAim();
   }
 
   /** 조준 시작 — 잠망경 심도가 아니면 거부(false). 이미 조준 중이면 true */
@@ -55,9 +80,16 @@ export class PeriscopeAimSystem implements AimSystem {
     this.bus.emit('aimModeChanged', { aiming: false });
   }
 
-  /** 발사 요청 — 조준 중이 아니면 false. 성공 여부는 TorpedoSystem.fire() 단일 판정 */
+  /**
+   * 발사 요청 — 조준 중이 아니면 **절대 발사되지 않고** aimRequired 신호만
+   * 누적 후 false (결의 2: 비조준 발사 시도 = 안내). 성공 여부는
+   * TorpedoSystem.fire() 단일 판정.
+   */
   fireTorpedo(): boolean {
-    if (!this.isAiming) return false;
+    if (!this.isAiming) {
+      this.aimRequiredSignals += 1;
+      return false;
+    }
     return this.torpedo.fire();
   }
 

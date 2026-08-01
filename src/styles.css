@@ -194,3 +194,95 @@ body {
   color: #7da5b8;
   font-size: 11px;
 }
+
+/* 업그레이드 시뮬레이터 (개발·디버그 — 소회의 11 결의 4) */
+.upgrade-sim {
+  position: fixed;
+  top: 8px;
+  right: 8px;
+  z-index: 110;
+  width: 460px;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 10px 12px;
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #cfe8f5;
+  background: rgba(4, 18, 26, 0.92);
+  border: 1px solid rgba(120, 180, 210, 0.35);
+  border-radius: 4px;
+}
+
+.upgrade-sim-title {
+  color: #f2a44a;
+  margin-bottom: 8px;
+}
+
+.upgrade-sim-row {
+  display: grid;
+  grid-template-columns: 96px 96px 110px 64px 70px;
+  gap: 6px;
+  align-items: center;
+  padding: 2px 0;
+}
+
+.upgrade-sim-header {
+  color: #8fc6dd;
+  border-bottom: 1px solid rgba(120, 180, 210, 0.25);
+}
+
+.upgrade-sim select,
+.upgrade-sim input {
+  font: inherit;
+  color: inherit;
+  background: rgba(120, 180, 210, 0.12);
+  border: 1px solid rgba(120, 180, 210, 0.35);
+  border-radius: 3px;
+  padding: 2px 4px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.upgrade-sim-final {
+  color: #f2a44a;
+}
+
+.upgrade-sim-actions {
+  margin: 8px 0 4px;
+}
+
+.upgrade-sim-actions button {
+  font: inherit;
+  color: inherit;
+  background: rgba(120, 180, 210, 0.15);
+  border: 1px solid rgba(120, 180, 210, 0.4);
+  border-radius: 3px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.upgrade-sim-output {
+  width: 100%;
+  box-sizing: border-box;
+  font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace;
+  color: #9fc3d4;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(120, 180, 210, 0.25);
+  border-radius: 3px;
+}
+
+/* Keyboard Lock·병행 키 1회 안내 토스트 */
+.kb-lock-notice {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 150;
+  max-width: 560px;
+  padding: 10px 14px;
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #cfe8f5;
+  background: rgba(4, 18, 26, 0.92);
+  border: 1px solid rgba(242, 164, 74, 0.5);
+  border-radius: 4px;
+  pointer-events: none;
+}

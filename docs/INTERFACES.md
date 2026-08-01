@@ -21,6 +21,15 @@
 | `hullDamaged` | HullSystem | amount, hullRemaining, cause | UI, 렌더(흔들림), 오디오 | 피해 발생 시 | hullRemaining 0 → 실패 국면 전환은 상태 머신 경유 |
 | `floodingChanged` | HullSystem | compartment, severity | X-ray 렌더(자동 발동), 오디오(물소리) | 침수 상태 변화 시 | severity 0 = 해소 |
 | `performanceSampled` | core/Game | fps, averageFps, minFps | PerformanceOverlay, GateMetricRecorder | 약 1초 주기 | 워밍업 2초간 최소 FPS 집계 제외 |
+| `metaStateChanged` | meta/MetaLoop (리드) | previous, next (BASE/SORTIE_PREP/SORTIE/DEBRIEF) | 기지 화면(렌더·UI), 오디오 | 상위 루프 전환 시 | 허용표 밖 전환은 emit 전에 throw. 하위 gameStateChanged와 별개 계층 |
+| `sortieStarted` | meta/MetaLoop | sortieNumber | 렌더(해역 진입), UI, 오디오 | 출항 시 (① 세션 시작) | 하위 세션 재시작과 동시 |
+| `sortieEnded` | meta/MetaLoop | sortieNumber, settlement(정산 데이터) | 기지·정산 UI, 오디오 | 귀환 정산 확정 시 (② 세션 결과) | 파괴 시 크레딧 손실 반영·희귀 부품 보존 |
+| `returnToBaseRequested` | UI/입력 | (없음) | meta/MetaLoop | 중도 귀환 입력 시 (③) | SORTIE 상태 밖 요청은 무시 |
+| `lootDropped` | 게임플레이 economy | source, credits, rareParts, x, z | meta(집계·희귀 즉시 확정), UI, 렌더·오디오 | 드롭 발생 시 | 음수 금지(발행측 책임) |
+| `guardShipRequested` | 게임플레이 판정 | x, z | 경비함 AI(리드 — 구축함 AI 재활용) | 중립 선박 공격 시 | MVP 불이익 단일 [6차 결의 3] |
+| `saveRequested` | meta/MetaLoop | cause('settlement'/'rarePart') | SaveSystem(툴링, src/meta/save) | 정산 확정·희귀 획득 즉시 | 그 외 자동 저장 없음 [6차 결의 9] |
+| `bossPhaseChanged` | 보스 AI (리드) | phase(1/2/3) | 렌더(단계 연출), 오디오(침묵 전환·음정 하강), UI | 단계 전환 시 | — |
+| `bossWeakPointChanged` | 게임플레이 약점 판정 | active | 렌더(발광·개방 연출), UI | 약점 활성/해제 시 | 판정=게임플레이 / 연출=렌더 경계 [소회의 결의 5] |
 
 ## 2. 시스템 계약
 
@@ -44,6 +53,17 @@
 | `SubmarinePoseSource` (systems.ts) | 게임플레이 (PlayerController 구현체) | positionX/Y/Z, headingRadians, forwardSpeedMetersPerSecond(부호: + 선수/− 선미) | 렌더 장면·카메라·프로펠러·블롭 섀도 | 렌더는 소비만 — 위치 차분으로 속도 재계산 금지. 프로펠러는 forwardSpeed + conventions.propellerSpinRatio()만 사용 |
 | `CargoShipStateSource` (systems.ts) | 게임플레이 (CargoShipSystem) | id, positionX/Y/Z, headingRadians, velocityX/Z, hit, sinkProgress(0~1), removed | 렌더(CargoShipVisual), TargetRegistry, UI | 침몰 시간축 소유는 게임플레이 — 렌더는 sinkProgress 매핑만(자체 타이머 금지), removed로 시각 자원 정리. VS 화물선 1척 = 단일 상태 |
 | `CanyonLayout` (layout.ts) | 리드 승인 데이터 모듈 `src/world/startingCanyonLayout.ts` `STARTING_CANYON_LAYOUT` (정식 블록아웃은 레벨 디자인 산출물 반영 시 데이터만 교체) | floorY −6, seaSurfaceY 12, submarineSpawn (0,0,0), blocks[](중심 XZ·크기·Y요, 블록 바닥=floorY — 벽 높이는 그래픽 하향값 11/12±2·sin 확정, 상단≤7<해수면) | 렌더(메시), 게임플레이(충돌·시작 구역) | 단일 소스 — composition root가 같은 인스턴스를 양쪽에 주입. 자체 수식 복제 금지 (구 startingArea 미러·buildCanyonBlockout 수식은 이 데이터 소비로 교체) |
+
+## 2c. PvE 메타 계약 (contracts/meta.ts — INT-CORE-006)
+
+| 계약 | 내용 | 소유·규칙 |
+|---|---|---|
+| `FactionId` | hostile / neutral / patrol — 개체 태그 방식(클래스 분화 금지) | 태그 부여·판정은 게임플레이. `CargoShipStateSource.faction`(선택 — 태그 작업 후 필수 승격) |
+| `MetaStateId`·`SortieOutcome`·`SortieReport`·`SortieSettlement` | 상위 루프 상태 / 세션 결과(returned·aborted·destroyed) / 정산(earned·lost·net·희귀 확정) | 메타 루프(리드) 소유. 계층 간 통신은 시작·결과·중도 귀환 3종만 |
+| `SortieSessionPort` | 하위 해역 세션 포장 포트 — start() / requestReturnToBase() | 어댑터는 composition root 제공. 상위의 하위 내부 접근 금지 |
+| `UpgradeStatId`(7항목 상한)·`UpgradeModifiers` | 합연산 보정 집합 — 최종값 = 기준값 × (1 + 보정 합), params 원본 불변 | 계산은 src/meta/upgradeMath.ts 순수 함수만 (툴 시뮬레이터 동일 함수). 8항목째 추가는 계약 개정 사안 |
+| `EquipmentId`(4종 상한)·`EquipmentLoadout` | 장비 교체 슬롯 — 상위호환 금지 | 장착 상태는 메타 소유, 장비 로직은 게임플레이 |
+| `BossPhase` | 보스 3단계 | 단계 소유는 보스 AI(리드), 약점 판정은 게임플레이, 연출은 렌더 |
 
 ## 3. 파라미터 계약
 

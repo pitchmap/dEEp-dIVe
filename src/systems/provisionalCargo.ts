@@ -24,3 +24,22 @@ export const PROVISIONAL_CARGO_WAYPOINT_B = { x: 30, z: -40 } as const;
 
 /** VS 화물선 1척의 표적 식별자 (torpedoHit.targetId 체계) */
 export const PROVISIONAL_CARGO_ID = 1;
+
+/* ── 선체 박스 근사 치수 (5차 결의 1 — 어뢰 명중·잠수함 충돌 공유 데이터).
+ *    렌더 임시 모델(길이 20 × 폭 5)을 감싸는 구조 치수 — 밸런스 수치 아님. */
+
+/** 선수·선미 반길이 (로컬 Z) */
+export const PROVISIONAL_CARGO_HALF_LENGTH = 10;
+
+/** 좌우 반폭 (로컬 X) */
+export const PROVISIONAL_CARGO_HALF_BEAM = 2.5;
+
+/**
+ * 판정용 흘수 (m) — 흘수선 아래로 잠기는 판정 깊이. 시각 흘수(렌더 2.2)와
+ * 달리 잠망경 심도 어뢰 주행 고도를 덮도록 잡는다 (기존 원 판정과 동일하게
+ * 잠망경 어뢰가 명중 가능해야 함 — 값 확정은 INT-GAME-008 이관)
+ */
+export const PROVISIONAL_CARGO_JUDGMENT_DRAFT = 4;
+
+/** 흘수선 위 선체 높이 (m) */
+export const PROVISIONAL_CARGO_FREEBOARD = 3;

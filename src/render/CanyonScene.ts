@@ -247,6 +247,29 @@ export class CanyonScene implements ManagedScene {
   }
 
   /**
+   * 메타 기지 화면 표시 전환 — 조립부가 `metaStateChanged`(BASE 진입/이탈)에
+   * 맞춰 호출한다. 렌더는 메타 상태를 스스로 판정하지 않는다.
+   *
+   * QA 플래그(`?base=1`)와 같은 위임 경로를 재사용하므로 협곡 장면의 GPU
+   * 자원은 유지된다 (SceneManager 수준의 정식 장면 교체는 INT-RENDER-007
+   * 후속 — 그때 이 메서드가 대체된다).
+   */
+  setMetaBaseActive(active: boolean, tiers?: { hull: number; weapon: number }): void {
+    if (active) {
+      if (!this.baseView) this.baseView = new BaseSceneView(this.renderer);
+      if (tiers) {
+        this.baseView.applyMetaVisualState({
+          hullVisualTier: tiers.hull,
+          weaponVisualTier: tiers.weapon,
+        });
+      }
+      return;
+    }
+    this.baseView?.dispose();
+    this.baseView = null;
+  }
+
+  /**
    * EventBus 연결점 — torpedoHit(명중 폭발 시작 신호) 구독용.
    * composition root가 1회 주입한다. 중복 주입 시 기존 구독을 해제해
    * 한 명중에 폭발이 여러 번 시작되지 않게 한다.

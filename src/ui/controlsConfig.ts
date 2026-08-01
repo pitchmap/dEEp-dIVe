@@ -24,10 +24,12 @@ export interface ControlBinding {
 export const CONTROL_BINDINGS: readonly ControlBinding[] = [
   { label: 'W / S', action: '전진 · 후진', owner: 'gameplay' },
   { label: 'A / D', action: '좌우 선회', owner: 'gameplay' },
-  { label: 'Shift / Ctrl', action: '부상 · 잠항 (층 이동)', owner: 'gameplay' },
+  // 입력 규칙 확정 (PvE 1차 통합): Ctrl(또는 E) = 상승 / Shift = 하강.
+  // 조준은 홀드가 아니라 우클릭 토글이며, 비조준 좌클릭은 카메라 조작이다.
+  { label: 'Ctrl / E · Shift', action: '상승 · 하강', owner: 'gameplay' },
   { label: 'Space', action: '카메라 리센터', owner: 'gameplay' },
-  { label: '우클릭 홀드', action: '조준', owner: 'hud' },
-  { label: '좌클릭', action: '어뢰 발사', owner: 'hud' },
+  { label: '우클릭', action: '조준경 토글', owner: 'hud' },
+  { label: '좌클릭', action: '조준 중 발사 · 비조준 시 카메라', owner: 'hud' },
   { label: 'H', action: '조작 안내 · 화면 버튼 표시/숨김', code: 'KeyH', owner: 'hud' },
   { label: 'Esc', action: 'Pointer Lock 해제 · 일시정지', owner: 'browser' },
 ];

@@ -24,6 +24,7 @@
 import { CONTROL_BINDINGS, hudKeyCode } from './controlsConfig';
 import { loadUiParams, onUiParamsReloaded, type UiParams } from './uiParams';
 import { inputTelemetry } from '../tools/InputTelemetry';
+import { KeyboardLockManager } from '../tools/KeyboardLockManager';
 import type { AimSystem, TorpedoSystem } from '../contracts/systems';
 import type { EventBus, Unsubscribe } from '../core/EventBus';
 
@@ -42,8 +43,16 @@ export interface ControlsHudOptions {
   /** 일시정지 전환 — core/Game이 GameLoop start/stop으로 연결한다 */
   setPaused(paused: boolean): void;
   combat: CombatControls;
-  /** aimModeChanged·torpedoFired 구독용 (표시 갱신 전용 — 발행하지 않음) */
+  /**
+   * 구독용(aimModeChanged·torpedoFired·metaStateChanged) + 중도 귀환 요청
+   * 발행용. HUD는 `returnToBaseRequested` 외의 이벤트를 발행하지 않는다.
+   */
   bus: EventBus;
+  /**
+   * 기지에서 출항 요청 — 조립부가 상위 메타 루프에 연결한다.
+   * HUD는 메타 상태를 바꾸지 않고 요청만 한다 (미주입 시 출항 버튼 숨김).
+   */
+  launchSortie?: () => void;
 }
 
 /** Pointer Lock 진입 직후 캔버스 마우스 입력을 무시(소비)하는 구간 (ms) */
@@ -56,8 +65,13 @@ export class ControlsHud {
   private readonly buttonsWrap: HTMLDivElement;
   private readonly aimButton: HTMLButtonElement;
   private readonly fireButton: HTMLButtonElement;
+  private readonly returnButton: HTMLButtonElement;
+  private readonly launchButton: HTMLButtonElement;
+  private unsubscribeMetaState: (() => void) | null = null;
   private readonly resumeOverlay: HTMLDivElement;
   private readonly toggleCode = hudKeyCode('H');
+  /** Keyboard Lock 요청·미지원 폴백·1회 안내 (5차 결의 4 — 브라우저 기능·안내만 담당) */
+  private readonly keyboardLock = new KeyboardLockManager();
   private readonly unsubscribeParams: () => void;
   private readonly unsubscribeAimMode: Unsubscribe;
   private readonly unsubscribeTorpedoFired: Unsubscribe;
@@ -85,7 +99,20 @@ export class ControlsHud {
     this.buttonsWrap.className = 'hud-buttons';
     this.aimButton = this.buildHudButton('조준', () => this.toggleAimFromButton());
     this.fireButton = this.buildHudButton('어뢰 발사', () => this.fireFromButton());
-    this.buttonsWrap.append(this.aimButton, this.fireButton);
+    // 중도 귀환 — `returnToBaseRequested`의 유일한 발행 지점이다.
+    // 상위 메타 루프가 구독해 세션 정리·정산을 시작한다 (HUD는 정산을
+    // 직접 계산하지 않는다. PvE 1차 통합 — 그 전까지 발행자가 없었다).
+    this.returnButton = this.buildHudButton('귀환', () => this.requestReturnToBase());
+    // 출항 버튼은 기지(BASE) 상태에서만 보인다 — 표시 판정의 진실은
+    // metaStateChanged 구독이며 HUD가 상태를 가정하지 않는다.
+    this.launchButton = this.buildHudButton('출항', () => this.options.launchSortie?.());
+    this.launchButton.hidden = true;
+    this.buttonsWrap.append(
+      this.aimButton,
+      this.fireButton,
+      this.returnButton,
+      this.launchButton,
+    );
     this.resumeOverlay = this.buildResumeOverlay();
 
     container.append(this.guidePanel, this.buttonsWrap, this.resumeOverlay);
@@ -109,6 +136,14 @@ export class ControlsHud {
     this.unsubscribeTorpedoFired = options.bus.on('torpedoFired', () => {
       this.updateFireButtonState();
     });
+    // 기지에서는 출항 버튼만, 해역에서는 전투·귀환 버튼만 노출한다
+    this.unsubscribeMetaState = options.bus.on('metaStateChanged', ({ next }) => {
+      const atBase = next === 'BASE';
+      this.launchButton.hidden = !atBase || !this.options.launchSortie;
+      this.aimButton.hidden = atBase;
+      this.fireButton.hidden = atBase;
+      this.returnButton.hidden = atBase;
+    });
     this.firePollTimer = setInterval(() => this.updateFireButtonState(), FIRE_BUTTON_POLL_MS);
 
     this.unsubscribeParams = onUiParamsReloaded((next) => {
@@ -119,9 +154,12 @@ export class ControlsHud {
 
   dispose(): void {
     clearInterval(this.firePollTimer);
+    this.keyboardLock.dispose();
     this.unsubscribeParams();
     this.unsubscribeAimMode();
     this.unsubscribeTorpedoFired();
+    this.unsubscribeMetaState?.();
+    this.unsubscribeMetaState = null;
     this.container.removeEventListener('contextmenu', this.handleContextMenu);
     this.canvas.removeEventListener('mousedown', this.handleCanvasMouseDown);
     document.removeEventListener('keydown', this.handleKeyDown);
@@ -280,6 +318,12 @@ export class ControlsHud {
       this.buttonsVisible = !anyVisible;
       this.applyVisibility();
     }
+    // 첫 상승 키 입력 → Keyboard Lock·병행 키 1회 안내 (내부에서 중복 억제).
+    // 현재 상승 바인딩은 Shift — 5차 결의(Ctrl 스왑·병행 키 E)의 판정 반영은
+    // 게임플레이 작업 대기, 안내 트리거는 바인딩 교체 시 코드만 바꾼다.
+    if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+      this.keyboardLock.maybeShowNotice();
+    }
     // Esc는 여기서 다루지 않는다 — Pointer Lock 해제는 브라우저 기본 동작이고
     // 그 결과(pointerlockchange)에서 일시정지한다. 조준 취소 전용 키 아님.
   };
@@ -389,6 +433,17 @@ export class ControlsHud {
     inputTelemetry.recordFireRequest('screenButton');
     this.options.combat.aim.fireTorpedo();
     this.updateFireButtonState();
+  }
+
+  /**
+   * 귀환 버튼 — 중도 귀환 요청만 발행한다. 정산·상태 전이는 상위 메타
+   * 루프 소유이며 HUD는 결과를 계산하지도, 가정하지도 않는다.
+   * 조준 중이면 먼저 해제해 조준 상태가 세션 종료 뒤에 남지 않게 한다.
+   */
+  private requestReturnToBase(): void {
+    if (this.paused) return;
+    if (this.options.combat.aim.aiming) this.options.combat.aim.endAim();
+    this.options.bus.emit('returnToBaseRequested', {});
   }
 
   // ── 표시 상태 ──────────────────────────────────────────────
