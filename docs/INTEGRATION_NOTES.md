@@ -90,6 +90,34 @@
 
 ## 제안 목록
 
+### INT-GAME-012 — 스프린트 B 게임플레이 선행개발 결과 + B5 차단 보고 + 배선 요청
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 (창 2 — 스프린트 B **선행개발**. B 공식 발효 전이며 dev/main·통합 브랜치 병합 없음) |
+| 대상 시스템 | `src/core/Game.ts`(조립 배선 3줄), `params/`(공식 수치 3종 신설 요청 — 기획·툴링), `src/core/PveIntegration.ts`(레거시 큐 제거 — 후속) |
+| 필요한 변경 | ① **스폰 위치 전략 연결** — `guardSpawn.attachLocationStrategy(gameplay.guardSpawnLocation)`. 이걸 붙이면 경비 스폰이 `noSpawnLocation`에서 벗어난다(현재 production은 전략 미연결이라 항상 위치 실패) ② **식별 소스 연결** — `scene.attachShipIdentificationSource(gameplay.shipIdentification)` 형태로 렌더에 주입(계약 `ShipIdentificationSource`). 그래픽스가 모델명으로 세력을 추측하지 않게 하는 유일한 경로 ③ **다중 선박 렌더 소스** — 현재 `scene.attachCargoShipSource(gameplay.cargoShipState)`는 **적대 1척만** 받는다. B1으로 중립 1척이 같은 월드에 존재하지만 렌더 배선이 1척뿐이라 화면에는 보이지 않는다. `gameplay.ships`(세력 태그 포함)를 소비하는 다중 선박 소스가 필요하다 ④ **공식 수치 3종 요청**(기획·툴링) — (a) 선박 배치표(`ships[]` — 세력·항로·원형. 현재 게임플레이가 공식 cargo 값에서만 파생 중) (b) 식별 params(식별 거리·태그 표시 거리. 현재 어뢰 유효 사거리 재사용) (c) 경비 스폰 params(최소 안전거리·최대 스폰 거리. 현재 어뢰 유효 사거리와 그 절반 파생) (d) B6 고가치 보상 배율(`economy.highValueTransportRewardMultiplier`. 현재 배율 null = 보상 변경 없음) ⑤ **레거시 큐 제거(후속)** — `SortieEconomyPort.consumeGuardSpawnRequests`는 이제 항상 빈 배열이다(게임플레이가 요청을 넣지 않는다). `SortieEconomyBridge`의 `legacy:<targetId>` 발행 경로와 포트 필드를 리드가 제거하면 계약 표면이 정리된다 |
+| 변경 이유 | B1~B4·B6의 게임플레이 판정은 완료됐으나, 값이 실제로 흐르려면 조립 배선이 필요하다. 공식 수치가 없는 4항목은 **임의 숫자를 발명하지 않고** 기존 판정 범위에서만 파생했으며, params가 도착하면 attach 한 줄로 교체된다 |
+| 관련 게이트 | B1·B2·B3·B4 (+B6). B5는 아래 차단 |
+| 하위 호환 여부 | 계약 파일 **무수정**. 게임플레이 소유 `CombatTarget.onTorpedoHit`에 **선택적** 4번째 인자(`TorpedoAttackContext`)를 추가했으나 기존 구현·호출은 그대로 동작한다(검증 192/192·meta 77/77 통과 확인). `cargoShipState`·`ships` 기존 소비자 무변경 |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
+
+**B5 차단 보고 (B5_BLOCKED=true) — 경우 B: 재사용할 기존 구축함 구현이 없다**
+
+저장소 전체(전 브랜치 히스토리 포함)를 `Destroyer`·`PatrolShip`·`GuardShip`·`pursue`·`chase`·`waypoint`·
+`notifyLastKnownPosition`·`depthCharge`·수상함 이동 어휘로 조사한 결과:
+
+- **AI 판단 구현체 0개.** `implements DestroyerAI`는 물론, 다른 API 이름으로 된 구축함·순찰함 행동 코드도 없다
+- 존재하는 것: 계약(`contracts/systems.ts` `DestroyerAI`, `contracts/guard.ts` `DestroyerAIFactory`), 리드 어댑터(`core/GuardShipAdapter.ts` — 주입·수명주기만), 경계·포트(`core/PveIntegration.ts`), 검증 더블(`meta/__verification__/verifyMeta.ts` — `update()`가 빈 함수)
+- **재사용 불가 사유**: `CargoShipSystem`은 2점 왕복 보간뿐이다. 플레이어 위치를 읽지 않고, 표적 개념·상태 전이·공격 진입점이 없다. 이걸 Destroyer AI라고 부르는 것은 위장이다
+- **필요한 최소 선행 구현** (리드 소유 — `docs/FILE_OWNERSHIP.md` 구축함 AI = `src/core/`): `DestroyerAI` 상태 4종(patrol/alert/attack/lost) 전이 + last-known-position 직선 외삽 추격. 마스터 플랜 §5.11에 사양이 있고 폭뢰는 스프린트 C다
+- **게임플레이가 하지 않은 것**: 신규 Guard AI 코어를 만들지 않았다(정적 검사로 0건 강제 — 러너 `run.mjs`). B5를 가짜로 통과시키지 않았다
+
+체인의 현재 도달점: 중립 유효 피격 → `neutralShipHit` → 원장 중복 방지 → `guardShipRequested` → 위치 전략 **해결** →
+`GuardShipAdapter.spawn()` → **`spawnFailed`(AI 팩토리 미연결)**. 팩토리만 연결되면 같은 체인이 실제 개체를
+만든다는 것을 검증에서 확인했다(초기 표적=공격자·세력 patrol·중복 요청 0 — 최소 AI 더블 사용, production 코드 아님).
+
 ### INT-CORE-012 — 스프린트 B 선행 계약: Faction 정본·식별 read model·중립 유효 피격·경비함 스폰
 
 | 필드 | 내용 |
