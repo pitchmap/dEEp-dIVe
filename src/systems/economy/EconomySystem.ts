@@ -11,7 +11,7 @@
  *  - hostile 파괴 → dropTableId의 크레딧 드롭 생성
  *  - neutral 공격 → 크레딧 없음 + **경비함 출현 요청** 생성 — 경비함 AI는
  *    기존 구축함 AI 재사용(리드 소유), 이 시스템은 요청 데이터만 쌓는다
- *  - guard 파괴 → 드롭 없음
+ *  - patrol(경비) 파괴 → 드롭 없음
  *  - object(해저 재화) 파괴 → 드롭 테이블 크레딧 + (배치된 경우) 희귀 부품
  *
  * 통지 계약: guardSpawnRequested·creditsChanged·rarePartAcquired 정식 이벤트는
@@ -27,12 +27,13 @@ import {
 } from './provisionalEconomy';
 import { RunEconomy, type SortieSettlement } from './RunEconomy';
 import { SalvageObject, type SalvageKind } from './SalvageObject';
-import type { TargetRegistry } from '../TargetRegistry';
+import type { FactionId, TargetRegistry } from '../TargetRegistry';
 
 /** 경제가 관찰하는 함선 상태의 최소 단면 (CargoShipSystem이 충족) */
 export interface ShipEconomyView {
   readonly id: number;
-  readonly faction: 'hostile' | 'neutral' | 'guard';
+  /** 공식 계약 세력 태그 (contracts/meta.ts) — 경비 세력은 `patrol` */
+  readonly faction: FactionId;
   readonly dropTableId?: string;
   readonly hit: boolean;
   readonly positionX: number;

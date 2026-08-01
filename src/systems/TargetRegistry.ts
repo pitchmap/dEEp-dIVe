@@ -8,7 +8,7 @@
  *
  * PvE 전환 (소회의 11 결의 2 — 클래스 분화 금지):
  *  - 세력은 **Faction 태그 + 드롭 테이블 참조** 두 필드로만 구분한다.
- *    적대(hostile)/중립(neutral)/경비(guard) 3세력 + 무세력 오브젝트(object —
+ *    적대(hostile)/중립(neutral)/경비(patrol) 3세력 + 무세력 오브젝트(object —
  *    해저 보물 등). 세력별 클래스 복제 없음.
  *  - 함선 표적은 어뢰·잠수함 충돌이 공유하는 박스 근사(hullBox)를 제공한다
  *    (5차 결의 1). hullBox가 없으면 hitRadius 원 근사로 판정(소형 오브젝트).
@@ -18,8 +18,17 @@
 
 import type { ShipHullBox } from './collision/shipHullBox';
 
-/** 세력 태그 — 소회의 11 결의 2 (최소 3세력, 태그 방식) */
-export type FactionId = 'hostile' | 'neutral' | 'guard';
+/**
+ * 세력 태그 — 소회의 11 결의 2 (최소 3세력, 태그 방식).
+ *
+ * 공식 계약(`contracts/meta.ts`, INT-CORE-006)을 재수출한다. 경비 세력의
+ * 공식 명칭은 `patrol`이다 — PvE 1차 통합에서 게임플레이의 `guard`와
+ * 리드 계약의 `patrol` 이름 충돌을 공식 계약 쪽으로 통일했다
+ * (INTEGRATION_NOTES '계약 이름 통합 결정' #1). 태그 방식·3세력 구조는
+ * 그대로이며 판정 로직은 변경되지 않았다.
+ */
+export type { FactionId } from '../contracts/meta';
+import type { FactionId } from '../contracts/meta';
 
 /** 어뢰가 명중 가능한 표적의 읽기 전용 상태 + 명중 통지 진입점 */
 export interface CombatTarget {
