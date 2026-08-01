@@ -19,15 +19,11 @@
  */
 
 import type { CombatParams } from '../contracts/params';
-import type { TorpedoSystem } from '../contracts/systems';
+import type { TorpedoSystem, TorpedoTubeSocketSource } from '../contracts/systems';
 import type { EventBus } from '../core/EventBus';
-import type { AimForward } from './aimGeometry';
 import type { CollisionWorld } from './collision/CollisionWorld';
 import { sphereIntersectsShipBox } from './collision/shipHullBox';
-import {
-  TORPEDO_COLLISION_RADIUS,
-  torpedoSpawnSocket,
-} from './collision/torpedoTubeSocket';
+import { TORPEDO_COLLISION_RADIUS } from './collision/torpedoTubeSocket';
 import type { EquipmentId, TorpedoProfile } from './EquipmentSystem';
 import {
   PROVISIONAL_TORPEDO_MAX_RANGE_METERS,
@@ -44,15 +40,6 @@ export interface ArmamentPort {
   readonly activeEquipment: EquipmentId | null;
   activeTorpedoProfile(): TorpedoProfile | null;
   launchDecoy(x: number, y: number, z: number): boolean;
-}
-
-/**
- * 조준 방향 공급 포트 — SubmarineAimSystem이 충족한다.
- * 어뢰 초기 진행 방향은 **조준 카메라와 같은 이 출처**에서만 온다
- * (십자선 ray = 어뢰 방향). TorpedoSystem은 방향을 자체 계산하지 않는다.
- */
-export interface AimDirectionPort {
-  readonly forward: AimForward;
 }
 
 /** 발사 시점 포즈 읽기 전용 원천 — SubmarinePlayerController가 충족 */
@@ -100,24 +87,27 @@ export class StraightRunTorpedoSystem implements TorpedoSystem {
   // 생성자 매개변수 프로퍼티 미사용 — 검증 러너(run.mjs)의 Node 타입
   // 스트리핑 호환(삭제 가능 문법만)을 위해 명시적 필드로 둔다.
   private readonly bus: EventBus;
-  private readonly pose: TorpedoLaunchPose;
   private readonly environment: CollisionWorld;
   private readonly targets: TargetRegistry;
   private readonly armament: ArmamentPort;
-  private readonly aimDirection: AimDirectionPort;
+  /**
+   * 공식 발사관 소켓 (리드 `TorpedoTubeSocketRig`) — 생성 위치와 초기
+   * 진행 방향이 **모두** 여기서 온다. 조준 카메라도 같은 rig의
+   * `aimCameraSocket`을 쓰므로 십자선 = 탄도가 구조적으로 보장된다.
+   * 자체 앵커·오프셋·전방 계산은 이 클래스에 없다 (스프린트 A 정규화).
+   */
+  private readonly socket: TorpedoTubeSocketSource;
 
   constructor(
     bus: EventBus,
     combat: CombatParams,
-    pose: TorpedoLaunchPose,
     environment: CollisionWorld,
     targets: TargetRegistry,
     armament: ArmamentPort,
-    aimDirection: AimDirectionPort,
+    socket: TorpedoTubeSocketSource,
   ) {
     this.bus = bus;
-    this.pose = pose;
-    this.aimDirection = aimDirection;
+    this.socket = socket;
     this.environment = environment;
     this.targets = targets;
     this.armament = armament;
@@ -166,12 +156,12 @@ export class StraightRunTorpedoSystem implements TorpedoSystem {
    * 어뢰 성공 시 torpedoFired 발행.
    */
   fire(): boolean {
-    // 방향·생성점은 전부 조준 전방 + 소켓에서 온다 (자체 오프셋 계산 없음)
-    const forward = this.aimDirection.forward;
-    const spawn = torpedoSpawnSocket(this.pose, forward);
+    // 위치·방향 모두 공식 소켓 하나에서 온다 (자체 앵커·오프셋 계산 없음)
+    const spawn = this.socket.torpedoSpawnSocket;
+    const forward = { x: spawn.forwardX, y: spawn.forwardY, z: spawn.forwardZ };
 
     if (this.armament.activeEquipment === 'decoy') {
-      return this.armament.launchDecoy(spawn.x, spawn.y, spawn.z);
+      return this.armament.launchDecoy(spawn.positionX, spawn.positionY, spawn.positionZ);
     }
 
     const profile = this.armament.activeTorpedoProfile();
@@ -183,9 +173,9 @@ export class StraightRunTorpedoSystem implements TorpedoSystem {
 
     const torpedo: ActiveTorpedo = {
       id: this.nextTorpedoId,
-      x: spawn.x,
-      y: spawn.y,
-      z: spawn.z,
+      x: spawn.positionX,
+      y: spawn.positionY,
+      z: spawn.positionZ,
       directionX: forward.x,
       directionY: forward.y,
       directionZ: forward.z,

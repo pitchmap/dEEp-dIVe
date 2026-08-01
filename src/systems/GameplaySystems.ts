@@ -33,6 +33,7 @@ import type {
 } from '../contracts/systems';
 import type { EventBus } from '../core/EventBus';
 import type { GameSystem, SystemContext } from '../core/GameSystem';
+import { TorpedoTubeSocketRig } from '../core/TorpedoTubeSocketRig';
 import { STARTING_CANYON_LAYOUT } from '../world/startingCanyonLayout';
 import { CargoShipSystem, defaultCargoShipConfig } from './CargoShipSystem';
 import { CollisionWorld } from './collision/CollisionWorld';
@@ -75,6 +76,13 @@ export class GameplaySystems implements GameSystem {
   readonly aim: SubmarineAimSystem;
   /** 어뢰 상태 — remaining·reloadRemainingSeconds(UI), torpedoes(렌더 항적) */
   readonly torpedo: StraightRunTorpedoSystem;
+  /**
+   * 발사관 소켓 rig (리드 정본 `TorpedoTubeSocketRig`) — **단일 인스턴스**.
+   * 조준 카메라(그래픽스)는 composition root에서 이 인스턴스를 주입받아
+   * `aimCameraSocket`을 읽는다. 어뢰는 같은 rig의 `torpedoSpawnSocket`을
+   * 쓴다 — 두 소켓의 전방축이 동일하므로 십자선 = 탄도.
+   */
+  readonly torpedoTubeSocket: TorpedoTubeSocketRig;
   /** 장비 4종 (기본/고속/중어뢰/디코이) — 슬롯·업그레이드 배율 주입점 */
   readonly equipment: EquipmentSystem;
   /** 경제 — 드롭·픽업·크레딧·희귀 부품·경비 요청·출항 정산 */
@@ -132,22 +140,23 @@ export class GameplaySystems implements GameSystem {
       surfaceY: layout.seaSurfaceY, // 해수면은 공유 레이아웃 값 하나만 사용
     });
     this.equipment = new EquipmentSystem();
-    // 어뢰는 조준 전방을 '지연 참조'한다 — 조준·어뢰가 서로를 필요로 하므로
-    // 조립 순환을 끊되, 발사 시점에는 언제나 같은 단일 출처(this.aim)를 읽는다.
+    // 발사관 소켓 rig — 공식 정본(리드) 단일 인스턴스. 조준 카메라(그래픽스)와
+    // 어뢰 생성(게임플레이)이 **이 하나**를 공유하므로 십자선 = 탄도가
+    // 구조적으로 보장된다 (스프린트 A 소켓 정규화). 미세각 소스는 조준
+    // 시스템이 생성된 뒤 attachFineAimSource로 연결한다(조립 순환 해소 —
+    // 연결 전에는 계약대로 미세각 0 = 조준 해제 기준 상태).
+    this.torpedoTubeSocket = new TorpedoTubeSocketRig(this.player);
     this.torpedo = new StraightRunTorpedoSystem(
       bus,
       params.combat,
-      this.player,
       this.collision,
       this.targets,
       this.equipment,
-      {
-        get forward() {
-          return self.aim.forward;
-        },
-      },
+      this.torpedoTubeSocket,
     );
     this.aim = new SubmarineAimSystem(bus, this.player, this.torpedo);
+    this.torpedoTubeSocket.attachFineAimSource(this.aim);
+    void self;
     this.economy = new EconomySystem(this.targets, this.player, () => this.ships);
     this.subscribeToParamsReload = subscribeToParamsReload ?? null;
   }

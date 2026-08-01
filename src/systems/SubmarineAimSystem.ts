@@ -90,6 +90,20 @@ export class SubmarineAimSystem implements AimSystem {
   }
 
   /**
+   * 공식 계약 `FineAimSource`(contracts/systems.ts) 필드 —
+   * 리드 소켓 rig가 읽는 이름이다. 위 yawRadians/pitchRadians와 같은 값이며,
+   * 계약 이름으로 노출해 rig가 게임플레이 구현을 직접 알지 않게 한다.
+   * (스프린트 A 통합 — 소켓 단일 출처 정규화)
+   */
+  get aimYawRadians(): number {
+    return this.yaw;
+  }
+
+  get aimPitchRadians(): number {
+    return this.pitch;
+  }
+
+  /**
    * 조준 전방 단위 벡터 (월드) — 조준 카메라 시선과 어뢰 초기 진행 방향의
    * 단일 출처. 비조준 상태에서도 선수 정면 기준으로 유효하다.
    */

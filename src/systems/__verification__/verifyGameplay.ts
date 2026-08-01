@@ -32,7 +32,8 @@ import { LayeredDepthSystem } from '../LayeredDepthSystem';
 import { SubmarineAimSystem } from '../SubmarineAimSystem';
 import { aimForwardVector, clampAimAngles } from '../aimGeometry';
 import { BASE_CAMERA_RADIANS_PER_PIXEL, PROVISIONAL_AIMING_PARAMS } from '../provisionalAiming';
-import { torpedoSpawnSocket, TORPEDO_COLLISION_RADIUS } from '../collision/torpedoTubeSocket';
+import { TORPEDO_COLLISION_RADIUS } from '../collision/torpedoTubeSocket';
+import { TorpedoTubeSocketRig } from '../../core/TorpedoTubeSocketRig';
 import { UpgradePurchaseSystem, type PurchaseWalletPort, type PurchaseSavePort } from '../economy/UpgradePurchaseSystem';
 import { provisionalUpgradeCost } from '../economy/provisionalUpgradeCost';
 import { StraightRunTorpedoSystem } from '../StraightRunTorpedoSystem';
@@ -138,6 +139,7 @@ function makeCombatRig(
   equipment: EquipmentSystem;
   torpedo: StraightRunTorpedoSystem;
   aim: SubmarineAimSystem;
+  socket: TorpedoTubeSocketRig;
 } {
   const bus = new EventBus();
   const input = new ScriptedInput();
@@ -146,16 +148,13 @@ function makeCombatRig(
   const world = new CollisionWorld();
   const targets = new TargetRegistry();
   const equipment = new EquipmentSystem();
-  // 조준↔어뢰 지연 참조 (GameplaySystems와 동일한 단일 출처 배선)
-  let aimRef: SubmarineAimSystem | null = null;
-  const torpedo = new StraightRunTorpedoSystem(bus, params.combat, controller, world, targets, equipment, {
-    get forward() {
-      return (aimRef as SubmarineAimSystem).forward;
-    },
-  });
+  // 공식 소켓 rig 단일 인스턴스 — GameplaySystems와 동일한 배선 (스프린트 A
+  // 정규화: 조준 카메라와 어뢰가 같은 rig의 두 소켓을 공유)
+  const socket = new TorpedoTubeSocketRig(controller);
+  const torpedo = new StraightRunTorpedoSystem(bus, params.combat, world, targets, equipment, socket);
   const aim = new SubmarineAimSystem(bus, controller, torpedo);
-  aimRef = aim;
-  return { bus, input, controller, depth, world, targets, equipment, torpedo, aim };
+  socket.attachFineAimSource(aim);
+  return { bus, input, controller, depth, world, targets, equipment, torpedo, aim, socket };
 }
 
 class FakeVisibilitySource extends EventTarget implements VisibilitySource {
@@ -1782,8 +1781,10 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     rig.aim.beginAim();
     rig.aim.applyMouseDelta(-500, -500); // 좌·상 미세 조준 (yaw·pitch 모두 0이 아님)
 
-    const cameraForward = rig.aim.forward; // 조준 카메라가 소비하는 값과 동일 출처
-    const expectedSpawn = torpedoSpawnSocket(rig.controller, cameraForward);
+    // 조준 카메라가 실제로 읽는 값 = 공식 rig의 aimCameraSocket (동일 출처)
+    const aimCamera = rig.socket.aimCameraSocket;
+    const cameraForward = { x: aimCamera.forwardX, y: aimCamera.forwardY, z: aimCamera.forwardZ };
+    const expectedSpawn = rig.socket.torpedoSpawnSocket;
     rig.aim.fireTorpedo();
     const shot = rig.torpedo.torpedoes[0];
 
@@ -1800,11 +1801,11 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
 
     const spawnMatches =
       shot !== undefined &&
-      Math.abs(shot.x - expectedSpawn.x) < 1e-12 &&
-      Math.abs(shot.y - expectedSpawn.y) < 1e-12 &&
-      Math.abs(shot.z - expectedSpawn.z) < 1e-12;
+      Math.abs(shot.x - expectedSpawn.positionX) < 1e-12 &&
+      Math.abs(shot.y - expectedSpawn.positionY) < 1e-12 &&
+      Math.abs(shot.z - expectedSpawn.positionZ) < 1e-12;
     check(
-      '탄도: 생성 위치 = torpedoSpawnSocket (TorpedoSystem 자체 오프셋 없음)',
+      '탄도: 생성 위치 = 공식 rig torpedoSpawnSocket (TorpedoSystem 자체 오프셋 없음)',
       spawnMatches,
       `spawn=(${shot?.x.toFixed(3)}, ${shot?.y.toFixed(3)}, ${shot?.z.toFixed(3)})`,
     );
