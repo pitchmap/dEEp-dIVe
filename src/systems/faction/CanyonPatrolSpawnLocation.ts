@@ -44,6 +44,7 @@ import type {
   GuardSpawnLocationStrategy,
 } from '../../contracts/guard';
 import type { CanyonLayout } from '../../contracts/layout';
+import { isWithinCanyonBounds, type CanyonHorizontalBounds } from '../collision/canyonBounds';
 import type { CollisionWorld } from '../collision/CollisionWorld';
 import { SUBMARINE_HULL_RADIUS } from '../collision/submarineHull';
 
@@ -86,6 +87,8 @@ export class CanyonPatrolSpawnLocation implements GuardSpawnLocationStrategy {
   private readonly layout: CanyonLayout;
   private readonly range: GuardRangeSource;
   private readonly clearance: IncidentClearanceSource;
+  /** 월드 수평 경계 — 함대와 **같은 인스턴스**를 주입받는다 */
+  private readonly bounds: CanyonHorizontalBounds | null;
   private params: GuardSpawnParams | null = null;
 
   constructor(
@@ -94,12 +97,14 @@ export class CanyonPatrolSpawnLocation implements GuardSpawnLocationStrategy {
     layout: CanyonLayout,
     range: GuardRangeSource,
     clearance: IncidentClearanceSource,
+    bounds: CanyonHorizontalBounds | null = null,
   ) {
     this.observer = observer;
     this.collision = collision;
     this.layout = layout;
     this.range = range;
     this.clearance = clearance;
+    this.bounds = bounds;
   }
 
   /** 공식 경비 스폰 params 주입 (도착 시 조립부가 연결) */
@@ -151,6 +156,8 @@ export class CanyonPatrolSpawnLocation implements GuardSpawnLocationStrategy {
         const x = incident.x + Math.cos(bearing) * distance;
         const z = incident.z + Math.sin(bearing) * distance;
 
+        // 월드 범위 밖은 후보가 아니다 — 경계는 조립점이 준 단일 인스턴스다.
+        if (!isWithinCanyonBounds(this.bounds, x, z)) continue;
         if (horizontalDistance(x, z, incident.x, incident.z) < incidentClearance) continue;
         if (
           horizontalDistance(x, z, this.observer.positionX, this.observer.positionZ) <
