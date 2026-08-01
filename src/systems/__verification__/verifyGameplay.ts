@@ -28,6 +28,7 @@ import {
 import type { SalvageSpawnPlanEntry } from '../../contracts/officialParams';
 import { PLAYER_ENTITY_ID } from '../../contracts/guard';
 import type {
+  GuardShipAdapterConfig,
   GuardShipRequestPayload,
   NeutralShipHitPayload,
   TransportAttackedPayload,
@@ -39,10 +40,16 @@ import type { SystemContext } from '../../core/GameSystem';
 import { GuardShipAdapter } from '../../core/GuardShipAdapter';
 import {
   GuardIncidentLedger,
+  GuardSpawnBridge,
   GuardSpawnCoordinator,
   NeutralIncidentBoundary,
 } from '../../core/PveIntegration';
-import { HighValueTransportSystem } from '../faction/HighValueTransportSystem';
+import { createProductionDestroyerAIFactory } from '../../core/destroyerAiFactory';
+import { canyonHorizontalBounds } from '../collision/canyonBounds';
+import {
+  escortEngagementToAdapterConfig,
+  HighValueTransportSystem,
+} from '../faction/HighValueTransportSystem';
 import { shipPlacementsFromOfficialCargo } from '../faction/shipPlacements';
 
 /** 공식 세력 3종 — 계약 정본과 대조하는 검증 상수 */
@@ -3315,7 +3322,376 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     coreSystems.dispose();
   }
 
+  /* ═══ B5 런타임 연결 — 실제 경비함 생성·이동 (INT-CORE-013) ════════ */
+
+  // 58. [AI] SurfaceShipMotionPort — 스폰당 독립 pose·운동학·경계·표적 조회
+  {
+    const bus = new EventBus();
+    const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
+    const factory = systems.surfaceShipMotionPortFactory;
+    const incident = { x: 0, z: -20 };
+    const portA = factory.create(guardConfig(1000, incident, { x: 10, z: -20 }));
+    const portB = factory.create(guardConfig(1001, incident, { x: -10, z: -20 }));
+
+    check(
+      '[AI] motion port — 스폰 1건 = 포트 1개 = 독립 pose (pose 공유 없음)',
+      portA !== null &&
+        portB !== null &&
+        portA.getPosition().x === 10 &&
+        portB.getPosition().x === -10 &&
+        systems.patrolShips.length === 2 &&
+        systems.patrolShips[0]?.entityId !== systems.patrolShips[1]?.entityId,
+      `A=(${portA?.getPosition().x}), B=(${portB?.getPosition().x}), 엔티티=${systems.patrolShips.length}`,
+    );
+
+    // 한쪽만 움직여도 다른 쪽 pose는 그대로다 (공유 상태 없음)
+    const beforeB = portB?.getPosition().x ?? 0;
+    portA?.moveForward(1);
+    check(
+      '[AI] motion port — 한 척의 이동이 다른 척·플레이어 pose에 영향 없음',
+      portA?.getPosition().x !== 10 &&
+        portB?.getPosition().x === beforeB &&
+        systems.player.positionX === STARTING_CANYON_LAYOUT.submarineSpawn.x,
+      `A=${portA?.getPosition().x.toFixed(2)}, B=${portB?.getPosition().x}, 플레이어=${systems.player.positionX}`,
+    );
+
+    // turnToward — 목표 방향으로 선수각이 바뀐다 (선수 = (−sin h, −cos h))
+    const shipA = systems.patrolShips[0];
+    const headingBefore = shipA?.headingRadians ?? 0;
+    // 스폰 선수는 사건 지점을 향해 있다 — 직각 방향 목표로 돌려 선회를 관측한다
+    const turnTarget = { x: portA?.getPosition().x ?? 0, z: (portA?.getPosition().z ?? 0) - 30 };
+    for (let i = 0; i < 240; i += 1) portA?.turnToward(turnTarget.x, turnTarget.z, 1 / 60);
+    const forward = portA?.getForward() ?? { x: 0, z: 0 };
+    const toTarget = {
+      x: turnTarget.x - (portA?.getPosition().x ?? 0),
+      z: turnTarget.z - (portA?.getPosition().z ?? 0),
+    };
+    const length = Math.hypot(toTarget.x, toTarget.z);
+    const alignment = length > 0 ? (forward.x * toTarget.x + forward.z * toTarget.z) / length : 0;
+    check(
+      '[AI] motion port — turnToward가 목표 방향으로 선수각을 바꾼다 (정렬 ≈ 1)',
+      Math.abs(alignment - 1) < 1e-3 && (shipA?.headingRadians ?? 0) !== headingBefore,
+      `정렬=${alignment.toFixed(6)}, heading ${headingBefore.toFixed(3)} → ${(shipA?.headingRadians ?? 0).toFixed(3)}`,
+    );
+
+    // moveForward — 선수 방향으로 (속력 × dt)만큼 이동
+    const positionBefore = portA?.getPosition() ?? { x: 0, y: 0, z: 0 };
+    const step = 1 / 60;
+    portA?.moveForward(step);
+    const positionAfter = portA?.getPosition() ?? { x: 0, y: 0, z: 0 };
+    const traveled = Math.hypot(
+      positionAfter.x - positionBefore.x,
+      positionAfter.z - positionBefore.z,
+    );
+    const expectedTravel = (testCargoParams?.speedMetersPerSecond ?? 0) * step;
+    check(
+      '[AI] motion port — moveForward가 선수 방향으로 공식 속력만큼 이동',
+      Math.abs(traveled - expectedTravel) < 1e-9 &&
+        Math.abs(positionAfter.x - (positionBefore.x + forward.x * expectedTravel)) < 1e-9,
+      `이동=${traveled.toFixed(6)} (기대 ${expectedTravel.toFixed(6)})`,
+    );
+
+    // maintainSurfaceHeight — 공식 seaSurfaceY 유지
+    portA?.maintainSurfaceHeight();
+    check(
+      '[AI] motion port — 수상함 고도 = 공유 레이아웃 seaSurfaceY (임의 높이 없음)',
+      portA?.getPosition().y === STARTING_CANYON_LAYOUT.seaSurfaceY &&
+        portB?.getPosition().y === STARTING_CANYON_LAYOUT.seaSurfaceY,
+      `y=${portA?.getPosition().y} (레이아웃 ${STARTING_CANYON_LAYOUT.seaSurfaceY})`,
+    );
+
+    // world bounds — 레이아웃 블록 + 공식 항로 끝점에서 파생, 밖은 거부.
+    // 블록만으로 잡은 경계보다 넓어야 한다(공식 화물선 항로가 협곡 벽 바깥).
+    const bounds = systems.worldBounds;
+    const blocksOnly = canyonHorizontalBounds(STARTING_CANYON_LAYOUT);
+    check(
+      '[AI] motion port — 월드 경계 = 레이아웃 블록 + 공식 항로 파생 (경계 밖 이동 차단)',
+      bounds !== null &&
+        blocksOnly !== null &&
+        bounds.maxX >= blocksOnly.maxX &&
+        bounds.minX <= blocksOnly.minX &&
+        portA?.isWithinWorldBounds(0, 0) === true &&
+        portA.isWithinWorldBounds(bounds.maxX + 1, 0) === false &&
+        portA.isWithinWorldBounds(0, bounds.minZ - 1) === false,
+      `경계 x[${bounds?.minX.toFixed(1)}, ${bounds?.maxX.toFixed(1)}] (블록만 [${blocksOnly?.minX.toFixed(1)}, ${blocksOnly?.maxX.toFixed(1)}])`,
+    );
+
+    // 표적 조회 — 플레이어는 살아 있고 위치를 준다 / 미지 id는 안전 동작
+    const playerPosition = portA?.getTargetPosition(PLAYER_ENTITY_ID);
+    check(
+      '[AI] motion port — 표적 조회: 플레이어 생존·위치 / 미지 id는 null·비생존',
+      portA?.isTargetAlive(PLAYER_ENTITY_ID) === true &&
+        playerPosition?.x === systems.player.positionX &&
+        playerPosition.z === systems.player.positionZ &&
+        portA.isTargetAlive(987654) === false &&
+        portA.getTargetPosition(987654) === null,
+      `플레이어=(${playerPosition?.x}, ${playerPosition?.z})`,
+    );
+
+    // 같은 entityId 재요청 — 추가 엔티티를 만들지 않는다
+    const duplicatePort = factory.create(guardConfig(1000, incident, { x: 10, z: -20 }));
+    check(
+      '[AI] motion port — 같은 entityId 재요청 시 추가 엔티티 생성 0 (null 반환)',
+      duplicatePort === null && systems.patrolShips.length === 2,
+      `엔티티=${systems.patrolShips.length}`,
+    );
+    systems.dispose();
+  }
+
+  // 59. [AI] B4→B5 production 체인 — 중립 피격에서 경비함 생성·이동까지
+  {
+    const bus = new EventBus();
+    const requests: GuardShipRequestPayload[] = [];
+    bus.on('guardShipRequested', (payload) => requests.push(payload));
+
+    const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
+    const ledger = new GuardIncidentLedger();
+    const boundary = new NeutralIncidentBoundary(ledger);
+    boundary.initialize(fakeSystemContext(bus, params));
+
+    // production 조립과 동일한 배선 — 검증 더블 없음
+    const adapter = new GuardShipAdapter(
+      createProductionDestroyerAIFactory(systems.surfaceShipMotionPortFactory),
+    );
+    const coordinator = new GuardSpawnCoordinator(ledger, adapter, systems.guardSpawnLocation);
+    const spawnedHandles: Array<{ entityId: number; faction: string }> = [];
+    coordinator.attachSpawnListener((handle) => {
+      spawnedHandles.push({ entityId: handle.entityId, faction: handle.faction });
+    });
+    const bridge = new GuardSpawnBridge(coordinator);
+    bridge.initialize(fakeSystemContext(bus, params));
+
+    const neutral = systems.ships.find((ship) => ship.faction === 'neutral');
+    neutral?.onTorpedoHit(neutral.positionX, neutral.positionZ, 1, {
+      attackCorrelationId: 'torpedo:50',
+      attackerEntityId: PLAYER_ENTITY_ID,
+    });
+
+    const handle = adapter.spawnedShips[0];
+    const patrol = systems.patrolShips[0];
+    check(
+      '[AI] B5 production 체인 — 중립 1회 공격 → 경비함 1척 실제 생성 (spawned)',
+      requests.length === 1 &&
+        bridge.lastOutcome === 'spawned' &&
+        adapter.spawnedShips.length === 1 &&
+        systems.patrolShips.length === 1 &&
+        spawnedHandles.length === 1 &&
+        adapter.aiWired,
+      `요청=${requests.length}, 결과=${String(bridge.lastOutcome)}, 엔티티=${systems.patrolShips.length}`,
+    );
+    check(
+      '[AI] B5 생성 개체 — faction=patrol · 초기 표적=플레이어 · spawnPosition 보존',
+      handle?.faction === 'patrol' &&
+        handle.initialTargetEntityId === PLAYER_ENTITY_ID &&
+        patrol?.faction === 'patrol' &&
+        patrol.entityId === handle.entityId &&
+        patrol.positionX === handle.spawnPosition.x &&
+        patrol.positionZ === handle.spawnPosition.z &&
+        patrol.spawnPosition.x === handle.spawnPosition.x,
+      `faction=${handle?.faction}, entityId=${handle?.entityId}, spawn=(${handle?.spawnPosition.x.toFixed(1)}, ${handle?.spawnPosition.z.toFixed(1)})`,
+    );
+    check(
+      '[AI] B5 사건 위치가 마지막 확인 위치로 전달 (경비함이 그 방향에서 시작)',
+      patrol?.incidentPosition.x === requests[0]?.incidentPosition.x &&
+        patrol?.incidentPosition.z === requests[0]?.incidentPosition.z &&
+        handle?.ai.state === 'alert',
+      `사건=(${patrol?.incidentPosition.x.toFixed(1)}, ${patrol?.incidentPosition.z.toFixed(1)}), AI=${handle?.ai.state}`,
+    );
+
+    // 실제 이동 — AI가 포트를 통해 플레이어 쪽으로 접근한다
+    const startDistance = distanceTo(patrol, systems.player);
+    for (let i = 0; i < 300; i += 1) {
+      adapter.update(1 / 60);
+      systems.update(1 / 60);
+    }
+    const endDistance = distanceTo(patrol, systems.player);
+    check(
+      '[AI] B5 경비함 실제 이동 — 수면 유지하며 표적 방향으로 접근',
+      patrol !== undefined &&
+        endDistance < startDistance &&
+        patrol.positionY === STARTING_CANYON_LAYOUT.seaSurfaceY &&
+        handle?.ai.state === 'attack',
+      `거리 ${startDistance.toFixed(1)} → ${endDistance.toFixed(1)}, AI=${handle?.ai.state}`,
+    );
+
+    // 중복 방지 — 같은 correlationId 재피격·같은 requestId 재처리
+    neutral?.onTorpedoHit(neutral.positionX, neutral.positionZ, 1, {
+      attackCorrelationId: 'torpedo:50',
+      attackerEntityId: PLAYER_ENTITY_ID,
+    });
+    const duplicateOutcome = requests[0]
+      ? coordinator.spawnGuardShip(requests[0])
+      : null;
+    check(
+      '[AI] B5 중복 방지 — 같은 correlationId 요청 0 추가 · 같은 requestId는 duplicateRequest',
+      requests.length === 1 &&
+        duplicateOutcome === 'duplicateRequest' &&
+        adapter.spawnedShips.length === 1 &&
+        systems.patrolShips.length === 1,
+      `요청=${requests.length}, 재처리=${String(duplicateOutcome)}, 엔티티=${systems.patrolShips.length}`,
+    );
+
+    boundary.dispose();
+    bridge.dispose();
+    systems.dispose();
+    check(
+      '[AI] B5 dispose — 경비함이 표적 등록소·렌더 소스에서 제거된다',
+      systems.patrolShips.length === 0 &&
+        !systems.targets.list.some((target) => target.id === handle?.entityId) &&
+        !systems.shipWorldSource.shipViews.some((view) => view.entityId === handle?.entityId),
+      `잔존 엔티티=${systems.patrolShips.length}`,
+    );
+  }
+
+  // 60. [FACTION] 다중 선박 read source + patrol 식별
+  {
+    const bus = new EventBus();
+    const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
+    const incident = { x: 0, z: -20 };
+    systems.surfaceShipMotionPortFactory.create(guardConfig(1100, incident, { x: 4, z: -20 }));
+
+    const views = systems.shipWorldSource.shipViews;
+    const factions = views.map((view) => view.faction).sort();
+    check(
+      '[FACTION] 다중 선박 read source — hostile·neutral·patrol 3종 동시 노출',
+      views.length === 3 &&
+        factions.join(',') === 'hostile,neutral,patrol' &&
+        views.every((view) => typeof view.visualArchetype === 'string' && view.alive) &&
+        views.some((view) => view.visualArchetype === 'ship.patrol') &&
+        views.some((view) => view.visualArchetype === 'ship.cargo'),
+      `views=${views.length}, factions=${factions.join('/')}`,
+    );
+
+    // entityId가 월드 엔티티·표적·식별에서 모두 같다
+    const patrolView = views.find((view) => view.faction === 'patrol');
+    const patrolEntity = systems.patrolShips[0];
+    const identificationIds = systems.shipIdentification.identifications.map((v) => v.entityId);
+    check(
+      '[FACTION] entityId 일치 — 월드 엔티티·표적 등록소·식별·렌더 소스가 같은 키',
+      patrolView?.entityId === patrolEntity?.entityId &&
+        systems.targets.list.some((target) => target.id === patrolEntity?.entityId) &&
+        identificationIds.includes(patrolEntity?.entityId ?? -1) &&
+        identificationIds.length === 3,
+      `patrol=${patrolView?.entityId}, 식별=${identificationIds.join('/')}`,
+    );
+
+    // patrol 식별 — 조준 + 사거리 이내에서 세력 확정
+    systems.player.resetTo({
+      x: patrolEntity?.positionX ?? 0,
+      y: 0,
+      z: patrolEntity?.positionZ ?? 0,
+      headingRadians: 0,
+    });
+    systems.aim.toggleAim();
+    const patrolIdentification = systems.shipIdentification.identifications.find(
+      (view) => view.entityId === patrolEntity?.entityId,
+    );
+    check(
+      '[FACTION] patrol 식별 — identificationState=patrol · 라벨 키 일치',
+      patrolIdentification?.identificationState === 'patrol' &&
+        patrolIdentification.displayLabelId === 'faction.patrol' &&
+        patrolIdentification.faction === 'patrol' &&
+        patrolIdentification.tagDisplayable,
+      `state=${patrolIdentification?.identificationState}, label=${String(patrolIdentification?.displayLabelId)}`,
+    );
+
+    // 죽은 경비함 — 태그 제거 + 렌더 소스에서 제외
+    patrolEntity?.onTorpedoHit(0, 0, 1);
+    systems.update(1 / 60);
+    const deadIdentification = systems.shipIdentification.identifications.find(
+      (view) => view.entityId === patrolEntity?.entityId,
+    );
+    check(
+      '[FACTION] 죽은 경비함 — tagDisplayable=false · 표적·렌더 소스에서 제거',
+      deadIdentification === undefined &&
+        !systems.targets.list.some((target) => target.id === patrolEntity?.entityId) &&
+        !systems.shipWorldSource.shipViews.some(
+          (view) => view.entityId === patrolEntity?.entityId,
+        ),
+      `식별 잔존=${deadIdentification !== undefined}`,
+    );
+    systems.dispose();
+  }
+
+  // 61. [LOOP] B6 — 범용 factory 입력 변환 + 공식 거리 없으면 비활성
+  {
+    const bus = new EventBus();
+    const transport = new HighValueTransportSystem(bus);
+    transport.registerTransport(800);
+    const notBound = transport.bindEscortFromOfficial(801, 800);
+    check(
+      '[LOOP] B6 공식 이탈 거리 미도착 — 결속을 만들지 않는다 (임의 거리 발명 0)',
+      !notBound && !transport.escortDistanceWired && transport.escortsOf(800).length === 0,
+      `결속=${transport.escortsOf(800).length}`,
+    );
+
+    transport.attachEscortDistanceMeters(40);
+    const bound = transport.bindEscortFromOfficial(801, 800);
+    const engagements = transport.reportTransportAttacked(
+      800,
+      PLAYER_ENTITY_ID,
+      { x: 3, z: -7 },
+      'torpedo:60',
+    );
+    const escortRequest = engagements[0];
+    const config = escortRequest
+      ? escortEngagementToAdapterConfig(escortRequest, {
+          entityId: 801,
+          faction: 'patrol',
+          spawnPosition: { x: 3, z: -7 },
+          displayLabelId: 'faction.patrol',
+        })
+      : null;
+    check(
+      '[LOOP] B6 교전 요청 → **범용** 구축함 AI 팩토리 입력 변환 (호위 전용 AI 0)',
+      bound &&
+        engagements.length === 1 &&
+        config?.initialTargetEntityId === PLAYER_ENTITY_ID &&
+        config.initialTargetPosition.x === 3 &&
+        config.entityId === 801 &&
+        config.faction === 'patrol',
+      `요청=${engagements.length}, 초기표적=${String(config?.initialTargetEntityId)}`,
+    );
+
+    // 변환 결과를 그대로 경비함과 같은 production 팩토리에 넣을 수 있다
+    const bus2 = new EventBus();
+    const systems = new GameplaySystems(bus2, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
+    const escortFactory = createProductionDestroyerAIFactory(systems.surfaceShipMotionPortFactory);
+    const escortAi = config ? escortFactory.create(config) : null;
+    check(
+      '[LOOP] B6 호위도 경비함과 **같은** 범용 AI·이동 포트 경로를 쓴다',
+      escortAi !== null && systems.patrolShips.length === 1,
+      `AI 생성=${escortAi !== null}, 엔티티=${systems.patrolShips.length}`,
+    );
+    systems.dispose();
+  }
+
   return results;
+}
+
+/** 검증용 경비 스폰 config — production과 같은 계약 형태 (수치는 픽스처) */
+function guardConfig(
+  entityId: number,
+  incident: { x: number; z: number },
+  spawn: { x: number; z: number },
+): GuardShipAdapterConfig {
+  return {
+    entityId,
+    faction: 'patrol',
+    spawnReason: 'neutralAttack',
+    initialTargetEntityId: PLAYER_ENTITY_ID,
+    initialTargetPosition: incident,
+    spawnPosition: spawn,
+    displayLabelId: 'faction.patrol',
+  };
+}
+
+function distanceTo(
+  ship: { readonly positionX: number; readonly positionZ: number } | undefined,
+  player: { readonly positionX: number; readonly positionZ: number },
+): number {
+  if (!ship) return Number.POSITIVE_INFINITY;
+  return Math.hypot(ship.positionX - player.positionX, ship.positionZ - player.positionZ);
 }
 
 /**
