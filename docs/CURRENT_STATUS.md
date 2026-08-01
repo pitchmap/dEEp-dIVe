@@ -6,6 +6,28 @@
 
 ---
 
+## 스프린트 A 최종 판정 (통합 관리자 — 조준 rig 단일화 수정 후)
+
+> 상세·근거: `docs/SPRINT_A_ACCEPTANCE.md` '최종 재판정' /
+> 절차·미해소: `docs/SPRINT_A_INTEGRATION_MANIFEST.md`.
+> 브랜치: `claude/deep-dive-d5-gray-box-integration-tree5i` (dev 미병합).
+
+| 구분 | 결과 |
+|---|---|
+| 조준 카메라 결함 | ✅ **해소** — 런타임 rig 1개, `scene.attachTorpedoTubeSocket()` 1회, 조준 카메라 forwardY = 어뢰 directionY 실측 일치 |
+| 자동 검증 | typecheck·build·size(4.3%)·scope ✅ / gameplay 128/128 · meta 35/35 · tooling 26/26 · HUD 34/34 ✅ / **verify:sprint-a 자동 23/24 (A8 실패)** |
+| 브라우저 실측 | ✅ **21/21** (dev 수치 단언 + production 표시, 콘솔 0건) — 3심도 조준·Y 불변·pitch 일치·선체 레이어·그림자·수면 유지 |
+| A1 / A2 / A3 / A7 | ✅ |
+| A4 | ❌ 경제 UI가 composition root에 미배선 (QA 데모 전용) |
+| A5 / A6 | ⚠ 부분 — T1~T6·저장 롤백 ✅ / UI 경로 미판정 (A4와 동일 원인) |
+| A8 | ❌ 공식 경제 params 미확정 필드 114개 · provisional 4파일 |
+| **B_READY** | ❌ **false** |
+
+**B 차단 항목:** ① A8 공식 경제 수치표(기획) ② 경제·구매 UI 배선(이중 저장
+정리 선행) ③ A 통합 PR 생성·dev 병합(발효 유일 방아쇠).
+
+---
+
 ## PvE MVP 1차 통합 결과 (통합 담당, 통합 커밋 `ee2022a` 이후)
 
 > 판정 근거: `docs/PVE_MVP_ACCEPTANCE.md` · 절차·충돌 기록:

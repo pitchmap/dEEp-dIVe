@@ -136,11 +136,12 @@
 6. **조준 기하 이중 구현** — `core/conventions`(clamp·forward)와 `systems/aimGeometry`가 같은 수식을 각각 정의한다. 수치는 일치하나 정의 지점이 둘.
 7. **`provisionalAiming` 잔존** — 툴링 공식 `params/aiming.json`·로더 배선 후 삭제해야 한다.
 8. **`MetaLoop` 예외 전파** — `transition`·`restoreWallet`의 throw가 `Game.render()` 경로에서 무방비(`GameLoop`에 try/catch 없음).
-9. **소켓 rig 이중 생성 (브라우저 실측으로 발견)** — `src/core/Game.ts:268`이
-   `TorpedoTubeSocketRig`를 두 번째로 생성하면서 `attachFineAimSource()`를 붙이지
-   않아 `forwardY`가 항상 0이고, `scene.attachTorpedoTubeSocket(...)`은 호출되지
-   않는다. 조준 카메라가 `SubmarineVisual` 폴백으로 동작해 미세 조준각을 반영하지
-   못한다(어뢰는 `GameplaySystems.torpedoTubeSocket`을 소비해 정상). 최소 수정안:
-   `gameplay.torpedoTubeSocket` 단일 인스턴스를 참조하고 composition에서
-   `scene.attachTorpedoTubeSocket()`를 1회 호출. 근거·실측:
-   `docs/SPRINT_A_ACCEPTANCE.md` '발견된 결함'.
+9. ~~**소켓 rig 이중 생성**~~ — ✅ **해소** (통합 관리자 최소 수정): `Game`이
+   rig를 재생성하지 않고 `gameplay.torpedoTubeSocket` 정본을 참조하며,
+   composition에서 `scene.attachTorpedoTubeSocket()`를 1회 호출한다. 런타임
+   rig 1개·미세각 연결 1개·2소켓 동일 전방축을 브라우저에서 실측 확인
+   (`docs/SPRINT_A_ACCEPTANCE.md` '최종 재판정').
+10. **경제·구매 UI 미배선 (재판정에서 확정)** — `src/ui/EconomyHud.ts`·
+   `SortiePrepScreen.ts`가 QA 데모(`econUiQaDemo`)에서만 인스턴스화되고
+   composition root에 연결돼 있지 않다. **A4 실패·A5/A6의 UI 절반 미판정**의
+   직접 원인. 배선은 §7-3(이중 저장 정리)과 한 작업 단위로 처리해야 한다.

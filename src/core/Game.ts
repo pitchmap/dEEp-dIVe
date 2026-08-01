@@ -258,14 +258,14 @@ export class Game {
     this.gameplay = gameplay;
 
     // ①-a2 선수 발사관 소켓 (INT-CORE-008·009 — 스프린트 A 최종 조립 기준).
-    //     조준 카메라(그래픽스)와 어뢰 생성(게임플레이)이 이 단일 인스턴스를
-    //     소비한다 — 개별 오프셋 계산 금지. 각 창 합류 시 배선:
-    //       · 게임플레이 조준(FineAimSource 구현) → tubeSockets.attachFineAimSource(...)
-    //       · 게임플레이 어뢰 → torpedoSpawnSocket 소비 (자체 SPAWN_OFFSET 삭제)
-    //       · 그래픽스 조준 카메라 → aimCameraSocket 소비 (자기 선체는 조준
-    //         카메라 레이어 마스크에서만 제외 — 객체 전역 숨김 금지)
-    //     미세각 미연결 상태 = 0 (조준 해제 reset 기준 상태와 동일).
-    this.tubeSockets = new TorpedoTubeSocketRig(gameplay.poseSource);
+    //     조준 카메라(그래픽스)와 어뢰 생성(게임플레이)이 **하나의 인스턴스**를
+    //     소비해야 십자선 = 탄도가 구조적으로 보장된다 (7차 결의 1-① 단일 앵커,
+    //     개별 오프셋 계산 금지). 정본은 게임플레이가 조립 시 생성하고
+    //     `attachFineAimSource(aim)`까지 마친 `gameplay.torpedoTubeSocket`이다 —
+    //     조립부는 그 참조를 그대로 쓴다. 여기서 rig를 다시 만들면 미세각이
+    //     연결되지 않은 두 번째 인스턴스가 생겨 조준 카메라 pitch가 어뢰를
+    //     따라가지 못한다 (스프린트 A 런타임 실측 결함).
+    this.tubeSockets = gameplay.torpedoTubeSocket;
 
     // ①-b 장비 배율 — 공식 UpgradeModifiers(계약)를 장비 시스템의 로컬
     //     보정 형태로 변환해 주입한다. 어뢰 속도 보정에 대응하는 공식
@@ -319,6 +319,10 @@ export class Game {
     // 어뢰 모델·기포 항적 — 실제 발사 어뢰 상태를 그대로 소비한다
     // (INT-RENDER-006. 렌더는 스냅샷만 읽고 판정하지 않는다).
     scene.attachTorpedoSource(gameplay.torpedo);
+    // 조준 카메라 소켓 — 어뢰 생성과 **같은 rig**를 넘긴다. 렌더는 위치·전방축을
+    // 읽기만 하고 오프셋을 자체 계산하지 않는다 (2소켓 구조: aimCameraSocket /
+    // torpedoSpawnSocket이 동일 앵커·동일 전방축, 안전 오프셋은 소켓 정의 1곳).
+    scene.attachTorpedoTubeSocket(gameplay.torpedoTubeSocket);
     // 성장 외형 — 렌더에는 계산된 단계(1~3)만 전달한다. 렌더가 업그레이드
     // 수치·저장 데이터를 읽지 않는다 (INT-RENDER-007).
     const tiers = this.upgrades.visualTiers;
