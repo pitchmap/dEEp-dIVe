@@ -28,25 +28,25 @@ export interface PendingOfficialDataEntry {
   readonly blockedBy: string;
 }
 
-/** 게임플레이 소유 영역에 남은 임시 데이터 (A8 미해소분) */
+/**
+ * 게임플레이 소유 영역에 남은 임시 데이터.
+ *
+ * 경제·화물선·장비 3종은 [INT-CORE-011]에서 **해소**됐다 —
+ * `provisionalEconomy`·`provisionalCargo`·`provisionalEquipment` 파일은
+ * 삭제됐고, 소비는 전부 공식 `params/{economy,cargo,equipment}.json` 주입
+ * 경로로 바뀌었다. 아래는 아직 공식 파일이 없는 전투 구동 수치뿐이다.
+ */
 export const PENDING_OFFICIAL_DATA: readonly PendingOfficialDataEntry[] = Object.freeze([
   Object.freeze({
-    module: 'src/systems/economy/provisionalEconomy.ts',
-    contents: '드롭 테이블(크레딧량)·회수 반경·파괴 시 크레딧 손실률',
-    officialTarget: 'params/economy.json (미생성)',
-    blockedBy: '기획 경제 수치표 — PvE D+3 절대 마감 (스프린트 A 병목)',
+    module: 'src/systems/provisionalCombat.ts',
+    contents: '어뢰 직선 주행 속력 기준값·최대 사거리',
+    officialTarget: 'params/combat.json (사거리·주행 속력 항목 미도입)',
+    blockedBy: 'INT-GAME-006 — 장비별 속력은 이미 공식 equipment.json 소비로 전환됨',
   }),
   Object.freeze({
-    module: 'src/systems/provisionalCargo.ts',
-    contents: '화물선 항행 속력·왕복 경로·명중 판정 반경·침몰 시간·선체 박스',
-    officialTarget: 'params/economy.json 또는 레벨 레이아웃 데이터',
-    blockedBy: '기획 경제 수치표 + 레벨 블록아웃 (INT-GAME-007)',
-  }),
-  Object.freeze({
-    module: 'src/systems/provisionalEquipment.ts',
-    contents: '장비 4종 성능(속력·피해)·디코이 지속/쿨다운·구조 기본 슬롯 수',
-    officialTarget: 'params/equipment.json은 가격·슬롯만 담당 — 성능은 이관 대상 미정',
-    blockedBy:
-      'INT-GAME-008 (공식 equipment.json 주석이 성능을 게임플레이 소유로 위임 중). 슬롯 수는 공식 slotCapacity 확정 시 자동 반영(applyCatalog)',
+    module: 'src/systems/provisionalAiming.ts',
+    contents: '조준 카메라 기준 감도·미세 조준 한계의 게임플레이 측 기본값',
+    officialTarget: 'params/aiming.json (툴링 aimingParams 로더 존재)',
+    blockedBy: '조립부가 loadAimingParams 값을 주입하는 배선 — 삭제 시점은 게임플레이 결정',
   }),
 ]);

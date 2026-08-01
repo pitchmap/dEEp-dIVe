@@ -51,20 +51,72 @@ export interface UpgradeCatalogEntry {
   readonly costRareParts: readonly PendingNumber[];
   /** 단계별 합연산 보정. null = 미확정 → 보정 0으로 취급(효과 발명 금지) */
   readonly effectBonus: readonly PendingNumber[];
+  /**
+   * 기준값 파라미터 경로 (예: `movement.maxSpeedMetersPerSecond`).
+   * **소비자를 찾는 열쇠**이지 값 자체가 아니다 — 경로가 없는 항목은 기준값
+   * 파라미터가 아직 없다는 뜻이며, 게임플레이는 기준값을 발명하지 않는다
+   * (`UPGRADE_EFFECT_CONSUMERS`의 `deferred consumer`).
+   */
+  readonly paramRef?: string;
 }
 
-/** 장비 1항목의 게임플레이 소비 단면 (성능이 아니라 **가격·해금** 정보) */
+/** 장비 성능 수치 — 어뢰류는 speed·damage, 디코이는 stock·lifetime·cooldown */
+export type EquipmentPerformance = Readonly<Record<string, number>>;
+
+/** 장비 1항목의 게임플레이 소비 단면 (가격·슬롯·시작 보유 + 공식 성능값) */
 export interface EquipmentCatalogEntry {
   readonly id: EquipmentId;
   readonly label: string;
   readonly costCredits: PendingNumber;
   readonly costRareParts: PendingNumber;
+  /** 이 장비가 차지하는 슬롯 수. null = 미확정 */
+  readonly slotCost: PendingNumber;
+  /** 첫 출항 성립 조건 — 시작 시점부터 보유하는가 */
+  readonly startingItem: boolean;
+  /** 공식 성능 수치 — 여기가 유일한 출처다 (게임플레이 내부 상수 없음) */
+  readonly performance: EquipmentPerformance;
 }
 
 export interface EquipmentCatalog {
   /** 공식 슬롯 수. null = 미확정 (게임플레이는 임의 값을 만들지 않는다) */
   readonly slotCapacity: PendingNumber;
   readonly items: readonly EquipmentCatalogEntry[];
+}
+
+/* ── 런타임 경제·화물선 params (INT-CORE-011 주입 단면) ────────────────────
+ * production은 composition root가 만든 `OfficialRuntimeParams`의
+ * `economy`·`cargo`를 **그대로** 주입한다(구조적으로 아래 형태를 만족).
+ * 게임플레이는 JSON을 읽지도, 툴링 로더를 부르지도 않는다.
+ */
+
+/** 드롭 테이블 1건 — 표적 파괴 시 생성될 일반 크레딧 */
+export interface DropTableView {
+  readonly credits: number;
+}
+
+/** 경제 런타임 수치 (드롭·픽업·손실) — 조립부가 `official.economy` 주입 */
+export interface EconomyRuntimeParams {
+  /** 파괴 시 이번 출항 일반 크레딧 손실률 [0~1] */
+  readonly creditLossOnDestroyedRatio: number;
+  /** 드롭 자동 회수 반경 (m) */
+  readonly pickupRadiusMeters: number;
+  readonly dropTables: Readonly<Record<string, DropTableView>>;
+}
+
+/** 화물선 런타임 수치 — 조립부가 `official.cargo` 주입 */
+export interface CargoRuntimeParams {
+  readonly targetId: number;
+  readonly speedMetersPerSecond: number;
+  readonly hitRadiusMeters: number;
+  readonly sinkDurationSeconds: number;
+  readonly waypointA: { readonly x: number; readonly z: number };
+  readonly waypointB: { readonly x: number; readonly z: number };
+  readonly hullBox: {
+    readonly halfLengthMeters: number;
+    readonly halfBeamMeters: number;
+    readonly judgmentDraftMeters: number;
+    readonly freeboardMeters: number;
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -105,6 +157,7 @@ export function readOfficialUpgradeCatalog(raw: unknown): readonly UpgradeCatalo
     const maxLevel = pendingNumber(record['maxLevel']);
     if (maxLevel === null || maxLevel <= 0) continue; // 단계 정의 없는 항목은 구매 대상 아님
 
+    const paramRef = record['paramRef'];
     entries.push(
       Object.freeze({
         id: id as UpgradeStatId,
@@ -113,6 +166,7 @@ export function readOfficialUpgradeCatalog(raw: unknown): readonly UpgradeCatalo
         costCredits: pendingArray(record['costCredits'], Math.floor(maxLevel)),
         costRareParts: pendingArray(record['costRareParts'], Math.floor(maxLevel)),
         effectBonus: pendingArray(record['effectBonus'], Math.floor(maxLevel)),
+        ...(typeof paramRef === 'string' ? { paramRef } : {}),
       }),
     );
   }
@@ -139,6 +193,9 @@ export function readOfficialEquipmentCatalog(raw: unknown): EquipmentCatalog {
         label: typeof record['label'] === 'string' ? record['label'] : id,
         costCredits: pendingNumber(record['costCredits']),
         costRareParts: pendingNumber(record['costRareParts']),
+        slotCost: pendingNumber(record['slotCost']),
+        startingItem: record['startingItem'] === true,
+        performance: numberMap(record['performance']),
       }),
     );
   }
@@ -147,6 +204,100 @@ export function readOfficialEquipmentCatalog(raw: unknown): EquipmentCatalog {
     slotCapacity: pendingNumber(root?.['slotCapacity']),
     items: Object.freeze(entries),
   });
+}
+
+/**
+ * 공식 경제 런타임 수치 읽기 — 값이 하나라도 없으면 **null**을 반환한다.
+ * (미확정을 0·임의 값으로 바꾸지 않는다. production은 이 함수가 아니라
+ * composition root가 주입한 `official.economy`를 그대로 쓴다 — 이 리더는
+ * 원본 JSON만 가진 호출자(검증 러너 등)를 위한 구조 어댑터다.)
+ */
+export function readOfficialEconomyRuntime(raw: unknown): EconomyRuntimeParams | null {
+  const root = asRecord(raw);
+  if (!root) return null;
+  const loss = tunableNumber(root['creditLossOnDestroyedRatio']);
+  const pickup = tunableNumber(root['pickupRadiusMeters']);
+  const tablesRaw = asRecord(root['dropTables']);
+  if (loss === null || pickup === null || !tablesRaw) return null;
+
+  const tables: Record<string, DropTableView> = {};
+  for (const [tableId, value] of Object.entries(tablesRaw)) {
+    const record = asRecord(value);
+    const credits = pendingNumber(record?.['credits']);
+    if (credits === null || credits < 0) continue; // 미확정 항목은 드롭 대상 아님
+    tables[tableId] = Object.freeze({ credits });
+  }
+  return Object.freeze({
+    creditLossOnDestroyedRatio: loss,
+    pickupRadiusMeters: pickup,
+    dropTables: Object.freeze(tables),
+  });
+}
+
+/** 공식 화물선 수치 읽기 — 하나라도 없으면 null (임시값 대입 금지) */
+export function readOfficialCargoParams(raw: unknown): CargoRuntimeParams | null {
+  const root = asRecord(raw);
+  if (!root) return null;
+  const hull = asRecord(root['hullBox']);
+  const waypointA = readWaypoint(root['waypointA']);
+  const waypointB = readWaypoint(root['waypointB']);
+  if (!hull || !waypointA || !waypointB) return null;
+
+  const numbers = {
+    targetId: pendingNumber(root['targetId']),
+    speedMetersPerSecond: pendingNumber(root['speedMetersPerSecond']),
+    hitRadiusMeters: pendingNumber(root['hitRadiusMeters']),
+    sinkDurationSeconds: pendingNumber(root['sinkDurationSeconds']),
+    halfLengthMeters: pendingNumber(hull['halfLengthMeters']),
+    halfBeamMeters: pendingNumber(hull['halfBeamMeters']),
+    judgmentDraftMeters: pendingNumber(hull['judgmentDraftMeters']),
+    freeboardMeters: pendingNumber(hull['freeboardMeters']),
+  };
+  if (Object.values(numbers).some((value) => value === null)) return null;
+
+  return Object.freeze({
+    targetId: numbers.targetId as number,
+    speedMetersPerSecond: numbers.speedMetersPerSecond as number,
+    hitRadiusMeters: numbers.hitRadiusMeters as number,
+    sinkDurationSeconds: numbers.sinkDurationSeconds as number,
+    waypointA,
+    waypointB,
+    hullBox: Object.freeze({
+      halfLengthMeters: numbers.halfLengthMeters as number,
+      halfBeamMeters: numbers.halfBeamMeters as number,
+      judgmentDraftMeters: numbers.judgmentDraftMeters as number,
+      freeboardMeters: numbers.freeboardMeters as number,
+    }),
+  });
+}
+
+function readWaypoint(raw: unknown): { readonly x: number; readonly z: number } | null {
+  const record = asRecord(raw);
+  const x = pendingNumber(record?.['x']);
+  const z = pendingNumber(record?.['z']);
+  if (x === null || z === null) return null;
+  return Object.freeze({ x, z });
+}
+
+/**
+ * 튜닝 가능 수치 표기 흡수 — `12` 또는 `{ value: 12, range, unit, note }`.
+ * params 파일마다 표기가 다르므로(경제 파일은 후자) 양쪽을 받는다.
+ */
+function tunableNumber(raw: unknown): PendingNumber {
+  const direct = pendingNumber(raw);
+  if (direct !== null) return direct;
+  return pendingNumber(asRecord(raw)?.['value']);
+}
+
+function numberMap(raw: unknown): EquipmentPerformance {
+  const record = asRecord(raw);
+  if (!record) return Object.freeze({});
+  const result: Record<string, number> = {};
+  for (const [key, value] of Object.entries(record)) {
+    const numeric = pendingNumber(value);
+    if (numeric !== null) result[key] = numeric;
+  }
+  return Object.freeze(result);
 }
 
 /**

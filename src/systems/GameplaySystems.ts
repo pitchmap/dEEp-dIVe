@@ -26,6 +26,7 @@
 
 import type { CanyonLayout } from '../contracts/layout';
 import type { EquipmentChangeJudgePort } from '../contracts/meta';
+import type { SalvageSpawnPlanEntry } from '../contracts/officialParams';
 import type { GameParams } from '../contracts/params';
 import type {
   CargoShipStateSource,
@@ -36,22 +37,25 @@ import type { EventBus } from '../core/EventBus';
 import type { GameSystem, SystemContext } from '../core/GameSystem';
 import { TorpedoTubeSocketRig } from '../core/TorpedoTubeSocketRig';
 import { STARTING_CANYON_LAYOUT } from '../world/startingCanyonLayout';
-import { CargoShipSystem, defaultCargoShipConfig } from './CargoShipSystem';
+import { CargoShipSystem, cargoShipConfigFromOfficial } from './CargoShipSystem';
 import { CollisionWorld } from './collision/CollisionWorld';
 import { computeShipBoxPush } from './collision/shipHullBox';
 import { computeHullSpheres } from './collision/submarineHull';
 import { registerStartingAreaColliders } from './collision/startingArea';
-import { EconomySystem } from './economy/EconomySystem';
+import { EconomySystem, type SalvageSpawnOutcome } from './economy/EconomySystem';
 import {
   OFFICIAL_EQUIPMENT_IDS,
   readOfficialEquipmentCatalog,
   readOfficialUpgradeCatalog,
+  type CargoRuntimeParams,
+  type EconomyRuntimeParams,
+  type EquipmentCatalog,
 } from './economy/officialEconomyCatalog';
 import {
   UpgradePurchaseSystem,
   type PurchaseWalletPort,
 } from './economy/UpgradePurchaseSystem';
-import { EquipmentSystem } from './EquipmentSystem';
+import { EquipmentSystem, type EquipmentId } from './EquipmentSystem';
 import { KeyboardInput, type KeyEventSource, type VisibilitySource } from './KeyboardInput';
 import { LayeredDepthSystem } from './LayeredDepthSystem';
 import { MouseCombatInput } from './MouseCombatInput';
@@ -59,6 +63,17 @@ import { SubmarineAimSystem } from './SubmarineAimSystem';
 import { StraightRunTorpedoSystem } from './StraightRunTorpedoSystem';
 import { SubmarinePlayerController } from './SubmarinePlayerController';
 import { TargetRegistry } from './TargetRegistry';
+
+/**
+ * 게임플레이가 소비하는 공식 런타임 params의 구조 단면 [INT-CORE-011].
+ * 조립부의 `OfficialRuntimeParams`가 그대로 대입된다 — 게임플레이는 필요한
+ * 세 묶음만 좁혀 받고, JSON·툴링 로더에는 접근하지 않는다.
+ */
+export interface GameplayOfficialParams {
+  readonly economy: EconomyRuntimeParams;
+  readonly cargo: CargoRuntimeParams;
+  readonly equipment: EquipmentCatalog;
+}
 
 /** 출항 준비 상태 — 리드 Departure command가 소비하는 판정 결과 */
 export interface SortieReadiness {
@@ -131,6 +146,7 @@ export class GameplaySystems implements GameSystem {
 
   private readonly subscribeToParamsReload: ParamsReloadSubscribe | null;
   private unsubscribeParamsReload: (() => void) | null = null;
+  private officialWired = false;
 
   constructor(
     bus: EventBus,
@@ -138,6 +154,13 @@ export class GameplaySystems implements GameSystem {
     subscribeToParamsReload?: ParamsReloadSubscribe,
     /** 협곡 레이아웃 — composition root 주입 우선, 기본은 공유 단일 인스턴스 */
     layout: CanyonLayout = STARTING_CANYON_LAYOUT,
+    /**
+     * 공식 런타임 params [INT-CORE-011] — 조립부가 로더 1회 호출로 만든 번들.
+     * 생성자에서 못 받으면 `attachOfficialParams()`로 주입한다. 둘 다 없으면
+     * 경제·화물선·장비가 **명시적 미배선(unwired)** 상태로 남는다 —
+     * 임시 수치를 만들지 않는다.
+     */
+    official: GameplayOfficialParams | null = null,
   ) {
     // 지연 참조용 자기 별칭 (조준↔어뢰 조립 순환 해소)
     // eslint-disable-next-line @typescript-eslint/no-this-alias
@@ -155,11 +178,15 @@ export class GameplaySystems implements GameSystem {
     this.collision = new CollisionWorld();
     registerStartingAreaColliders(this.collision, layout);
     this.targets = new TargetRegistry();
-    this.cargoShip = new CargoShipSystem(bus, this.targets, {
-      ...defaultCargoShipConfig(),
-      surfaceY: layout.seaSurfaceY, // 해수면은 공유 레이아웃 값 하나만 사용
-    });
+    // 화물선 수치는 공식 params가 유일한 출처다 — 해수면 높이만 공유
+    // 레이아웃(월드 소유)에서 온다. 미주입이면 비활성(표적 미등록).
+    this.cargoShip = new CargoShipSystem(
+      bus,
+      this.targets,
+      official ? cargoShipConfigFromOfficial(official.cargo, layout.seaSurfaceY) : null,
+    );
     this.equipment = new EquipmentSystem();
+    if (official) this.equipment.applyCatalog(official.equipment);
     // 발사관 소켓 rig — 공식 정본(리드) 단일 인스턴스. 조준 카메라(그래픽스)와
     // 어뢰 생성(게임플레이)이 **이 하나**를 공유하므로 십자선 = 탄도가
     // 구조적으로 보장된다 (스프린트 A 소켓 정규화). 미세각 소스는 조준
@@ -177,8 +204,54 @@ export class GameplaySystems implements GameSystem {
     this.aim = new SubmarineAimSystem(bus, this.player, this.torpedo);
     this.torpedoTubeSocket.attachFineAimSource(this.aim);
     void self;
-    this.economy = new EconomySystem(this.targets, this.player, () => this.ships);
+    this.economy = new EconomySystem(
+      this.targets,
+      this.player,
+      () => this.ships,
+      official ? official.economy : null,
+    );
+    this.officialWired = official !== null;
     this.subscribeToParamsReload = subscribeToParamsReload ?? null;
+  }
+
+  /**
+   * 공식 런타임 params 주입 [INT-CORE-011] — 조립부 전용 단일 진입점.
+   *
+   * 경제(드롭·픽업·손실) / 화물선(항행·명중·침몰) / 장비(성능·가격·슬롯)를
+   * 한 번에 배선한다. 시스템은 JSON을 읽지 않고 툴링 로더도 부르지 않는다 —
+   * 여기로 들어온 값만 소비한다. 주입 객체는 읽기만 하며 역기록하지 않는다.
+   */
+  attachOfficialParams(official: GameplayOfficialParams): void {
+    this.economy.attachEconomyParams(official.economy);
+    this.cargoShip.applyCargoParams(
+      official.cargo,
+      this.layout.seaSurfaceY,
+    );
+    this.equipment.applyCatalog(official.equipment);
+    this.officialWired = true;
+  }
+
+  /** 공식 params 배선 여부 — false면 경제·화물선·장비가 전부 미배선 */
+  get officialParamsWired(): boolean {
+    return this.officialWired;
+  }
+
+  /**
+   * 저장에서 복원한 장착 상태 주입 (조립부 부팅 1회).
+   * `null` = 저장 데이터 없음(SaveStore source 'fresh') → 공식 시작 장비 부여.
+   * `[]` = 저장이 명시한 전부 해제 → 그대로 유지 (기본 어뢰 재부여 금지).
+   */
+  restoreSavedLoadout(saved: readonly EquipmentId[] | null): void {
+    this.equipment.restoreSavedLoadout(saved);
+  }
+
+  /**
+   * 해저 재화 spawn 어댑터 [INT-CORE-011] — 리드 `SortieSalvageSpawner`가
+   * 결합한 plan 항목을 그대로 넘긴다. spawnId 중복·회수 후 재생성은 여기서
+   * 거부되고, 새 출항 리셋에서만 다시 열린다.
+   */
+  spawnSalvageFromPlan(entry: SalvageSpawnPlanEntry): SalvageSpawnOutcome {
+    return this.economy.spawnSalvageFromPlan(entry);
   }
 
   /** 세력 태그가 붙은 함선 목록 — 경제 반응·잠수함-함선 충돌이 순회한다 */
@@ -202,16 +275,34 @@ export class GameplaySystems implements GameSystem {
    * **저장은 연결하지 않는다** — 저장·롤백 순서는 리드 트랜잭션 소유이며
    * 게임플레이는 판정·적용·복원 포트만 제공한다 (저장 직접 호출 0회).
    */
-  attachBaseEconomy(options: {
-    /** params/upgrades.json 내용 (공식) */
-    readonly upgradesParams: unknown;
-    /** params/equipment.json 내용 (공식) */
-    readonly equipmentParams: unknown;
-    /** 리드 MetaLoop 지갑 — 판정에만 쓰인다(차감은 트랜잭션 소유) */
-    readonly wallet: PurchaseWalletPort;
-    /** 저장에서 복원한 업그레이드 단계 (없으면 전부 0) */
-    readonly restoredLevels?: Readonly<Record<string, number>>;
-  }): UpgradePurchaseSystem {
+  attachBaseEconomy(
+    options:
+      | {
+          /** params/upgrades.json 내용 (공식) */
+          readonly upgradesParams: unknown;
+          /** params/equipment.json 내용 (공식) */
+          readonly equipmentParams: unknown;
+          /** 리드 MetaLoop 지갑 — 판정에만 쓰인다(차감은 트랜잭션 소유) */
+          readonly wallet: PurchaseWalletPort;
+          /** 저장에서 복원한 업그레이드 단계 (없으면 전부 0) */
+          readonly restoredLevels?: Readonly<Record<string, number>>;
+        }
+      /** 조립부가 이미 만든 판정 시스템을 그대로 채택하는 경로 */
+      | UpgradePurchaseSystem,
+    /**
+     * 저장 포트 — production은 **반드시 null**이다. 장비 저장은 리드
+     * `EquipmentTransaction` 한 곳뿐이며(저장 책임 표) 게임플레이는 저장소에
+     * 접근하지 않는다. null이 아닌 값이 오면 조립 규칙 위반이므로 무시한다.
+     */
+    savePort: null = null,
+  ): UpgradePurchaseSystem {
+    if (savePort !== null) {
+      console.error('[GameplaySystems] 장비 저장 포트는 연결하지 않는다 (저장 책임 표) — 무시됨');
+    }
+    if (options instanceof UpgradePurchaseSystem) {
+      this.purchaseSystem = options;
+      return options;
+    }
     const catalog = readOfficialUpgradeCatalog(options.upgradesParams);
     const purchase = new UpgradePurchaseSystem(catalog, options.wallet);
     if (options.restoredLevels) purchase.restoreLevels(options.restoredLevels);
@@ -330,6 +421,7 @@ export class GameplaySystems implements GameSystem {
       headingRadians: this.layout.submarineSpawn.headingRadians,
     });
     this.torpedo.resetForNewSortie(params.combat.torpedoCapacity.value);
+    this.equipment.refillDecoyStock(); // 출항당 보유 수 (공식 stockPerSortie)
     this.cargoShip.resetForNewSortie(this.targets);
     this.economy.resetForNewSortie();
   }

@@ -20,13 +20,17 @@ import { EventBus } from '../../core/EventBus';
 import type { DepthLayerId } from '../../contracts/events';
 import { CollisionWorld } from '../collision/CollisionWorld';
 import { computeHullSpheres } from '../collision/submarineHull';
-import { CargoShipSystem, type CargoShipConfig } from '../CargoShipSystem';
+import {
+  CargoShipSystem,
+  cargoShipConfigFromOfficial,
+  type CargoShipConfig,
+} from '../CargoShipSystem';
+import type { SalvageSpawnPlanEntry } from '../../contracts/officialParams';
 import { BossWeakPointTarget, provisionalBossWeakPointConfig } from '../BossWeakPointTarget';
 import { EconomySystem } from '../economy/EconomySystem';
-import { PROVISIONAL_DEFEAT_CREDIT_LOSS_RATIO, PROVISIONAL_DROP_TABLES } from '../economy/provisionalEconomy';
 import { EquipmentSystem } from '../EquipmentSystem';
 import { computeShipBoxPush } from '../collision/shipHullBox';
-import { GameplaySystems } from '../GameplaySystems';
+import { GameplaySystems, type GameplayOfficialParams } from '../GameplaySystems';
 import { KeyboardInput, type MovementInput, type VisibilitySource } from '../KeyboardInput';
 import { LayeredDepthSystem } from '../LayeredDepthSystem';
 import { SubmarineAimSystem } from '../SubmarineAimSystem';
@@ -41,10 +45,19 @@ import {
 import {
   OFFICIAL_EQUIPMENT_IDS,
   OFFICIAL_UPGRADE_IDS,
+  readOfficialCargoParams,
+  readOfficialEconomyRuntime,
   readOfficialEquipmentCatalog,
   readOfficialUpgradeCatalog,
   upgradeCostAtLevel,
+  type CargoRuntimeParams,
+  type EconomyRuntimeParams,
+  type EquipmentCatalog,
 } from '../economy/officialEconomyCatalog';
+import {
+  DEFERRED_UPGRADE_CONSUMERS,
+  UPGRADE_EFFECT_CONSUMERS,
+} from '../economy/upgradeEffectConsumers';
 import { PENDING_OFFICIAL_DATA } from '../economy/pendingOfficialData';
 import { StraightRunTorpedoSystem } from '../StraightRunTorpedoSystem';
 import { SubmarinePlayerController } from '../SubmarinePlayerController';
@@ -72,7 +85,36 @@ export interface RawParamFiles {
   /** 공식 경제 params — 스프린트 A 마감 어댑터가 소비 */
   upgrades: unknown;
   equipment: unknown;
+  /** 공식 경제 런타임 수치 (드롭·픽업·손실) — production 소비 전환분 */
+  economy: unknown;
+  /** 공식 화물선 수치 (항행·명중·침몰) */
+  cargo: unknown;
 }
+
+/* 검증 전용 공식 params 보관 — 러너가 읽은 JSON을 runGameplayVerification이
+ * 한 번 해석해 여기 담고, 각 시나리오 헬퍼가 **주입 경로로만** 소비한다.
+ * (production 시스템은 이 변수를 보지 않는다 — 조립부 주입이 유일 경로다.) */
+let testEquipmentCatalog: EquipmentCatalog | null = null;
+let testEconomyParams: EconomyRuntimeParams | null = null;
+let testCargoParams: CargoRuntimeParams | null = null;
+
+/** 공식 params 묶음 (해석 완료분) — GameplaySystems 조립 주입용 */
+function testOfficialParams(): GameplayOfficialParams | null {
+  if (!testEconomyParams || !testCargoParams || !testEquipmentCatalog) return null;
+  return {
+    economy: testEconomyParams,
+    cargo: testCargoParams,
+    equipment: testEquipmentCatalog,
+  };
+}
+
+/** 검증용 화물선 선체 치수 — 공식 params 도착 전 시나리오의 고정 픽스처 */
+const TEST_CARGO_HULL = {
+  halfLengthMeters: 10,
+  halfBeamMeters: 2.5,
+  judgmentDraftMeters: 4,
+  freeboardMeters: 3,
+} as const;
 
 /** 검증에서 조작 시나리오를 서술하기 위한 가변 입력 스텁 */
 class ScriptedInput implements MovementInput {
@@ -161,6 +203,8 @@ function makeCombatRig(
   const world = new CollisionWorld();
   const targets = new TargetRegistry();
   const equipment = new EquipmentSystem();
+  // 장비 성능은 공식 카탈로그에서만 온다 — 주입 없이는 발사가 성립하지 않는다
+  if (testEquipmentCatalog) equipment.applyCatalog(testEquipmentCatalog);
   // 공식 소켓 rig 단일 인스턴스 — GameplaySystems와 동일한 배선 (스프린트 A
   // 정규화: 조준 카메라와 어뢰가 같은 rig의 두 소켓을 공유)
   const socket = new TorpedoTubeSocketRig(controller);
@@ -188,6 +232,17 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
   // 1. 실제 params JSON이 검증기를 통과하는가 (실패 시 즉시 반환)
   const params = validateGameParams(rawParams);
   check('params: 4종 로드·범위 검증 통과', true, 'movement/detection/combat/crew');
+
+  // 공식 경제·화물선·장비 params 해석 — 이후 시나리오는 전부 **주입**으로만
+  // 소비한다 (시스템이 JSON을 읽는 경로는 없다, INT-CORE-011).
+  testEquipmentCatalog = readOfficialEquipmentCatalog(rawParams.equipment);
+  testEconomyParams = readOfficialEconomyRuntime(rawParams.economy);
+  testCargoParams = readOfficialCargoParams(rawParams.cargo);
+  check(
+    '[ECON] 공식 경제·화물선 params 해석 — economy.json·cargo.json 주입 가능 형태',
+    testEconomyParams !== null && testCargoParams !== null,
+    `economy=${testEconomyParams !== null}, cargo=${testCargoParams !== null}`,
+  );
 
   const stopSeconds = params.movement.stopInertiaSeconds.value;
   const turnSeconds = params.movement.turn90Seconds.value;
@@ -497,7 +552,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
   // 11. 충돌(박스, 시작 지역 기둥) — GameplaySystems 자동 등록 레이아웃
   {
     const bus = new EventBus();
-    const systems = new GameplaySystems(bus, params);
+    const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
     const keySource = new EventTarget();
     systems.attachInput(keySource);
     keySource.dispatchEvent(keyEvent('keydown', 'KeyW'));
@@ -676,7 +731,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     const emitted: DepthLayerId[] = [];
     bus.on('depthChanged', ({ layer }) => emitted.push(layer));
 
-    const systems = new GameplaySystems(bus, params);
+    const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
     const keySource = new EventTarget();
     systems.attachInput(keySource);
 
@@ -1075,7 +1130,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       useMouse: boolean,
     ): { aiming: boolean; remaining: number; reload: number; count: number; x: number; z: number } => {
       const bus = new EventBus();
-      const systems = new GameplaySystems(bus, params);
+      const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
       const keySource = new EventTarget();
       systems.attachInput(keySource);
 
@@ -1123,7 +1178,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
   // 24. 마우스 안전성 — 연속 클릭 1발 제한, blur 시 조준 해제, 컨텍스트 메뉴 방지
   {
     const bus = new EventBus();
-    const systems = new GameplaySystems(bus, params);
+    const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
     const keySource = new EventTarget();
     systems.attachInput(keySource);
     systems.depth.requestAscend();
@@ -1161,7 +1216,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
   // 24b. 공유 CanyonLayout 소비 — 블록↔충돌체 1:1 정합 (INT-CORE-004)
   {
     const bus = new EventBus();
-    const systems = new GameplaySystems(bus, params);
+    const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
     const layout = systems.layout;
     const colliders = systems.collision.colliders;
 
@@ -1222,6 +1277,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       speedMetersPerSecond: 4,
       hitRadius: 9,
       sinkDurationSeconds: 2,
+      hullBox: TEST_CARGO_HULL,
       faction: 'hostile',
     };
     const ship = new CargoShipSystem(bus, targets, config);
@@ -1271,6 +1327,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
         speedMetersPerSecond: 4,
         hitRadius: 9,
         sinkDurationSeconds: 2,
+        hullBox: TEST_CARGO_HULL,
         faction: 'hostile',
       });
       const steps = Math.round(10 / stepSeconds);
@@ -1294,6 +1351,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       speedMetersPerSecond: 4,
       hitRadius: 9,
       sinkDurationSeconds: 2,
+      hullBox: TEST_CARGO_HULL,
       faction: 'hostile',
     });
 
@@ -1346,6 +1404,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       speedMetersPerSecond: 4,
       hitRadius: 9,
       sinkDurationSeconds: 2,
+      hullBox: TEST_CARGO_HULL,
       faction: 'hostile',
     });
     ship.onTorpedoHit(ship.positionX, ship.positionZ, 1);
@@ -1367,7 +1426,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
   // 29. 조립 통합 — GameplaySystems 기본 화물선: 계약 상태 노출·항행·정리
   {
     const bus = new EventBus();
-    const systems = new GameplaySystems(bus, params);
+    const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
     const state = systems.cargoShipState;
 
     const inRegistry = systems.targets.list.some((target) => target.id === state.id);
@@ -1425,7 +1484,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
   // 30b. 마우스 경로의 토글·카메라 규칙 (GameplaySystems 배선)
   {
     const bus = new EventBus();
-    const systems = new GameplaySystems(bus, params);
+    const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
     const keySource = new EventTarget();
     systems.attachInput(keySource);
     systems.depth.requestAscend();
@@ -1458,6 +1517,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       speedMetersPerSecond: 4,
       hitRadius: 9,
       sinkDurationSeconds: 2,
+      hullBox: TEST_CARGO_HULL,
       faction: 'hostile',
     });
     const step = 1 / 60;
@@ -1542,15 +1602,16 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       speedMetersPerSecond: 4,
       hitRadius: 9,
       sinkDurationSeconds: 2,
+      hullBox: TEST_CARGO_HULL,
       faction: 'hostile',
       dropTableId: 'cargo-standard',
     });
-    const economy = new EconomySystem(targets, controller, () => [ship]);
+    const economy = new EconomySystem(targets, controller, () => [ship], testEconomyParams);
     const step = 1 / 60;
 
     ship.onTorpedoHit(0, -20, 1); // 적대 수송선 파괴
     economy.update(step);
-    const dropTable = PROVISIONAL_DROP_TABLES['cargo-standard'];
+    const dropTable = testEconomyParams?.dropTables['cargo-standard'];
     const spawnedNotCollected =
       economy.dropField.drops.length === 1 && economy.wallet.sortieCredits === 0;
     check(
@@ -1588,6 +1649,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       speedMetersPerSecond: 4,
       hitRadius: 9,
       sinkDurationSeconds: 2,
+      hullBox: TEST_CARGO_HULL,
       faction: 'neutral',
       dropTableId: 'cargo-standard', // 테이블이 있어도 중립은 드롭 금지
     });
@@ -1624,7 +1686,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       z: -16,
       headingRadians: 0,
     });
-    const economy = new EconomySystem(targets, controller, () => []);
+    const economy = new EconomySystem(targets, controller, () => [], testEconomyParams);
     const savedSignals: string[] = [];
     economy.wallet.onRarePartAcquired((partId) => savedSignals.push(partId));
 
@@ -1637,7 +1699,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
 
     chest.onTorpedoHit(0, -18, 1); // 어뢰로 부순다
     economy.update(1 / 60); // 드롭 생성 + 플레이어 인접 → 자동 회수
-    const chestCredits = PROVISIONAL_DROP_TABLES['salvage-chest']?.credits ?? -1;
+    const chestCredits = testEconomyParams?.dropTables['salvage-chest']?.credits ?? -1;
     check(
       '[ECON] 줍는다: 파괴 드롭 자동 회수 — 일반 크레딧·희귀 부품 분리 획득',
       economy.wallet.sortieCredits === chestCredits &&
@@ -1658,12 +1720,13 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     const targets = new TargetRegistry();
     const input = new ScriptedInput();
     const controller = new SubmarinePlayerController(params.movement, input);
-    const economy = new EconomySystem(targets, controller, () => []);
+    const economy = new EconomySystem(targets, controller, () => [], testEconomyParams);
 
     economy.wallet.addCredits(180);
     economy.wallet.acquireRarePart('rare-core');
     const settlement = economy.settleDefeat();
-    const expectedLost = Math.floor(180 * PROVISIONAL_DEFEAT_CREDIT_LOSS_RATIO);
+    const lossRatio = testEconomyParams?.creditLossOnDestroyedRatio ?? -1;
+    const expectedLost = Math.floor(180 * lossRatio);
     check(
       '[ECON] 파괴 정산: 손실률 파라미터 적용 — 일반 크레딧 일부 손실',
       settlement.outcome === 'defeat' &&
@@ -1672,7 +1735,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
         settlement.creditsKept === 180 - expectedLost &&
         economy.wallet.confirmedCredits === 180 - expectedLost &&
         economy.wallet.sortieCredits === 0,
-      `lost=${settlement.creditsLost}/${settlement.creditsEarned} (률 ${PROVISIONAL_DEFEAT_CREDIT_LOSS_RATIO})`,
+      `lost=${settlement.creditsLost}/${settlement.creditsEarned} (률 ${lossRatio})`,
     );
     check(
       '[ECON] 희귀 부품은 손실하지 않는다 (정산 데이터에 보존 명시)',
@@ -1693,8 +1756,12 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
 
   // 36. [LOOP] 장비 4종 — 슬롯 제한·상위호환 없음·합연산 배율·발사 반영·디코이
   {
-    const standardProfile = new EquipmentSystem().activeTorpedoProfile();
+    const officialEquipment = readOfficialEquipmentCatalog(rawParams.equipment);
+    const standard = new EquipmentSystem();
+    standard.applyCatalog(officialEquipment);
+    const standardProfile = standard.activeTorpedoProfile();
     const bench = new EquipmentSystem();
+    bench.applyCatalog(officialEquipment);
     const e1 = bench.equip(0, 'fastTorpedo');
     const e2 = bench.equip(1, 'heavyTorpedo');
     const overflow = bench.equip(2, 'decoy'); // 슬롯 2 제한 초과
@@ -1948,14 +2015,14 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       ],
     })[0];
     check(
-      '[ECON] null·음수 비용 거부 — 가격 미확정 단계는 비용을 산출하지 않는다',
-      nullCostEntry !== undefined &&
+      '[ECON] null·음수 비용 거부 + 공식 파일은 전 단계 확정 (A8 해소 — 미확정 0건)',
+      nullCostEntry === undefined &&
         partialNull !== undefined &&
         upgradeCostAtLevel(partialNull, 1)?.credits === 100 &&
         upgradeCostAtLevel(partialNull, 2) === null &&
         negative !== undefined &&
         upgradeCostAtLevel(negative, 1) === null,
-      `공식 파일 1단계 비용 미확정 항목 존재=${nullCostEntry?.id ?? '없음'}`,
+      `공식 파일 미확정 항목=${nullCostEntry?.id ?? '없음'} (합성 null·음수는 거부 유지)`,
     );
 
     // provisional 비용 경로가 production에 존재하지 않는다
@@ -1993,16 +2060,18 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       },
     };
 
-    // 공식 파일(가격 null) — 구매 불가로 판정되고 가격은 null로 노출된다
+    // 공식 파일 — 가격이 확정됐으므로 잔액 판정만 남는다 (임의 값 대입 없음)
     const officialJudge = new UpgradePurchaseSystem(officialCatalog, walletPort);
-    const officialOffer = officialJudge.listOffers()[0];
+    const officialOffer = officialJudge
+      .listOffers()
+      .find((offer) => offer.id === 'maxSpeed');
     check(
-      '[ECON] null 가격을 구매 가능으로 해석하지 않음 (공식 params 그대로)',
+      '[ECON] 공식 가격을 그대로 판정에 사용 (150cr → 1단계 100cr 구매 가능)',
       officialOffer !== undefined &&
-        officialOffer.nextCost === null &&
-        officialOffer.denial !== null &&
-        officialJudge.evaluateUpgradePurchase('maxSpeed').denial !== null,
-      `denial=${officialOffer?.denial}, cost=${String(officialOffer?.nextCost)}`,
+        officialOffer.nextCost?.credits === 100 &&
+        officialOffer.denial === null &&
+        officialJudge.evaluateUpgradePurchase('maxSpeed').cost.credits === 100,
+      `denial=${String(officialOffer?.denial)}, cost=${String(officialOffer?.nextCost?.credits)}`,
     );
 
     const judge = new UpgradePurchaseSystem(pricedCatalog, walletPort);
@@ -2093,12 +2162,12 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       equipmentId: 'heavyTorpedo',
     });
     check(
-      '[ECON] 장비 판정 사유 — equip/replace 가능 / 중복·동일 슬롯 alreadyEquipped / 범위 밖 noFreeSlot',
+      '[ECON] 장비 판정 사유 — equip/replace 가능 / 중복·동일 슬롯 alreadyEquipped / 범위 밖 slotFull',
       equipEmpty === null &&
         duplicate === 'alreadyEquipped' &&
         occupied === null &&
         sameItemAgain === 'alreadyEquipped' &&
-        outOfRange === 'noFreeSlot',
+        outOfRange === 'slotFull',
       `equip=${String(equipEmpty)} / 중복=${duplicate} / replace=${String(occupied)} / 동일=${sameItemAgain} / 범위밖=${outOfRange}`,
     );
 
@@ -2135,19 +2204,28 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       slotCapacity: 3,
       items: readOfficialEquipmentCatalog(rawParams.equipment).items,
     });
-    const grew = equipment.slotCount === 3;
-    equipment.applyCatalog(readOfficialEquipmentCatalog(rawParams.equipment)); // 공식 null
+    const injectedCapacity = equipment.slotCount;
+    equipment.applyCatalog(readOfficialEquipmentCatalog(rawParams.equipment)); // 공식 2
+    const officialCapacity = equipment.slotCount;
+    const nullCapacity = new EquipmentSystem(['standardTorpedo']);
+    nullCapacity.applyCatalog({
+      slotCapacity: null,
+      items: readOfficialEquipmentCatalog(rawParams.equipment).items,
+    });
     check(
-      '[ECON] 공식 slotCapacity 확정 시 반영 / null이면 임의 값 생성 없이 유지',
-      grew && equipment.slotCount === 3 && beforeCapacity === 2,
-      `기본 ${beforeCapacity} → 공식 3 → null 유지 ${equipment.slotCount}`,
+      '[ECON] slotCapacity는 카탈로그 값만 반영 (3 주입→3, 공식 2→2, null→구조 기본 유지)',
+      injectedCapacity === 3 &&
+        officialCapacity === 2 &&
+        beforeCapacity === 2 &&
+        nullCapacity.slotCount === 2,
+      `기본 ${beforeCapacity} → 주입 ${injectedCapacity} → 공식 ${officialCapacity} / null 유지 ${nullCapacity.slotCount}`,
     );
   }
 
   // 40. [LOOP] 출항 중 획득량 read-only source + 출항 준비 판정
   {
     const bus = new EventBus();
-    const systems = new GameplaySystems(bus, params);
+    const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
 
     const initialZero =
       systems.sortiePendingCredits === 0 && systems.sortiePendingRareParts === 0;
@@ -2193,7 +2271,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
   // 41. 경계 검사 — 게임플레이는 저장·UI를 직접 호출하지 않는다
   {
     const bus = new EventBus();
-    const systems = new GameplaySystems(bus, params);
+    const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
     const purchase = systems.attachBaseEconomy({
       upgradesParams: rawParams.upgrades,
       equipmentParams: rawParams.equipment,
@@ -2218,9 +2296,12 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     const equipmentSurface = new Set([
       ...Object.getOwnPropertyNames(Object.getPrototypeOf(systems.equipment) as object),
     ]);
+    // 저장 API = save로 시작하거나 SavePort를 다루는 이름. 'restoreSavedLoadout'
+    // 처럼 저장 **데이터**를 받는 복원 API는 저장 호출이 아니다.
+    const isSaveApi = (name: string): boolean =>
+      /^save/i.test(name) || /saveport/i.test(name);
     const noSaveApi =
-      ![...purchaseSurface].some((name) => name.toLowerCase().includes('save')) &&
-      ![...equipmentSurface].some((name) => name.toLowerCase().includes('save'));
+      ![...purchaseSurface].some(isSaveApi) && ![...equipmentSurface].some(isSaveApi);
     check(
       '[LOOP] 저장 직접 호출 0회 — 판정·장비 시스템에 save 계열 API 없음',
       noSaveApi,
@@ -2268,6 +2349,499 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       Math.abs(boss.accumulatedDamage - expected) < 1e-9,
       `damage=${boss.accumulatedDamage} (기대 ${expected})`,
     );
+  }
+
+  /* ═══ 공식 경제 params production 소비 전환 [INT-CORE-011] ═══════════ */
+
+  // 44. [ECON] 화물선 — 공식 params 소비 + 기존 동작 보존
+  {
+    const cargo = testCargoParams;
+    // 이관 전 런타임 값(구 provisionalCargo) — 회귀 기준 픽스처.
+    // "이관은 값 변경이 아니다"를 코드로 고정한다.
+    const beforeMigration = {
+      targetId: 1,
+      speed: 4,
+      hitRadius: 9,
+      sink: 6,
+      waypointA: { x: -30, z: -40 },
+      waypointB: { x: 30, z: -40 },
+      hull: { halfLength: 10, halfBeam: 2.5, draft: 4, freeboard: 3 },
+    };
+    const sameValues =
+      cargo !== null &&
+      cargo.targetId === beforeMigration.targetId &&
+      cargo.speedMetersPerSecond === beforeMigration.speed &&
+      cargo.hitRadiusMeters === beforeMigration.hitRadius &&
+      cargo.sinkDurationSeconds === beforeMigration.sink &&
+      cargo.waypointA.x === beforeMigration.waypointA.x &&
+      cargo.waypointA.z === beforeMigration.waypointA.z &&
+      cargo.waypointB.x === beforeMigration.waypointB.x &&
+      cargo.waypointB.z === beforeMigration.waypointB.z &&
+      cargo.hullBox.halfLengthMeters === beforeMigration.hull.halfLength &&
+      cargo.hullBox.halfBeamMeters === beforeMigration.hull.halfBeam &&
+      cargo.hullBox.judgmentDraftMeters === beforeMigration.hull.draft &&
+      cargo.hullBox.freeboardMeters === beforeMigration.hull.freeboard;
+    check(
+      '[ECON] 화물선 공식 params = 이관 전 런타임 값 (동작 보존 — 새 밸런스 변경 아님)',
+      sameValues,
+      `speed=${cargo?.speedMetersPerSecond}, hit=${cargo?.hitRadiusMeters}, sink=${cargo?.sinkDurationSeconds}`,
+    );
+
+    if (cargo) {
+      const bus = new EventBus();
+      const targets = new TargetRegistry();
+      const ship = new CargoShipSystem(
+        bus,
+        targets,
+        cargoShipConfigFromOfficial(cargo, STARTING_CANYON_LAYOUT.seaSurfaceY),
+      );
+      const startX = ship.positionX;
+      for (let i = 0; i < 60; i += 1) ship.update(1 / 60); // 1초 항행
+      const traveled = ship.positionX - startX;
+      const hull = ship.hullBox;
+      check(
+        '[ECON] 화물선 주입 구동 — 1초 이동 = 공식 속력, 선체 박스·표적 등록 유지',
+        Math.abs(traveled - cargo.speedMetersPerSecond) < 1e-9 &&
+          hull.halfBeamX === cargo.hullBox.halfBeamMeters &&
+          hull.halfLengthZ === cargo.hullBox.halfLengthMeters &&
+          hull.topY === STARTING_CANYON_LAYOUT.seaSurfaceY + cargo.hullBox.freeboardMeters &&
+          ship.cargoParamsWired &&
+          targets.list.length === 1 &&
+          ship.id === cargo.targetId,
+        `Δx=${traveled.toFixed(6)} (공식 ${cargo.speedMetersPerSecond}), targets=${targets.list.length}`,
+      );
+    }
+
+    const unwired = new CargoShipSystem(new EventBus(), new TargetRegistry(), null);
+    check(
+      '[ECON] 화물선 미주입 = 명시적 unwired (표적 미등록·임시 수치 생성 없음)',
+      !unwired.cargoParamsWired && unwired.hitRadius === 0,
+      `wired=${unwired.cargoParamsWired}`,
+    );
+  }
+
+  // 45. [ECON] 장비 4종 — 공식 성능값 소비 + slotCapacity 주입
+  {
+    const catalog = readOfficialEquipmentCatalog(rawParams.equipment);
+    const performanceOf = (id: string): Readonly<Record<string, number>> =>
+      catalog.items.find((entry) => entry.id === id)?.performance ?? {};
+    const equipment = new EquipmentSystem(['standardTorpedo', 'fastTorpedo']);
+    equipment.applyCatalog(catalog);
+    equipment.selectSlot(0);
+    const standard = equipment.activeTorpedoProfile();
+    equipment.selectSlot(1);
+    const fast = equipment.activeTorpedoProfile();
+    check(
+      '[ECON] 장비 성능 = 공식 params/equipment.json performance (게임플레이 상수 없음)',
+      standard?.speedMetersPerSecond === performanceOf('standardTorpedo')['speedMetersPerSecond'] &&
+        standard?.damage === performanceOf('standardTorpedo')['damage'] &&
+        fast?.speedMetersPerSecond === performanceOf('fastTorpedo')['speedMetersPerSecond'] &&
+        fast?.damage === performanceOf('fastTorpedo')['damage'] &&
+        equipment.equipmentParamsWired,
+      `standard=${standard?.speedMetersPerSecond}/${standard?.damage}, fast=${fast?.speedMetersPerSecond}/${fast?.damage}`,
+    );
+
+    const officialCount = catalog.items.length;
+    const heavy = performanceOf('heavyTorpedo');
+    const decoy = performanceOf('decoy');
+    check(
+      '[ECON] 공식 장비 정확히 4종 + 종류별 성능 키 (어뢰 속력·피해 / 디코이 재고·지속·쿨다운)',
+      officialCount === 4 &&
+        heavy['speedMetersPerSecond'] !== undefined &&
+        heavy['damage'] !== undefined &&
+        decoy['stockPerSortie'] !== undefined &&
+        decoy['lifetimeSeconds'] !== undefined &&
+        decoy['cooldownSeconds'] !== undefined,
+      `items=${officialCount}, decoy=${JSON.stringify(decoy)}`,
+    );
+
+    check(
+      '[ECON] slotCapacity는 공식 값에서만 온다 (2 소비 + 다른 값 주입 시 그대로 반영)',
+      catalog.slotCapacity === 2 && equipment.slotCount === 2,
+      `official=${String(catalog.slotCapacity)}, slots=${equipment.slotCount}`,
+    );
+
+    const resized = new EquipmentSystem(['standardTorpedo']);
+    resized.applyCatalog({ slotCapacity: 3, items: catalog.items });
+    check(
+      '[ECON] 슬롯 수 하드코딩 아님 — 카탈로그 값 3을 주입하면 슬롯이 3이 된다',
+      resized.slotCount === 3,
+      `slots=${resized.slotCount}`,
+    );
+
+    // 디코이 재고·쿨다운도 공식 성능값에서만 온다
+    const decoySystem = new EquipmentSystem(['decoy']);
+    decoySystem.applyCatalog(catalog);
+    const launched = decoySystem.launchDecoy(0, 0, 0);
+    check(
+      '[ECON] 디코이 재고·지속·쿨다운 = 공식 성능값 (출항당 stockPerSortie)',
+      launched &&
+        decoySystem.decoysRemaining === (decoy['stockPerSortie'] ?? 0) - 1 &&
+        decoySystem.decoyCooldownRemainingSeconds === decoy['cooldownSeconds'] &&
+        decoySystem.activeDecoys[0]?.remainingSeconds === decoy['lifetimeSeconds'],
+      `remaining=${decoySystem.decoysRemaining}, cd=${decoySystem.decoyCooldownRemainingSeconds}`,
+    );
+
+    const unwired = new EquipmentSystem(['standardTorpedo']);
+    check(
+      '[ECON] 장비 성능 미주입 = 프로파일 없음 (기준값 발명 금지 — 발사 불성립)',
+      !unwired.equipmentParamsWired && unwired.activeTorpedoProfile() === null,
+      `profile=${String(unwired.activeTorpedoProfile())}`,
+    );
+  }
+
+  // 46. [LOOP] 시작 로드아웃 — '저장 없음'과 '명시적 전부 해제' 구분
+  {
+    const catalog = readOfficialEquipmentCatalog(rawParams.equipment);
+    const startingIds = catalog.items.filter((entry) => entry.startingItem).map((e) => e.id);
+
+    const freshSave = new EquipmentSystem(null); // 저장 데이터 없음
+    freshSave.applyCatalog(catalog);
+    check(
+      '[LOOP] 새 세이브(저장 없음) — 공식 startingItem(기본 어뢰) 1종 부여',
+      startingIds.length === 1 &&
+        startingIds[0] === 'standardTorpedo' &&
+        freshSave.slots[0] === 'standardTorpedo' &&
+        freshSave.loadout.equipped.length === 1,
+      `starting=${startingIds.join(',')}, slots=${freshSave.slots.join('/')}`,
+    );
+
+    const restoredFresh = new EquipmentSystem(['standardTorpedo']);
+    restoredFresh.applyCatalog(catalog);
+    restoredFresh.restoreSavedLoadout(null); // SaveStore source 'fresh'
+    check(
+      '[LOOP] restoreSavedLoadout(null) = 저장 없음 → 기본 어뢰 부여',
+      restoredFresh.slots[0] === 'standardTorpedo',
+      `slots=${restoredFresh.slots.join('/')}`,
+    );
+
+    // 전부 해제한 상태를 저장한 뒤 재부팅한 경우
+    const emptySaved = new EquipmentSystem(['standardTorpedo']);
+    emptySaved.applyCatalog(catalog);
+    emptySaved.restoreSavedLoadout([]); // 저장이 명시한 '전부 해제'
+    emptySaved.applyCatalog(catalog); // 카탈로그 재적용(핫리로드)에도 되살아나지 않아야 한다
+    check(
+      '[LOOP] 명시적 빈 로드아웃은 유지 — 새로고침해도 기본 어뢰가 되살아나지 않는다',
+      emptySaved.slots.every((slot) => slot === null) && emptySaved.loadout.equipped.length === 0,
+      `slots=${emptySaved.slots.map((slot) => String(slot)).join('/')}`,
+    );
+
+    // 기지에서 직접 전부 해제한 경우도 '명시된' 로드아웃이다
+    const unequippedInBase = new EquipmentSystem(null);
+    unequippedInBase.applyCatalog(catalog);
+    unequippedInBase.applyEquipmentChange({ kind: 'unequip', slotIndex: 0 });
+    unequippedInBase.applyCatalog(catalog);
+    check(
+      '[LOOP] 기지에서 해제한 상태도 유지 (자동 재부여 없음)',
+      unequippedInBase.slots.every((slot) => slot === null),
+      `slots=${unequippedInBase.slots.map((slot) => String(slot)).join('/')}`,
+    );
+
+    const restoredSaved = new EquipmentSystem(null);
+    restoredSaved.applyCatalog(catalog);
+    restoredSaved.restoreSavedLoadout(['heavyTorpedo']);
+    check(
+      '[LOOP] 저장된 로드아웃 복원 — 슬롯 위치 그대로, 시작 장비 덮어쓰기 없음',
+      restoredSaved.slots[0] === 'heavyTorpedo' && restoredSaved.slots[1] === null,
+      `slots=${restoredSaved.slots.map((slot) => String(slot)).join('/')}`,
+    );
+  }
+
+  // 47. [ECON] 업그레이드 — 공식 가격 배열·희귀 부품·effectBonus 누적·paramRef
+  {
+    const catalog = readOfficialUpgradeCatalog(rawParams.upgrades);
+    const maxSpeed = catalog.find((entry) => entry.id === 'maxSpeed');
+    const hull = catalog.find((entry) => entry.id === 'hullIntegrity');
+    const wallet: { credits: number; rareParts: number } = { credits: 10000, rareParts: 10 };
+    const judge = new UpgradePurchaseSystem(catalog, {
+      get credits() {
+        return wallet.credits;
+      },
+      get rareParts() {
+        return wallet.rareParts;
+      },
+    });
+
+    const level1 = judge.nextCost('maxSpeed');
+    judge.applyPurchasedLevel('maxSpeed');
+    judge.applyPurchasedLevel('maxSpeed');
+    judge.applyPurchasedLevel('maxSpeed');
+    const level4 = judge.nextCost('maxSpeed'); // 4단계 = 340cr + 희귀 1
+    check(
+      '[ECON] 업그레이드 가격 = 공식 단계별 배열 (100…460 / 희귀 0,0,0,1,2)',
+      level1?.credits === 100 &&
+        level1.rareParts === 0 &&
+        level4?.credits === 340 &&
+        level4.rareParts === 1 &&
+        maxSpeed?.maxLevel === 5 &&
+        maxSpeed.costCredits.every((value) => value !== null),
+      `1단계=${level1?.credits}/${level1?.rareParts}, 4단계=${level4?.credits}/${level4?.rareParts}`,
+    );
+
+    // effectBonus 누적 — 단계별 증가량의 합 (합연산, 곱연산 금지)
+    const sum3 = judge.modifiers.maxSpeed ?? 0; // 3단계 누적
+    const expected3 = (maxSpeed?.effectBonus.slice(0, 3) ?? []).reduce<number>(
+      (acc, value) => acc + (value ?? 0),
+      0,
+    );
+    const hullJudge = new UpgradePurchaseSystem(catalog, { credits: 0, rareParts: 0 });
+    for (let i = 0; i < 5; i += 1) hullJudge.applyPurchasedLevel('hullIntegrity');
+    const hullSum = hullJudge.modifiers.hullIntegrity ?? 0;
+    check(
+      '[ECON] effectBonus 단계 누적 = 공식 배열 합 (A군 3단계 0.16 / B군 5단계 0.6)',
+      Math.abs(sum3 - expected3) < 1e-9 &&
+        Math.abs(sum3 - 0.16) < 1e-9 &&
+        Math.abs(hullSum - 0.6) < 1e-9 &&
+        hull?.maxLevel === 5,
+      `maxSpeed 3단계=${sum3}, hullIntegrity 5단계=${hullSum}`,
+    );
+
+    check(
+      '[ECON] paramRef 소비 — 기준값 파라미터 경로가 공식 파일에서 그대로 전달된다',
+      maxSpeed?.paramRef === 'movement.maxSpeedMetersPerSecond' &&
+        catalog.find((entry) => entry.id === 'turnRate')?.paramRef === 'movement.turn90Seconds' &&
+        catalog.find((entry) => entry.id === 'reloadSpeed')?.paramRef ===
+          'combat.torpedoReloadSeconds' &&
+        hull?.paramRef === undefined,
+      `maxSpeed=${String(maxSpeed?.paramRef)}, hullIntegrity=${String(hull?.paramRef)}`,
+    );
+
+    // 가격 미확정(null)은 economyDataUnavailable — 임의 값 대입 금지
+    const pending = new UpgradePurchaseSystem(
+      [
+        {
+          id: 'sonarRange',
+          label: '소나 거리',
+          maxLevel: 2,
+          costCredits: [null, null],
+          costRareParts: [null, null],
+          effectBonus: [0.05, 0.05],
+        },
+      ],
+      { credits: 9999, rareParts: 9 },
+    );
+    const denial = pending.evaluateUpgradePurchase('sonarRange');
+    check(
+      '[ECON] 공식 가격 미확정 → economyDataUnavailable (0 변환·임시값 대입 없음)',
+      denial.denial === 'economyDataUnavailable' && pending.nextCost('sonarRange') === null,
+      `denial=${denial.denial}, nextCost=${String(pending.nextCost('sonarRange'))}`,
+    );
+
+    // 조립부 축약 카탈로그 + 비용 resolver 경로 (리드 조립 호환)
+    const viaResolver = new UpgradePurchaseSystem(
+      catalog.map((entry) => ({ id: entry.id, maxLevel: entry.maxLevel, bonusPerLevel: 0.1 })),
+      { credits: 10000, rareParts: 10 },
+      (statId, nextLevel) => {
+        const entry = catalog.find((candidate) => candidate.id === statId);
+        return {
+          credits: entry?.costCredits[nextLevel - 1] ?? Number.POSITIVE_INFINITY,
+          rareParts: entry?.costRareParts[nextLevel - 1] ?? Number.POSITIVE_INFINITY,
+        };
+      },
+    );
+    check(
+      '[ECON] 조립부 비용 resolver 경로도 공식 값만 반환 (provisional 비용 경로 0)',
+      viaResolver.nextCost('maxSpeed')?.credits === 100 &&
+        viaResolver.evaluateUpgradePurchase('maxSpeed').denial === null,
+      `cost=${String(viaResolver.nextCost('maxSpeed')?.credits)}`,
+    );
+  }
+
+  // 48. [ECON] 업그레이드 효과 소비자 조사 — 연결 4종 / deferred consumer 3종
+  {
+    const wired = UPGRADE_EFFECT_CONSUMERS.filter((entry) => entry.status === 'wired');
+    const deferred = DEFERRED_UPGRADE_CONSUMERS;
+    check(
+      '[ECON] 업그레이드 7항목 효과 소비자 조사 — wired 4 / deferred consumer 3 (기준값 발명 없음)',
+      UPGRADE_EFFECT_CONSUMERS.length === 7 &&
+        wired.length === 4 &&
+        deferred.length === 3 &&
+        deferred.includes('hullIntegrity') &&
+        deferred.includes('maxDepth') &&
+        deferred.includes('sonarRange'),
+      `wired=${wired.map((entry) => entry.id).join(',')} / deferred=${deferred.join(',')}`,
+    );
+
+    // 실제 소비 경로 확인 — 유효 params 주입이 조작·재장전에 반영되는가
+    const boosted: typeof params = {
+      ...params,
+      movement: {
+        ...params.movement,
+        maxSpeedMetersPerSecond: {
+          ...params.movement.maxSpeedMetersPerSecond,
+          value: params.movement.maxSpeedMetersPerSecond.value * 1.3,
+        },
+      },
+      combat: {
+        ...params.combat,
+        torpedoReloadSeconds: {
+          ...params.combat.torpedoReloadSeconds,
+          value: params.combat.torpedoReloadSeconds.value / 1.3,
+        },
+      },
+    };
+    const rig = makeCombatRig(boosted);
+    rig.input.throttleForward = true;
+    for (let i = 0; i < 600; i += 1) rig.controller.update(1 / 60);
+    const boostedSpeed = rig.controller.forwardSpeedMetersPerSecond;
+    rig.torpedo.fire();
+    const reload = rig.torpedo.reloadRemainingSeconds;
+    check(
+      '[ECON] maxSpeed·reloadSpeed 소비자 실동작 — 유효 params 주입이 속력·재장전에 반영',
+      Math.abs(boostedSpeed - params.movement.maxSpeedMetersPerSecond.value * 1.3) < 1e-6 &&
+        Math.abs(reload - params.combat.torpedoReloadSeconds.value / 1.3) < 1e-6,
+      `speed=${boostedSpeed.toFixed(3)}, reload=${reload.toFixed(3)}`,
+    );
+
+    // torpedoDamage 소비자 — 장비 프로파일에 합연산 반영
+    const damageRig = makeCombatRig(params);
+    const base = damageRig.equipment.activeTorpedoProfile();
+    damageRig.equipment.setUpgradeModifiers({ torpedoSpeedBonus: 0, torpedoDamageBonus: 0.32 });
+    const boostedProfile = damageRig.equipment.activeTorpedoProfile();
+    check(
+      '[ECON] torpedoDamage 소비자 실동작 — setUpgradeModifiers 합연산이 발사 피해에 반영',
+      base !== null &&
+        boostedProfile !== null &&
+        Math.abs(boostedProfile.damage - base.damage * 1.32) < 1e-9,
+      `base=${base?.damage} → boosted=${boostedProfile?.damage}`,
+    );
+  }
+
+  // 49. [LOOP] 해저 재화 production spawn — spawnId 결합·중복 거부·새 출항 재생성
+  {
+    const rawEconomy = rawParams.economy as {
+      salvageSpawns?: Array<{
+        spawnId: string;
+        kind: string;
+        dropTableId: string;
+        rarePartId: string | null;
+      }>;
+    };
+    const spawns = rawEconomy.salvageSpawns ?? [];
+    // 좌표는 월드·그래픽스 소유 — 검증에서는 플레이어 근처 픽스처 배치를 쓴다
+    const plan: SalvageSpawnPlanEntry[] = spawns.map((spawn, index) => ({
+      spawnId: spawn.spawnId,
+      kind: spawn.kind as 'chest' | 'container' | 'mineral',
+      dropTableId: spawn.dropTableId,
+      credits: testEconomyParams?.dropTables[spawn.dropTableId]?.credits ?? -1,
+      rarePartId: spawn.rarePartId,
+      rarePartCount: spawn.rarePartId === null ? 0 : 1,
+      worldPosition: { x: index * 0.1, y: 10, z: -16 },
+    }));
+
+    const targets = new TargetRegistry();
+    const input = new ScriptedInput();
+    const controller = new SubmarinePlayerController(params.movement, input, {
+      x: 0,
+      y: 10,
+      z: -16,
+      headingRadians: 0,
+    });
+    const economy = new EconomySystem(targets, controller, () => [], testEconomyParams);
+    const outcomes = plan.map((entry) => economy.spawnSalvageFromPlan(entry));
+    const kinds = economy.salvageObjects.map((object) => object.kind).sort();
+    check(
+      '[LOOP] salvage 확정 배치 3종 (chest/container/mineral) — 확률 없음·spawnId 키 결합',
+      plan.length === 3 &&
+        outcomes.every((outcome) => outcome.status === 'spawned') &&
+        kinds.join(',') === 'chest,container,mineral' &&
+        targets.list.length === 3,
+      `spawned=${economy.salvageObjects.length}, kinds=${kinds.join('/')}`,
+    );
+
+    const duplicate = economy.spawnSalvageFromPlan(plan[0] as SalvageSpawnPlanEntry);
+    check(
+      '[LOOP] 같은 출항 중복 spawnId 거부 — 아무것도 생성하지 않는다',
+      duplicate.status === 'duplicateSpawnId' && economy.salvageObjects.length === 3,
+      `status=${duplicate.status}, count=${economy.salvageObjects.length}`,
+    );
+
+    // 전부 파괴·회수 → 보상 합계와 희귀 부품 (경제 params 파생값)
+    for (const object of [...economy.salvageObjects]) object.onTorpedoHit(0, -16, 1);
+    economy.update(1 / 60);
+    const expectedCredits = plan.reduce((sum, entry) => sum + entry.credits, 0);
+    check(
+      '[LOOP] salvage 총 보상 = 경제 params 파생 125 크레딧 + 희귀 부품 1개',
+      economy.wallet.sortieCredits === expectedCredits &&
+        expectedCredits === 125 &&
+        economy.wallet.rareParts.length === 1 &&
+        economy.wallet.rareParts[0] === 'rare-alloy-core',
+      `credits=${economy.wallet.sortieCredits}/${expectedCredits}, parts=${economy.wallet.rareParts.join(',')}`,
+    );
+
+    const afterCollect = economy.spawnSalvageFromPlan(plan[0] as SalvageSpawnPlanEntry);
+    check(
+      '[LOOP] 회수된 salvage는 같은 출항에서 재생성되지 않는다',
+      afterCollect.status === 'duplicateSpawnId' && economy.salvageObjects.length === 0,
+      `status=${afterCollect.status}`,
+    );
+
+    economy.resetForNewSortie();
+    const respawned = plan.map((entry) => economy.spawnSalvageFromPlan(entry));
+    check(
+      '[LOOP] 새 출항 리셋에서만 spawnId 기록이 열린다 — 전체 3개 재생성',
+      economy.spawnedSalvageIds.length === 3 &&
+        respawned.every((outcome) => outcome.status === 'spawned') &&
+        economy.salvageObjects.length === 3,
+      `respawned=${economy.salvageObjects.length}`,
+    );
+
+    const unwired = new EconomySystem(new TargetRegistry(), controller, () => [], null);
+    check(
+      '[LOOP] 경제 params 미주입 = unwired (보상·좌표 발명 없음)',
+      unwired.spawnSalvageFromPlan(plan[0] as SalvageSpawnPlanEntry).status === 'unwired' &&
+        !unwired.economyParamsWired &&
+        unwired.pickupRadiusMeters === 0,
+      `wired=${unwired.economyParamsWired}`,
+    );
+  }
+
+  // 50. [ECON] 경제 런타임 수치 — 공식 값 소비 (손실률 0.5 / 픽업 6m / 화물 120)
+  {
+    const economyParams = testEconomyParams;
+    check(
+      '[ECON] 경제 공식 수치 소비 — 손실률 0.5(6차 결의 7)·픽업 6m·수송선 120·salvage 60/40/25',
+      economyParams !== null &&
+        economyParams.creditLossOnDestroyedRatio === 0.5 &&
+        economyParams.pickupRadiusMeters === 6 &&
+        economyParams.dropTables['cargo-standard']?.credits === 120 &&
+        economyParams.dropTables['salvage-chest']?.credits === 60 &&
+        economyParams.dropTables['salvage-container']?.credits === 40 &&
+        economyParams.dropTables['salvage-mineral']?.credits === 25,
+      `loss=${economyParams?.creditLossOnDestroyedRatio}, pickup=${economyParams?.pickupRadiusMeters}`,
+    );
+
+    const targets = new TargetRegistry();
+    const input = new ScriptedInput();
+    const controller = new SubmarinePlayerController(params.movement, input);
+    const economy = new EconomySystem(targets, controller, () => [], economyParams);
+    economy.wallet.addCredits(200);
+    const settlement = economy.settleDefeat();
+    check(
+      '[ECON] 파괴 정산 손실률이 주입값에서 온다 (게임플레이 상수 0.4 잔재 없음)',
+      economy.creditLossOnDestroyedRatio === 0.5 && settlement.creditsLost === 100,
+      `lost=${settlement.creditsLost} (률 ${economy.creditLossOnDestroyedRatio})`,
+    );
+  }
+
+  // 51. [LOOP] 조립 주입 단일 진입점 — attachOfficialParams
+  {
+    const bus = new EventBus();
+    const systems = new GameplaySystems(bus, params);
+    const beforeWired = systems.officialParamsWired;
+    const official = testOfficialParams();
+    if (official) systems.attachOfficialParams(official);
+    check(
+      '[LOOP] attachOfficialParams 1회 = 경제·화물선·장비 동시 배선 (JSON·로더 직접 접근 0)',
+      !beforeWired &&
+        systems.officialParamsWired &&
+        systems.economy.economyParamsWired &&
+        systems.cargoShip.cargoParamsWired &&
+        systems.equipment.equipmentParamsWired &&
+        systems.equipment.slotCount === 2,
+      `wired ${beforeWired} → ${systems.officialParamsWired}`,
+    );
+    systems.dispose();
   }
 
   return results;
