@@ -12,6 +12,8 @@ import { Renderer } from '../render/Renderer';
 import { CanyonScene } from '../render/CanyonScene';
 import { CameraInputAdapter } from '../render/CameraInputAdapter';
 import { GameplaySystems } from '../systems/GameplaySystems';
+import type { EquipmentId } from '../systems/EquipmentSystem';
+import { OFFICIAL_EQUIPMENT_IDS } from '../systems/economy/officialEconomyCatalog';
 import { UpgradePurchaseSystem } from '../systems/economy/UpgradePurchaseSystem';
 import { PurchaseTransaction } from '../meta/PurchaseTransaction';
 import { EquipmentTransaction } from '../meta/EquipmentTransaction';
@@ -301,6 +303,10 @@ export class Game {
     //    협곡 레이아웃은 장면과 같은 STARTING_CANYON_LAYOUT 단일 인스턴스 주입.
     //    업그레이드 반영 유효 파라미터를 주입한다 — 핫리로드 시에도 같은
     //    파생 규칙을 다시 적용해야 하므로 구독을 감싼다.
+    //    공식 경제·화물선·장비 params는 위에서 1회 로드한 번들을 **생성자 1회
+    //    주입**으로 넘긴다 (INT-CORE-011 단일 진입점 — 시스템이 JSON이나 툴링
+    //    로더를 직접 부르지 않는다. `attachOfficialParams()`는 생성자에서 못
+    //    받은 경우의 대체 경로이며, 여기서 이중 주입하지 않는다).
     const gameplay = new GameplaySystems(
       this.bus,
       effectiveParams,
@@ -309,9 +315,24 @@ export class Game {
           listener(deriveEffectiveParams(reloaded, this.upgrades?.modifiers ?? {})),
         ),
       STARTING_CANYON_LAYOUT,
+      official,
     );
     this.registry.register(gameplay);
     this.gameplay = gameplay;
+
+    // ①-a1 저장 loadout 복원 (부팅 1회 — 저장 책임 표).
+    //     'fresh' = 저장 데이터 자체가 없음 → null을 넘겨 공식 시작 장비를
+    //     부여한다. 저장이 있으면 배열을 그대로 넘긴다 — **빈 배열은 '전부
+    //     해제'라는 명시적 저장**이므로 기본 어뢰를 되돌려 주지 않는다
+    //     (새로고침마다 장비가 되살아나던 문제의 원인). 공식 4종에 없는 id는
+    //     여기서 걸러 낸다 (5번째 장비 금지).
+    gameplay.restoreSavedLoadout(
+      loaded.source === 'fresh'
+        ? null
+        : loaded.data.equippedGear.filter((id): id is EquipmentId =>
+            (OFFICIAL_EQUIPMENT_IDS as readonly string[]).includes(id),
+          ),
+    );
 
     // ①-a2 선수 발사관 소켓 (INT-CORE-008·009 — 스프린트 A 최종 조립 기준).
     //     조준 카메라(그래픽스)와 어뢰 생성(게임플레이)이 **하나의 인스턴스**를
