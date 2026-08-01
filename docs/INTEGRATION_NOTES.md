@@ -90,6 +90,32 @@
 
 ## 제안 목록
 
+### INT-GAME-013 — B5 런타임 연결 완료 + production 배선 2줄 요청 (조립부)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 (창 2 — B5 런타임 연결. B 공식 미발효 선행개발) |
+| 대상 시스템 | `src/core/Game.ts`(조립 배선 **2줄**) — 계약·리드 구현 변경 요청 **없음** |
+| 필요한 변경 | INT-CORE-013의 게임플레이 지침을 전부 이행했다(아래 '적용 완료'). production에서 경비함이 실제로 생성되려면 `Game.composeSystems`에서 두 줄이 필요하다: ① `const surfaceMotionPorts = gameplay.surfaceShipMotionPortFactory;` — 현재 자리에 있는 `{ create: () => null }` 상수를 **그대로 대체**한다(변수명·이후 코드 무변경). ② `guardSpawn.attachLocationStrategy(gameplay.guardSpawnLocation);` — 위치 전략 연결. 선택 ③ `scene.attachShipWorldSource(gameplay.shipWorldSource)`(다중 선박 렌더) · `scene.attachShipIdentificationSource(gameplay.shipIdentification)`(식별 태그) — 그래픽스 소비 API가 준비되면. `gameplay`는 이미 같은 함수 안 상위에서 만들어져 있으므로 순서 문제는 없다 |
+| 브라우저 실측 (배선 전) | dev 서버 production 경로에서 부팅→출항까지 **콘솔 오류 0**. production 경계로 중립 유효 피격을 흘리면 `guardLedger.requestedCount === 1`까지 도달하고 결과는 **`noSpawnLocation`**(위치 전략 미연결). 즉 남은 차단은 위 2줄뿐이며, 게임플레이 쪽 준비는 끝났다 |
+| 변경 이유 | 위 2줄이 없으면 스폰이 `noSpawnLocation`/`spawnFailed`에서 멈춘다. 게임플레이는 임의 좌표·가짜 이동을 만들지 않으므로 조립 배선이 유일한 해소 경로다 |
+| 관련 게이트 | B4(실제 스폰)·B5(범용 AI 재사용)·B2/B1(렌더 소비) |
+| 영향을 받는 파일 | `src/core/Game.ts` 2줄. 게임플레이 측은 완료 |
+| 하위 호환 여부 | 계약 파일 **무수정**. 게임플레이 소유 `CombatTarget`·`GameplaySystems` 기존 소비자 무변경. 검증 213/213·meta 88/88·tooling 26/26·sprint-a 30/30 통과 확인 |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
+
+**게임플레이 적용 완료 (INT-CORE-013 지침 이행):**
+- `SurfaceShipMotionPort` production 구현 + `SurfaceShipMotionPortFactory` 제공 — `gameplay.surfaceShipMotionPortFactory`(`PatrolShipFleet`). **스폰 1건 = 월드 엔티티 1개 = 포트 1개**이며 pose 정본은 `PatrolShipEntity` 하나다(AI는 transform을 저장하지 않는다). 플레이어 pose 재사용·렌더 객체 조작 없음
+- **수치는 전부 임시 상속값**(경비함 전용 공식 튜닝값 아님): 속력·명중 반경·선체 박스 = 공식 `params/cargo.json` / 해수면 = 공유 `CanyonLayout.seaSurfaceY` / 선회 속도 = `params/movement.json` `turn90Seconds` 파생(수상함 선회 공식값이 없어 잠수함 검증값 상속) / 월드 경계 = `CanyonLayout.blocks` 외곽 AABB **+ 공식 항로 끝점**(협곡 벽만으로 잡으면 공식 화물선 항로가 경계 밖이 된다). 공식 params 미주입이면 함대가 스폰을 만들지 않는다(수치 발명 0)
+- 경비함 엔티티: entityId(리드 채번)·faction=patrol·pose·alive·targetable·spawnReason·initialTargetEntityId·incidentPosition·visualArchetype 보유. **spawnPosition을 그대로 초기 위치로** 쓰고 보존한다(그래픽스 등장 연출이 추정 좌표를 만들지 않게). 기존 `TargetRegistry`에 등록(별도 registry 신설 없음), 파괴 시 등록 해제, dispose·새 출항에서 전량 정리, 같은 entityId 재요청 시 추가 생성 0
+- **다중 선박 read source** — `gameplay.shipWorldSource`: hostile cargo·neutral cargo·patrol guard를 한 목록의 **읽기 전용 스냅샷**으로. entityId·faction·pose·alive·targetable·visualArchetype(+B6 highValue/escort 메타). 게임플레이 객체 참조를 넘기지 않으므로 렌더가 상태를 바꿀 수 없다
+- **식별 소스에 patrol 포함** — 세 세력이 한 소스에서 나온다. 미식별 라벨 null·죽은 경비함 `tagDisplayable=false`·entityId는 월드 엔티티와 동일 키
+- B6: 교전 요청을 **경비함과 같은 범용** factory 입력으로 바꾸는 `escortEngagementToAdapterConfig` 제공(호위 전용 AI 0). 이탈 상한 거리는 공식 값이 없어 `bindEscortFromOfficial`이 결속을 만들지 않는다 — **B6 실기동 미완료**(호위함 배치표·거리 공식값 부재)
+- 신규 Guard 전용 AI 파일 **0** (러너 정적 검사로 강제). C 기능(탐지·소나·폭뢰·체력·침수·무기 발사) 참조 0
+
+**추가 요청 (선택):** 개발 모드 `__deepDiveDebug`에 `gameplay` 핸들이 없어 브라우저에서 B1·B2·B5의 게임플레이 상태(선박 목록·식별 뷰·경비함 엔티티)를 직접 관측할 수 없다. `gameplay: gameplay` 한 줄이 추가되면 통합 단계 실측이 쉬워진다.
+
 ### INT-CORE-013 — B5 규칙 개정 (diff-only): 범용 production DestroyerAI 신설 · 경비함은 그것을 재사용
 
 | 필드 | 내용 |
