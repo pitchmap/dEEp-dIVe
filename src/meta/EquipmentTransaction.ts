@@ -25,26 +25,26 @@ export class EquipmentTransaction {
   }
 
   run(request: EquipmentChangeRequest): TransactionResult {
-    // ① 변경 전 loadout 스냅샷
-    const snapshot = this.judge.snapshotLoadout();
+    // ① 변경 전 슬롯 스냅샷 (빈 슬롯 위치 포함 — 롤백 시 완전 원복)
+    const snapshot = this.judge.snapshotSlots();
 
     const rollback = (): void => {
       try {
-        this.judge.restoreLoadout(snapshot);
+        this.judge.restoreSlots(snapshot);
       } catch (restoreError) {
         console.error('[EquipmentTransaction] 롤백 중 오류:', restoreError);
       }
     };
 
     try {
-      // ② 변경 판정 (동일 장비 재장착·슬롯 부족 등 — 게임플레이 판정 결과 사용)
-      const denial = this.judge.evaluateEquipmentChange(request);
+      // ② 판정+적용 (게임플레이 판정 — 불가 시 사유 반환·무변경, INT-CORE-010)
+      const denial = this.judge.applyEquipmentChange(request);
       if (denial !== null) {
         return { status: 'denied', reason: denial };
       }
 
-      // ③ 적용 → ④ 저장 (장착·교체·해제 직후 저장 [13차 결의 4])
-      this.judge.applyEquipmentChange(request);
+      // ③ 저장 (장착·교체·해제 직후 저장 [13차 결의 4] — 이 트랜잭션이
+      //    유일한 저장 지점. 판정 포트·UI는 저장하지 않는다)
       if (!this.savePort.save()) {
         rollback();
         return { status: 'saveFailedRolledBack' };

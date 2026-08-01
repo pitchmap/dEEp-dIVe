@@ -76,6 +76,16 @@ export class MetaLoop implements GameSystem, WalletTransactionPort {
     return { credits: this.walletCredits, rareParts: this.walletRareParts };
   }
 
+  /** 이번 출항에서 획득했지만 아직 정산되지 않은 크레딧 (파괴 시 손실 대상 — UI 표시용) */
+  get sortieCreditsEarned(): number {
+    return this.tallyCredits;
+  }
+
+  /** 이번 출항에서 획득한 희귀 부품 수 (획득 즉시 지갑 확정 — 표시 구분용) */
+  get sortieRarePartsSecured(): number {
+    return this.tallyRareParts;
+  }
+
   initialize(_context: SystemContext): void {
     // 드롭 집계 — 발행은 게임플레이 economy, 집계·확정은 메타 계층 소유
     this.unsubscribes.push(
@@ -159,11 +169,9 @@ export class MetaLoop implements GameSystem, WalletTransactionPort {
    * 기지에서 출항하면 기존 전투 세션이 초기화되는 규칙의 진입점.
    */
   launchSortie(): void {
-    // 출항 확정 직전 저장 [13차 결의 4 — 저장 시점 5종] — 아직 SORTIE_PREP
-    // 상태에서 발행한다 (허용표 밖 상태면 발행 없이 아래 transition이 던진다)
-    if (this.state === 'SORTIE_PREP') {
-      this.bus.emit('saveRequested', { cause: 'sortieLaunch' });
-    }
+    // 출항 확정 직전 저장은 여기서 하지 않는다 [INT-CORE-010 저장 책임
+    // 단일화] — Departure command(조립부)가 SavePort를 직접 호출해 저장
+    // 성공을 확인한 뒤에만 이 메서드를 부른다. 저장 실패 시 전환 없음.
     this.transition('SORTIE');
     this.sortieCount += 1;
     this.tallyCredits = 0;
