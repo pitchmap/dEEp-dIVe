@@ -281,3 +281,51 @@
 1. **A8** — 공식 경제 데이터 부재(null 114). 임의 값 대입·provisional 승격 금지 원칙에 따라 실패 유지. 해소 입력은 기획 경제 수치표 하나뿐이다.
 2. **A4 / A5-ui / A6-ui** — 경제·구매·출항 준비 UI가 composition root에 미배선(그래픽스 산출물은 존재). 배선 시 매니페스트 §7-3의 **이중 저장** 정리가 선행돼야 한다.
 3. **A 통합 PR 미생성·미병합** — B 발효의 유일한 방아쇠(14차 결의 3).
+
+---
+
+## A8 재판정 — 경제 수치 승인 반영 후 (빌드·툴 창)
+
+> 위 '최종 판정'의 B_BLOCKERS 1번(**A8 — 공식 경제 데이터 부재**)에 대한 후속
+> 기록이다. 해소 입력으로 지목된 '기획 경제 수치표'가 사용자 승인으로 도착했다.
+> A4·A5-ui·A6-ui(2번)와 통합 PR(3번)은 이 창의 소유가 아니므로 손대지 않았다.
+
+### 해소된 것
+
+| 항목 | 이전 | 현재 |
+|---|---|---|
+| `params/upgrades.json` 미확정 필드 | 105 | **0** |
+| `params/equipment.json` 미확정 필드 | 9 | **0** |
+| 경제 params 파일 | 없음 | `economy.json`·`cargo.json` **신설** |
+| `verify:sprint-a` 자동 항목 | 24 | **29/29 통과** |
+
+승인 수치는 임의 생성이 아니라 사용자 승인분이며, `performance`·화물선 수치 등
+비경제 값은 기존 provisional 런타임 값을 **그대로** 이관했다(밸런스 변경 아님).
+유일한 값 변경은 D5 승인에 따른 파괴 손실률 통일 0.4 → **0.5**다.
+
+### 신설된 회귀 차단 검증
+
+| ID | 내용 |
+|---|---|
+| `A8-null0` | 승인 이후 미확정(null) 재등장 차단 |
+| `A8-approved` | 가격 `[100,160,240,340,460]`·희귀 `[0,0,0,1,2]`·A군 누적 5/10/16/22/30%·B군 10/20/32/44/60% 대조 |
+| `A8-equipmentRules` | 슬롯 용량 2 · `standardTorpedo` 시작 보유·가격 0 · 희귀 부품 정수 |
+| `A8-income` | 출항 최대 수입 245(수송선 120 + 해저 125)·희귀 1, 손실률 0.5, 보스 준비 1200크레딧 → **4.9회**가 목표 4~6회 안인지 |
+| `A8-migration-params` | params 측 이관 완료 여부 (자동) |
+| `A8-migration-consumers` | production provisional import 잔여 목록 (수동 구역 — 소유 역할 밖) |
+
+### 남은 A8 항목 — 툴링 소유 밖
+
+1. **소비 측 배선 5건** — production이 아직 provisional 모듈을 import한다.
+   `src/core/Game.ts:26`·`src/meta/provisionalEconomy.ts`(리드),
+   `CargoShipSystem.ts:37`·`EquipmentSystem.ts:34`·`economy/EconomySystem.ts:27`·
+   `economy/UpgradePurchaseSystem.ts:30`(게임플레이).
+   `loadEconomyParams()`(`src/tools/economyParams.ts`) 소비로 교체하면 되고,
+   값이 동일해 동작 변화가 없다(손실률만 D5 승인 반영). 상세: INT-TOOL-009 요청 ①.
+2. **해저 재화 좌표 미연결** — `salvageSpawns`는 `spawnId`·보상만 정의하고
+   좌표는 월드·그래픽스 소유다. `spawnSalvage`가 production에서 호출되지 않는 한
+   실측 수입은 수송선 120뿐이고 A8-income의 전제(245)가 실제로 성립하지 않는다.
+   **이 항목은 수치 문제가 아니라 배치 문제다.** 상세: INT-TOOL-009 요청 ②.
+
+따라서 이 창 기준 A8은 **params 영역 통과 / 소비 배선 대기**다. A8 전체를
+✅로 올릴 권한은 통합 관리자에게 있으며, 위 2건이 해소돼야 한다.
