@@ -22,6 +22,7 @@
 
 import type { DestroyerAI } from '../contracts/systems';
 import type {
+  GuardSpawnLocation,
   DestroyerAIFactory,
   GuardShipAdapterConfig,
   GuardSpawnReason,
@@ -36,6 +37,12 @@ export interface GuardShipHandle {
   readonly spawnReason: GuardSpawnReason;
   readonly initialTargetEntityId: number;
   readonly displayLabelId: string;
+  /**
+   * 실제 스폰 위치 — 위치 전략이 결정한 값 그대로. 렌더의 등장 방향 표시가
+   * **실재하는 경비함**을 가리키기 위해 필요하다(추정 좌표 금지).
+   * [INT-RENDER-011 요청 반영 — 리드 확인 대기]
+   */
+  readonly spawnPosition: GuardSpawnLocation;
   /** 기존 구축함 AI 인스턴스 — 어댑터는 이 객체의 판단에 개입하지 않는다 */
   readonly ai: DestroyerAI;
 }
@@ -103,6 +110,7 @@ export class GuardShipAdapter implements GameSystem {
       spawnReason: config.spawnReason,
       initialTargetEntityId: config.initialTargetEntityId,
       displayLabelId: config.displayLabelId,
+      spawnPosition: config.spawnPosition,
       ai,
     };
     this.ships.push(handle);

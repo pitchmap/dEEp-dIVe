@@ -151,11 +151,16 @@ try {
     const allowed = new Set([
       'src/core/GuardShipAdapter.ts', // 어댑터 (주입·수명주기만)
       'src/contracts/guard.ts', // 계약
+      // 렌더 오버레이 — 스폰 결과 read model을 화면 방향으로만 매핑한다.
+      // AI·판정·스폰 실행 없음(아래 AI 어휘 검사에도 함께 걸린다).
+      // [그래픽스 추가 — INT-RENDER-011 리드 확인 요청]
+      'src/render/GuardDirectionIndicator.ts',
     ]);
     const guardFiles = sourceFiles.filter((file) => /guard/i.test(path.basename(file)));
     const unexpected = guardFiles.filter((file) => !allowed.has(file));
-    // 어댑터 안에 AI 판단 어휘가 없어야 한다 (기존 AI 위임만).
-    const adapter = read('src/core/GuardShipAdapter.ts');
+    // 어댑터·렌더 오버레이 안에 AI 판단 어휘가 없어야 한다 (기존 AI 위임만).
+    const adapter =
+      read('src/core/GuardShipAdapter.ts') + read('src/render/GuardDirectionIndicator.ts');
     const aiLogicMarkers = ['pursue', 'chase', 'searchPattern', 'attackRun', 'depthCharge', 'detectionGauge'];
     const leaked = aiLogicMarkers.filter((marker) => adapter.includes(marker));
     results.push({

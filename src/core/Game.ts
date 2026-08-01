@@ -407,6 +407,31 @@ export class Game {
     this.guardAdapter = guardAdapter;
     const guardSpawn = new GuardSpawnCoordinator(guardLedger, guardAdapter, null);
     this.guardSpawn = guardSpawn;
+    //     경비함 등장 방향 표시(B5) — **실제 스폰 결과만** 렌더에 넘긴다.
+    //     스폰이 차단된 동안(위치 전략·AI 팩토리 미연결) 목록은 비어 있고
+    //     마커도 뜨지 않는다: 존재하지 않는 경비함을 가리키지 않는다.
+    const guardSightings: Array<{
+      requestId: string;
+      worldPosition: { x: number; y: number; z: number };
+    }> = [];
+    guardSpawn.attachSpawnListener((handle) => {
+      guardSightings.push({
+        requestId: handle.requestId,
+        // 실제 스폰 좌표 그대로 — 렌더가 위치를 추정하지 않는다.
+        // 경비함은 수상 전투함이므로 표시 높이는 해수면 기준이다.
+        worldPosition: {
+          x: handle.spawnPosition.x,
+          y: STARTING_CANYON_LAYOUT.seaSurfaceY,
+          z: handle.spawnPosition.z,
+        },
+      });
+    });
+    scene.attachGuardSightingSource({
+      get sightings() {
+        return guardSightings;
+      },
+    });
+
     this.registry.register(new NeutralIncidentBoundary(guardLedger));
     this.registry.register(new GuardSpawnBridge(guardSpawn));
     // ③ AI 그룹 — 스폰된 기존 구축함 AI들의 수명주기 전달만 담당한다.
