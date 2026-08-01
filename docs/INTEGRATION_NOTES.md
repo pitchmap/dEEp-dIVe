@@ -90,6 +90,20 @@
 
 ## 제안 목록
 
+### INT-CORE-008 — 스프린트 A 선행 계약: 발사관 소켓·미세 조준·구매/장비 트랜잭션·저장 시점
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (14차 소회의 창 1 — 계약 생산자. 근거: 7차 대회의 결의 1~9 + 13차 소회의 결의 2·3·4·7·8·9) |
+| 대상 시스템 | `src/contracts/systems.ts`(AimSystem 개정 + FineAimSource·SocketPose·TorpedoTubeSocketSource), `src/contracts/params.ts`(AimingParams), `src/contracts/meta.ts`(PurchaseDenialReason 5종·TransactionResult·판정/지갑/단계/저장 포트·EquipmentChangeRequest·BaseScreenPort), `src/contracts/events.ts`(saveRequested cause + sortieLaunch), `src/core/conventions.ts`(clampAimYaw/PitchRadians·aimForwardDirection) |
+| 필요한 변경 | ① **폐기 규칙 제거**: AimSystem 계약에서 '잠망경 심도 전용' 문구 삭제 — 전 심도 조준·심도 불변·해제 시 미세각 reset으로 개정 (재도입 금지 명문화) ② 소켓 2구조: torpedoTubeAnchor → aimCameraSocket(정위치)·torpedoSpawnSocket(+고정 안전 오프셋, 정의 단일 지점) — 동일 좌표계·동일 전방축, 십자선=탄도, 시스템별 오프셋 계산 금지, Three.js 비노출 ③ 미세 조준: AimingParams 4종(양수 크기 규칙, aimReturnBehavior 없음) + 공용 클램프·전방 벡터 함수(카메라·조준·테스트 동일 함수) ④ 구매 불가 5종·트랜잭션 결과 3종(저장 실패는 별도 status — 내부 예외 UI 비노출) ⑤ 원자적 구매·장비 트랜잭션 포트(스냅샷→재검증→차감→적용→저장→commit/rollback — 틀=리드/내용=게임플레이) ⑥ 저장 시점 5종: 이벤트 3(settlement·rarePart·**sortieLaunch 신설**) + 트랜잭션 직접 저장 2(구매·장비 — 중복 이벤트 금지) ⑦ 기지 화면 BaseScreenPort(UI의 유일 진입점) |
+| 변경 이유 | 스프린트 A 4개 창(게임플레이 조준·판정 / 그래픽스 조준 카메라·UI / 툴링 aiming.json·저장 테스트)이 전부 이 계약의 소비자 — 선행 확정 없이는 각 창이 임시 인터페이스·개별 오프셋을 만들게 됨 (7차 결의 1-① 금지 조항) |
+| 관련 게이트 | A1~A8 전부 (특히 A3 십자선=탄도, A5 트랜잭션, A7 저장 유지) |
+| 영향을 받는 파일 | 계약 4파일 + conventions + INTERFACES.md. 소비: 게임플레이(조준 재작성·판정 포트 구현), 그래픽스(소켓 소비 카메라·UI), 툴링(aiming.json+validator+GameParams.aiming 편입·SavePort 어댑터·A5-T 테스트) |
+| 하위 호환 여부 | 기존 코드 무변경(추가+doc 개정만) — AimSystem 시그니처 불변이라 PeriscopeAimSystem 컴파일 유지(동작 개정은 게임플레이 창 몫). AimingParams는 GameParams 미편입 상태로 선행(편입은 툴링 창이 json·validator와 동시에) |
+| 개발 리드 결정 | 승인 — 창 1 소유 범위. 소켓 rig 구현·트랜잭션 오케스트레이터는 후속 커밋(INT-CORE-009) |
+| 적용 커밋 | (본 브랜치 선행 계약 커밋) |
+
 ### INT-TOOL-007 — [LOOP][ECON] PvE 툴링 배선 요청: 저장 시점·경제/기지 이벤트 계약·병행 키 E·보스 오디오
 
 | 필드 | 내용 |

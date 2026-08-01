@@ -83,28 +83,83 @@ export interface DetectionSystem extends Updatable {
 }
 
 /**
- * 조준 — 마우스와 PC 화면(HUD) 조준·발사 버튼의 **공용 진입점** (§5.8).
+ * 조준 — 마우스와 PC 화면(HUD) 조준·발사 버튼의 **공용 진입점**.
  *
- * 확정 규칙 (D+5 리뷰 후속 소회의, INT-CORE-002):
- *  - 별도 전투 시스템을 만들지 않는다 — 입력 소스(마우스 우클릭·HUD 버튼)가
+ * 확정 규칙 (INT-CORE-002 + 7차 대회의 결의 1 개정):
+ *  - 별도 전투 시스템을 만들지 않는다 — 입력 소스(마우스 우클릭 토글·HUD 버튼)가
  *    무엇이든 전부 이 하나의 AimSystem 메서드를 호출한다.
  *  - 입력 어댑터와 이 시스템의 연결은 composition root(core/Game.composeSystems)
  *    에서만 잇는다 — UI·입력 코드가 게임플레이 구현체를 직접 import하지 않는다.
- *  - 조준 뷰 카메라 고정(§3.2)은 렌더가 aimModeChanged 이벤트 구독으로 처리한다.
- * 구현은 게임플레이 소유(D6 이후). 수동 조준 + 리드샷 보조선이 기본 [확정].
+ *  - **조준은 전 심도에서 가능하며, 조준이 잠수함의 심도·위치를 바꾸지 않는다**
+ *    [7차 결의 1 — 구 '잠망경 심도 전용·자동 부상' 규칙은 폐기, 재도입 금지].
+ *  - 조준 뷰 카메라(선수 발사관 시점)는 렌더가 aimModeChanged 구독 +
+ *    TorpedoTubeSocketSource 소비로 처리한다.
+ * 구현은 게임플레이 소유. 수동 조준 + 리드샷 보조선이 기본 [확정].
  */
 export interface AimSystem extends Updatable {
   /** 조준 뷰 활성 여부 (읽기 전용 상태) */
   readonly aiming: boolean;
-  /** 조준 시작. 잠망경 심도가 아니면 거부하고 false (§3.4 — 조준은 잠망경 심도만) */
+  /** 조준 시작 — 심도 조건 없음(전 심도 허용). 이미 조준 중이면 true */
   beginAim(): boolean;
-  /** 조준 종료 — 발사 없이 해제하는 경우 포함 */
+  /** 조준 종료 — 발사 없이 해제 포함. 해제 시 미세 조준각은 0으로 초기화한다
+   *  [13차 결의 9 — reset 단일 동작, persist·aimReturnBehavior 없음] */
   endAim(): void;
   /**
    * 발사 요청. 조준 중이 아니거나 TorpedoSystem이 거부(잔량 0·재장전 중)하면
    * false. 성공 시 torpedoFired 이벤트 발행은 TorpedoSystem 책임이다.
    */
   fireTorpedo(): boolean;
+}
+
+/**
+ * 미세 조준각 읽기 전용 소스 (13차 결의 3·8·9) — AimSystem 구현체(게임플레이)가
+ * 함께 구현한다. TorpedoTubeSocketRig가 소비해 소켓 전방축을 만든다.
+ *
+ *  - **잠수함 로컬 좌표 기준** 상대각 — 선체가 A/D로 돌면 조준선도 함께 돈다.
+ *  - 부호: yaw + = 좌(선체 heading과 동일 규약) / pitch + = 상향(+Y).
+ *  - 클램프는 conventions.clampAimYawRadians/clampAimPitchRadians **동일 함수**
+ *    사용 — 카메라·조준·테스트가 각자 제한 계산을 만들지 않는다.
+ *  - 비조준 상태·조준 해제 직후에는 둘 다 0 (reset 계약).
+ */
+export interface FineAimSource {
+  readonly aimYawRadians: number;
+  readonly aimPitchRadians: number;
+}
+
+/**
+ * 발사관 소켓 포즈 — 프레임 갱신 후 유효한 월드 기준 위치 + 전방 단위 벡터.
+ * Three.js 객체를 노출하지 않는다 — 렌더는 이 값으로 자체 벡터를 구성한다.
+ */
+export interface SocketPose {
+  readonly positionX: number;
+  readonly positionY: number;
+  readonly positionZ: number;
+  /** 전방 단위 벡터 (조준 미세각 반영) */
+  readonly forwardX: number;
+  readonly forwardY: number;
+  readonly forwardZ: number;
+}
+
+/**
+ * 선수 발사관 소켓 — 단일 진실 공급원 (7차 결의 1-①·② + 13차 결의 2).
+ *
+ *  torpedoTubeAnchor (모델 정의 단일 소스 — src/world/torpedoTubeAnchor.ts)
+ *   ├─ aimCameraSocket    앵커 정위치 · 동일 전방축
+ *   └─ torpedoSpawnSocket 동일 전방축 + 고정 전방 안전 오프셋
+ *
+ * 규칙 [확정 — 금지 조항 포함]:
+ *  - 두 소켓은 동일한 잠수함 로컬 좌표계·동일 전방축(선수, conventions
+ *    LOCAL_BOW 규약)을 공유한다. **어뢰 초기 진행 방향 = 조준 카메라 시선
+ *    방향** (십자선 = 탄도).
+ *  - 근접 클리핑·자기 충돌 방지용 안전 오프셋은 **torpedoSpawnSocket 정의
+ *    한 곳에만** 존재한다. 카메라 시스템·어뢰 시스템이 각자 숫자 오프셋을
+ *    계산하는 것 금지 — 소켓을 읽기만 한다.
+ *  - 그래픽스(조준 카메라)와 게임플레이(어뢰 생성)가 같은 읽기 전용
+ *    인스턴스를 composition root에서 주입받아 소비한다.
+ */
+export interface TorpedoTubeSocketSource {
+  readonly aimCameraSocket: SocketPose;
+  readonly torpedoSpawnSocket: SocketPose;
 }
 
 /** 어뢰 — 수동 조준 + 리드샷 보조선이 기본 (§5.8). 수치는 params/combat.json */
