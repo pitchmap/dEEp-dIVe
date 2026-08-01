@@ -159,11 +159,9 @@ export class MetaLoop implements GameSystem, WalletTransactionPort {
    * 기지에서 출항하면 기존 전투 세션이 초기화되는 규칙의 진입점.
    */
   launchSortie(): void {
-    // 출항 확정 직전 저장 [13차 결의 4 — 저장 시점 5종] — 아직 SORTIE_PREP
-    // 상태에서 발행한다 (허용표 밖 상태면 발행 없이 아래 transition이 던진다)
-    if (this.state === 'SORTIE_PREP') {
-      this.bus.emit('saveRequested', { cause: 'sortieLaunch' });
-    }
+    // 출항 확정 직전 저장은 여기서 하지 않는다 [INT-CORE-010 저장 책임
+    // 단일화] — Departure command(조립부)가 SavePort를 직접 호출해 저장
+    // 성공을 확인한 뒤에만 이 메서드를 부른다. 저장 실패 시 전환 없음.
     this.transition('SORTIE');
     this.sortieCount += 1;
     this.tallyCredits = 0;

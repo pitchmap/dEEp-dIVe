@@ -12,7 +12,7 @@ import type {
   CurrencyBundle,
   EquipmentChangeJudgePort,
   EquipmentChangeRequest,
-  EquipmentLoadout,
+  EquipmentId,
   PurchaseCost,
   PurchaseDenialReason,
   SavePort,
@@ -422,40 +422,42 @@ export function runMetaVerification(): VerificationResult[] {
 
   // ── 스프린트 A: 장비 변경 트랜잭션 ──
   const makeLoadoutJudge = (
-    initial: readonly ('standardTorpedo' | 'fastTorpedo' | 'heavyTorpedo' | 'decoy')[],
+    initial: readonly ('standardTorpedo' | 'fastTorpedo' | 'heavyTorpedo' | 'decoy' | null)[],
     denial: PurchaseDenialReason | null = null,
-  ): EquipmentChangeJudgePort & { current: EquipmentLoadout } => {
-    const state = { equipped: [...initial] };
+  ): EquipmentChangeJudgePort & { current: readonly (EquipmentId | null)[] } => {
+    const state = { slots: [...initial] as (EquipmentId | null)[] };
     return {
-      get current(): EquipmentLoadout {
-        return { slotCapacity: 2, equipped: [...state.equipped] };
+      get current(): readonly (EquipmentId | null)[] {
+        return state.slots;
       },
-      evaluateEquipmentChange: () => denial,
+      // 판정+적용 결합 (INT-CORE-010) — 불가 시 사유 반환·무변경
       applyEquipmentChange: (request: EquipmentChangeRequest) => {
-        if (request.kind === 'unequip') state.equipped.splice(request.slotIndex, 1);
-        else state.equipped[request.slotIndex] = request.equipmentId;
+        if (denial) return denial;
+        if (request.kind === 'unequip') state.slots[request.slotIndex] = null;
+        else state.slots[request.slotIndex] = request.equipmentId;
+        return null;
       },
-      snapshotLoadout: (): EquipmentLoadout => ({ slotCapacity: 2, equipped: [...state.equipped] }),
-      restoreLoadout: (loadout: EquipmentLoadout) => {
-        state.equipped = [...loadout.equipped] as typeof state.equipped;
+      snapshotSlots: (): readonly (EquipmentId | null)[] => [...state.slots],
+      restoreSlots: (slots: readonly (EquipmentId | null)[]) => {
+        state.slots = [...slots];
       },
     };
   };
   {
-    const judge = makeLoadoutJudge(['standardTorpedo']);
+    const judge = makeLoadoutJudge(['standardTorpedo', null]);
     const save = flakySave(1);
     const tx = new EquipmentTransaction(judge, save);
     const result = tx.run({ kind: 'replace', slotIndex: 0, equipmentId: 'heavyTorpedo' });
     check(
-      '장비: 저장 실패 시 이전 loadout 복원',
-      result.status === 'saveFailedRolledBack' && judge.current.equipped[0] === 'standardTorpedo',
-      `result=${result.status}, slot0=${judge.current.equipped[0]}`,
+      '장비: 저장 실패 시 이전 loadout 복원 (빈 슬롯 위치 포함)',
+      result.status === 'saveFailedRolledBack' && judge.current[0] === 'standardTorpedo' && judge.current[1] === null,
+      `result=${result.status}, slots=${JSON.stringify(judge.current)}`,
     );
     const retry = tx.run({ kind: 'replace', slotIndex: 0, equipmentId: 'heavyTorpedo' });
     check(
       '장비: 실패 후 재시도 — 저장 성공 시 교체 확정',
-      retry.status === 'success' && judge.current.equipped[0] === 'heavyTorpedo',
-      `retry=${retry.status}, slot0=${judge.current.equipped[0]}`,
+      retry.status === 'success' && judge.current[0] === 'heavyTorpedo',
+      `retry=${retry.status}, slots=${JSON.stringify(judge.current)}`,
     );
   }
   {
@@ -464,8 +466,8 @@ export function runMetaVerification(): VerificationResult[] {
     const tx = new EquipmentTransaction(judge, save);
     const result = tx.run({ kind: 'equip', slotIndex: 1, equipmentId: 'decoy' });
     check(
-      '장비: 판정 거부(이미 장착) 시 무변경·저장 미호출',
-      result.status === 'denied' && result.reason === 'alreadyEquipped' && save.calls === 0 && judge.current.equipped.length === 2,
+      '장비: 판정 거부(이미 장착) 시 무변경·저장 0회',
+      result.status === 'denied' && result.reason === 'alreadyEquipped' && save.calls === 0 && judge.current[1] === 'decoy',
       `result=${JSON.stringify(result)}`,
     );
   }
@@ -556,9 +558,9 @@ export function runMetaVerification(): VerificationResult[] {
       `spentAtSea=${spentAtSea}`,
     );
     check(
-      '저장 시점: 출항 확정 직전 saveRequested(sortieLaunch) 발행',
-      events.includes('save:sortieLaunch'),
-      `events=${events.filter((e) => e.startsWith('save')).join(',')}`,
+      '저장 책임: launchSortie는 saveRequested를 발행하지 않음 (출항 저장은 Departure command 소유 — INT-CORE-010)',
+      !events.some((e) => e.startsWith('save:')),
+      `save events=${events.filter((e) => e.startsWith('save')).join(',') || '없음'}`,
     );
   }
 
