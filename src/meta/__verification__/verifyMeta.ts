@@ -45,6 +45,8 @@ import {
 import type { SalvagePlacementSource } from '../../contracts/officialParams';
 import { GuardShipAdapter } from '../../core/GuardShipAdapter';
 import type { GuardShipHandle } from '../../core/GuardShipAdapter';
+import { DestroyerAIController } from '../../core/DestroyerAIController';
+import { createProductionDestroyerAIFactory } from '../../core/destroyerAiFactory';
 import { FACTION_RULES, rewardDropTableIdFor } from '../../contracts/faction';
 import type { FactionId } from '../../contracts/faction';
 import { PLAYER_ENTITY_ID } from '../../contracts/guard';
@@ -54,6 +56,7 @@ import type {
   GuardShipAdapterConfig,
   GuardShipRequestPayload,
   NeutralShipHitPayload,
+  SurfaceShipMotionPort,
 } from '../../contracts/guard';
 import type {
   IdentificationLogSink,
@@ -1265,6 +1268,181 @@ export function runMetaVerification(): VerificationResult[] {
       const collected: IdentificationOpportunityLog[] = [];
       const sink: IdentificationLogSink = { record: (entry) => collected.push(entry) };
       sink.record(log);
+    // ── B5 개정: 범용 production DestroyerAI (INT-CORE-013) ──
+    {
+      interface MotionLog {
+        turns: Array<{ x: number; z: number }>;
+        moves: number;
+        surfaceCalls: number;
+      }
+      const buildMotion = (
+        options: {
+          targetAlive?: boolean;
+          targetPosition?: { x: number; z: number } | null;
+          withinBounds?: boolean;
+        } = {},
+      ): { port: SurfaceShipMotionPort; log: MotionLog } => {
+        const log: MotionLog = { turns: [], moves: 0, surfaceCalls: 0 };
+        const port: SurfaceShipMotionPort = {
+          getPosition: () => ({ x: 0, y: 0, z: 0 }),
+          getForward: () => ({ x: 0, z: -1 }),
+          turnToward: (x, z) => log.turns.push({ x, z }),
+          moveForward: () => {
+            log.moves += 1;
+          },
+          maintainSurfaceHeight: () => {
+            log.surfaceCalls += 1;
+          },
+          isWithinWorldBounds: () => options.withinBounds !== false,
+          isTargetAlive: () => options.targetAlive !== false,
+          getTargetPosition: () =>
+            options.targetPosition === undefined ? { x: 50, z: 60 } : options.targetPosition,
+        };
+        return { port, log };
+      };
+
+      {
+        const { port, log } = buildMotion();
+        const factory = createProductionDestroyerAIFactory({ create: () => port });
+        const config: GuardShipAdapterConfig = {
+          entityId: 8000,
+          faction: 'patrol',
+          spawnReason: 'neutralAttack',
+          initialTargetEntityId: PLAYER_ENTITY_ID,
+          initialTargetPosition: { x: 3, z: -4 },
+          spawnPosition: { x: 23, z: -4 },
+          displayLabelId: 'faction.patrol',
+        };
+        const ai = factory.create(config);
+        const controller = ai as DestroyerAIController | null;
+        check(
+          'B5 factory: production 구현체(DestroyerAIController) 생성 · 세력·초기 표적·마지막 확인 위치 전달',
+          controller instanceof DestroyerAIController &&
+            controller.faction === 'patrol' &&
+            controller.entityId === 8000 &&
+            controller.currentTargetEntityId === PLAYER_ENTITY_ID &&
+            controller.lastKnownPosition.x === 3 &&
+            controller.lastKnownPosition.z === -4 &&
+            controller.state === 'alert',
+          `faction=${controller?.faction}, target=${controller?.currentTargetEntityId}, lastKnown=${JSON.stringify(controller?.lastKnownPosition)}`,
+        );
+        controller?.update(0.016);
+        check(
+          'B5 이동: update 시 표적 방향 선회·전진 명령 + 수면 고도 유지',
+          log.turns.length === 1 &&
+            log.turns[0]?.x === 50 &&
+            log.turns[0].z === 60 &&
+            log.moves === 1 &&
+            log.surfaceCalls === 1 &&
+            controller?.state === 'attack',
+          `turns=${JSON.stringify(log.turns)}, moves=${log.moves}, surface=${log.surfaceCalls}`,
+        );
+      }
+      {
+        // 표적 무효 + 마지막 확인 위치 있음 → 그 지점으로 접근 (alert)
+        const { port, log } = buildMotion({ targetAlive: false });
+        const ai = createProductionDestroyerAIFactory({ create: () => port }).create({
+          entityId: 8001,
+          faction: 'patrol',
+          spawnReason: 'neutralAttack',
+          initialTargetEntityId: PLAYER_ENTITY_ID,
+          initialTargetPosition: { x: 7, z: 8 },
+          spawnPosition: { x: 0, z: 0 },
+          displayLabelId: 'faction.patrol',
+        }) as DestroyerAIController;
+        ai.update(0.016);
+        check(
+          'B5 표적 무효: 마지막 확인 위치로 접근 (alert) — 폭주·예외 없음',
+          ai.state === 'alert' && log.turns[0]?.x === 7 && log.moves === 1,
+          `state=${ai.state}, turn=${JSON.stringify(log.turns[0])}`,
+        );
+        // 마지막 확인 위치까지 잃으면 안전한 정지(idle)
+        ai.dispose();
+        const disposedMoves = log.moves;
+        ai.update(0.016);
+        check(
+          'B5 표적·마지막 위치 모두 무효: 안전한 정지 (lost·이동 명령 없음)',
+          ai.state === 'lost' && log.moves === disposedMoves,
+          `state=${ai.state}, moves=${log.moves}`,
+        );
+      }
+      {
+        // 월드 경계 밖으로 나가려 하면 전진하지 않는다 (선회·고도 유지는 계속)
+        const { port, log } = buildMotion({ withinBounds: false });
+        const ai = createProductionDestroyerAIFactory({ create: () => port }).create({
+          entityId: 8002,
+          faction: 'patrol',
+          spawnReason: 'neutralAttack',
+          initialTargetEntityId: PLAYER_ENTITY_ID,
+          initialTargetPosition: { x: 1, z: 1 },
+          spawnPosition: { x: 0, z: 0 },
+          displayLabelId: 'faction.patrol',
+        }) as DestroyerAIController;
+        ai.update(0.016);
+        check(
+          'B5 경계: 월드 경계 이탈 예정이면 전진하지 않음 (수면 유지는 계속)',
+          log.moves === 0 && log.surfaceCalls === 1 && log.turns.length === 1,
+          `moves=${log.moves}, surface=${log.surfaceCalls}`,
+        );
+      }
+      {
+        // 이동 포트를 만들 수 없으면 factory는 null → 어댑터 스폰 실패
+        const factory = createProductionDestroyerAIFactory({ create: () => null });
+        const adapter = new GuardShipAdapter(factory);
+        const handle = adapter.spawn('req-x', {
+          entityId: 8003,
+          faction: 'patrol',
+          spawnReason: 'neutralAttack',
+          initialTargetEntityId: PLAYER_ENTITY_ID,
+          initialTargetPosition: { x: 0, z: 0 },
+          spawnPosition: { x: 5, z: 5 },
+          displayLabelId: 'faction.patrol',
+        });
+        check(
+          'B5 factory: 이동 포트 미연결 = null 반환 → 스폰 없음 (가짜 이동 생성 금지)',
+          handle === null && adapter.spawnedShips.length === 0,
+          `handle=${handle === null ? 'null' : 'created'}`,
+        );
+      }
+      {
+        // production 체인: 경비함이 범용 AI로 생성되고 handle이 스폰 좌표를 보존
+        const bus = new EventBus();
+        const ledger = new GuardIncidentLedger();
+        const { port } = buildMotion();
+        const adapter = new GuardShipAdapter(
+          createProductionDestroyerAIFactory({ create: () => port }),
+        );
+        const coordinator = new GuardSpawnCoordinator(ledger, adapter, {
+          resolve: (request) => ({ x: request.incidentPosition.x + 20, z: request.incidentPosition.z }),
+        });
+        const handles: GuardShipHandle[] = [];
+        coordinator.attachSpawnListener((handle) => handles.push(handle));
+        const bridge = new GuardSpawnBridge(coordinator);
+        new NeutralIncidentBoundary(ledger).initialize(verificationContext(bus));
+        bridge.initialize(verificationContext(bus));
+
+        bus.emit('neutralShipHit', neutralHit({ attackCorrelationId: 'atk-b5' }));
+        bus.emit('neutralShipHit', neutralHit({ attackCorrelationId: 'atk-b5' }));
+        const handle = handles[0];
+        check(
+          'B5 production 체인: 중립 피격 → 요청 → 범용 AI 경비함 1척 (동일 requestId 중복 생성 없음)',
+          bridge.lastOutcome === 'spawned' &&
+            handles.length === 1 &&
+            handle?.ai instanceof DestroyerAIController &&
+            handle.faction === 'patrol' &&
+            handle.initialTargetEntityId === PLAYER_ENTITY_ID,
+          `outcome=${bridge.lastOutcome}, spawned=${handles.length}, ai=${handle?.ai.constructor.name}`,
+        );
+        check(
+          'B5 handle: entityId 부여 + 스폰 좌표 보존 (렌더 마커가 실재 위치를 받음)',
+          handle?.entityId === 8000 &&
+            handle.spawnPosition.x === 23 &&
+            handle.spawnPosition.z === -4,
+          `entityId=${handle?.entityId}, spawnPosition=${JSON.stringify(handle?.spawnPosition)}`,
+        );
+      }
+    }
+
       check(
         'B7 로깅: 기록 8항목 + 결과 분류 계약 (집계·판정은 툴링)',
         collected.length === 1 &&
