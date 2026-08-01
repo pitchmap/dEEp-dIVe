@@ -54,6 +54,7 @@ prompts/      역할별 Claude Code 프롬프트
 
 ## 주요 문서
 
+- **[개발 현황 요약 — 어디까지 왔고 다음은 무엇인가](docs/PROJECT_STATE.md)** ← 새로 합류하면 여기부터
 - [마스터 플랜 (유일한 최상위 기준)](docs/deep_dive_master_plan.md)
 - [아키텍처](docs/ARCHITECTURE.md) · [인터페이스 계약표](docs/INTERFACES.md)
 - [파일 소유권](docs/FILE_OWNERSHIP.md) · [현재 상태](docs/CURRENT_STATUS.md)
