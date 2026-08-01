@@ -108,10 +108,13 @@
     - **선행 계약 (INT-CORE-006, 커밋 `dcc6f7d`)** — `contracts/meta.ts`(Faction·재화 이원화·MetaState·SortieOutcome/Report/Settlement·SortieSessionPort·UpgradeStatId 7항목 상한·EquipmentId 4종 상한·BossPhase) + 이벤트 9종(metaStateChanged·sortieStarted/Ended·returnToBaseRequested·lootDropped·guardShipRequested·saveRequested·bossPhaseChanged·bossWeakPointChanged) + CargoShipStateSource.faction(선택→추후 필수)
     - **[LOOP] 상위 메타 루프·업그레이드 배율 레이어 (INT-CORE-007)** — `src/meta/` 신규: MetaLoop(BASE→SORTIE_PREP→SORTIE→DEBRIEF, 하위 무수정 포장·통신 3종 제한), settlement(파괴 시 크레딧 손실·희귀 즉시 확정), upgradeMath(합연산 순수 함수 — params 불변, 툴 공용), provisionalEconomy(⚠ R7 손실률 50% 임시 — economy.json 이관 대기), 결정적 검증 19항목. Game 조립: metaLoop 최선두 등록, 세션 시작(BOOT→DEPARTURE)을 SortieSessionPort 어댑터로 이동 — 기지 화면 도입 전 임시 자동 출항
     - **DECISIONS.md 개정** — PvE 결정 P1~P16 표 신설(1차 결의 1·4 개정·신 스코프 가드), 폐기 표 정리(영구 성장 금지 → P2 대체). FILE_OWNERSHIP: src/meta(리드, save/는 툴링)·systems/economy(게임플레이)·params 확장(기획)
+  - **스프린트 A 리드 창 (창 1 — 계약 생산자, 회의 12~14 반영):**
+    - **선행 계약 (INT-CORE-008, 커밋 `2542c7b`)** — TorpedoTubeSocketSource(앵커·2소켓, 십자선=탄도, 오프셋 단일 지점)·FineAimSource·AimingParams 4종(양수 크기, aimReturnBehavior 없음)·구매 불가 5종·TransactionResult·판정/지갑/단계/저장 포트·EquipmentChangeRequest·BaseScreenPort·saveRequested sortieLaunch. **AimSystem 계약에서 '잠망경 심도 전용' 폐기 규칙 삭제**(전 심도·심도 불변·해제 reset). conventions에 공용 클램프·aimForwardDirection
+    - **구현 (INT-CORE-009)** — world/torpedoTubeAnchor(안전 오프셋 0.55 단일 정의)·core/TorpedoTubeSocketRig·meta/PurchaseTransaction·EquipmentTransaction(스냅샷→재검증→차감→적용→저장→commit/rollback, 예외 무전파)·MetaLoop WalletTransactionPort+출항 직전 저장·UpgradeState UpgradeLevelsPort. Game 조립: tubeSockets rig 배선. 결정적 검증 **35/35**(트랜잭션·소켓·클램프 16항목 신규)
 - **진행 중:** 없음
-- **다음 작업:** ① 각 파트 PvE 1단계 적용분(economy·save·기지 화면) 조립·병합 리뷰 ② D+9 성장 루프 완주 확인(저장 포함) ③ **보스 AI(3단계×패턴 풀)는 D+9 성장 루프 안정 판정 후 착수** — 돌진(이동+목표 벡터)·투사체(어뢰 역방향)·소환(어군 인스턴싱+소형 적)·약점(판정 태그) 재사용 부품이 게임플레이 합류분에 의존. R-P3 비상 컷 기준(패턴 4종 축소) 사전 확정 상태
-- **차단 문제:** 없음 (병목 인지: 기획 경제 수치표 PvE D+3 — R-P2 임시값 선진행 중)
-- **변경된 계약:** INT-CORE-006(PvE 선행 계약)·INT-CORE-007(메타 루프 구현·조립). 이전: INT-CORE-004·003·002, INT-GAME-001
+- **다음 작업:** ① 게임플레이(조준 재작성·판정 포트) 병합 후 트랜잭션·BaseScreenPort·attachFineAimSource 실배선 (INT-CORE-009 스니펫) ② 병합 순서 리드→게임플레이→그래픽스→툴링, dev 통합 빌드에서 A1~A8 판정 ③ 보스 AI는 스프린트 C(C1~C9) 통과 후 본개발 — 스프린트 B·C·어뢰 캠은 착수 금지 상태(14차 결의 1)
+- **차단 문제:** 없음 (병목: 기획 경제 데이터 — ID·단계·가격·배율·장비 비용 확정이 그래픽스 UI 4종의 선행 조건, 7차 결의 4)
+- **변경된 계약:** INT-CORE-008(스프린트 A 선행 계약)·INT-CORE-009(리드 구현·조립 기준). 이전: INT-CORE-006·007, INT-CORE-004·003·002, INT-GAME-001
 - **통합 주의사항:**
   - 각 파트는 자기 소유 영역에서 `GameSystem`(`src/core/GameSystem.ts`) 구현체를 export하고, 이 문서 자기 구역에 등록 요청을 남긴다. `src/core` 배선은 feat→dev 병합 시 리드가 수행
   - 파트 간 통신은 EventBus만 — 구현체 간 직접 참조(포즈 주입 등)는 composeSystems(composition root)에서만 잇는다

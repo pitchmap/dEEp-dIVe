@@ -90,6 +90,41 @@
 
 ## 제안 목록
 
+### INT-CORE-009 — 스프린트 A 리드 구현: 소켓 rig·트랜잭션 오케스트레이터·조립 기준
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (창 1 — INT-CORE-008 계약의 리드 파트 구현) |
+| 대상 시스템 | `src/world/torpedoTubeAnchor.ts`(신규 — 앵커·안전 오프셋 단일 정의), `src/core/TorpedoTubeSocketRig.ts`(신규 — TorpedoTubeSocketSource 단일 구현), `src/meta/PurchaseTransaction.ts`·`EquipmentTransaction.ts`(신규 — 원자성 틀), `src/meta/MetaLoop.ts`(WalletTransactionPort 구현·sortieLaunch 저장), `src/core/PveIntegration.ts`(UpgradeState = UpgradeLevelsPort), `src/core/Game.ts`(rig 조립·디버그 핸들) |
+| 필요한 변경 | 위 신규 4파일 + 기존 2파일 확장. 앵커 수치는 기존 동작 보존(중심에서 3.35m 생성 유지 — 구 SPAWN_OFFSET과 동일) |
+| 관련 게이트 | A3(십자선=탄도)·A5(A5-T1~T6)·A6·A7·A8 지원 구조 |
+| 하위 호환 여부 | 기존 시스템 무변경 — 게임플레이·렌더 파일 미수정. 메타 검증 35/35(신규 16 포함)·게임플레이 100/100 유지 |
+| 개발 리드 결정 | 승인 (창 1 소유 범위). 트랜잭션 실배선은 게임플레이 판정 포트 병합 후(아래 지침) — 더미 판정·any 캐스팅으로 선배선하지 않는다 |
+| 적용 커밋 | (본 브랜치 [LOOP] 구현·배선 커밋) |
+
+**각 창 적용 지침 (스프린트 A — 병합 순서: 리드 → 게임플레이 → 그래픽스 → 툴링):**
+
+- **게임플레이 창**: ① 조준 재작성 — 전 심도 허용·자동 부상 제거·조준 중 기동, `FineAimSource` 구현(로컬 yaw/pitch, 클램프는 `conventions.clampAimYaw/PitchRadians`만, 해제 시 0 reset). `PeriscopeAimSystem`의 잠망경 조건·이름 정리(파일 소유권 게임플레이 — 리드는 수정하지 않았음) ② 어뢰 생성 — `tubeSockets.torpedoSpawnSocket` 소비(위치+전방 3D), 자체 `SPAWN_OFFSET_METERS`·`bowDirectionXZ` 방향 계산 삭제 ③ `UpgradePurchaseJudgePort`·`EquipmentChangeJudgePort` 구현(불가 사유 5종 산출 — 가격·상한은 params/경제 수치표) ④ 세션 리셋에 조준 미세각 0 포함
+- **그래픽스 창**: ① 조준 카메라 — `tubeSockets.aimCameraSocket` 소비(자체 오프셋 계산 금지), 자기 선체 제외는 조준 카메라 레이어 마스크 한정 ② 기지·구매·장비 UI는 `BaseScreenPort`만 소비(MetaLoop·지갑 직접 접근 금지), 불가 사유 5종 + 저장 실패 문구 구분 표시(내부 예외 비노출)
+- **툴링 창**: ① `params/aiming.json` + validator + `GameParams.aiming` 편입(계약: contracts/params.ts `AimingParams` — 양수 크기 검증, `aimReturnBehavior` 키 거부) ② SavePort 어댑터: `{ save: () => { saveBridge.writeSnapshot(); return saveBridge.lastSaveSucceeded; } }` ③ 저장 실패 강제 테스트 저장소로 A5-T1~T6 검증(트랜잭션 계약 테스트 16항목은 `npm run verify:meta`에 이미 포함) ④ '잠망경 심도 전용' 문서 제거 확인 — 잔존 위치: `src/systems/PeriscopeAimSystem.ts`·`verifyGameplay.ts`(게임플레이 창 수정분), PROJECT_STATE.md(통합 담당)
+- **통합 창 (리드 병합 시 배선 스니펫 — 게임플레이 판정 포트 병합 후 composeSystems에 추가):**
+
+```ts
+const savePort = { save: () => { saveBridge.writeSnapshot(); return saveBridge.lastSaveSucceeded; } };
+const purchaseTx = new PurchaseTransaction(gameplay.purchaseJudge, this.metaLoop, this.upgrades, savePort);
+const equipmentTx = new EquipmentTransaction(gameplay.equipmentJudge, savePort);
+this.tubeSockets.attachFineAimSource(gameplay.aim); // FineAimSource 구현 후
+const baseScreen: BaseScreenPort = {
+  get wallet() { return metaLoop.wallet; },
+  get upgradeLevels() { return upgrades.currentLevels; },
+  get loadout() { return gameplay.equipment.loadout; },
+  get canLaunchSortie() { return metaLoop.metaState === 'BASE'; },
+  launchSortie: () => { /* 기존 HUD launchSortie 경로 이관 */ return true; },
+  purchaseUpgrade: (id) => purchaseTx.run(id),
+  changeEquipment: (request) => equipmentTx.run(request),
+};
+```
+
 ### INT-CORE-008 — 스프린트 A 선행 계약: 발사관 소켓·미세 조준·구매/장비 트랜잭션·저장 시점
 
 | 필드 | 내용 |

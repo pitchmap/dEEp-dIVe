@@ -124,7 +124,8 @@ Space 리센터 = **선미 뒤쪽 상단에서 선수 방향을 바라보는 후
 마우스(우클릭)와 PC 화면 HUD 조준·발사 버튼은 **별도 전투 경로 없이 동일한
 `AimSystem`**(contracts/systems.ts)을 호출한다 [D+5 리뷰 후속 소회의 확정]:
 
-- 공용 진입점: `beginAim()`(잠망경 심도 아니면 false) / `endAim()` /
+- 공용 진입점: `beginAim()`(**전 심도 허용** — 7차 결의 1로 구 '잠망경 심도
+  전용' 규칙 폐기, 재도입 금지) / `endAim()`(미세 조준각 reset) /
   `fireTorpedo()`(TorpedoSystem 위임). 읽기 상태 `aiming`.
 - 입력 어댑터(마우스=게임플레이 입력, HUD 버튼=UI)는 composition root
   (`Game.composeSystems`)에서 같은 AimSystem 인스턴스를 주입받는다 —
@@ -238,6 +239,53 @@ BOOT → DEPARTURE → APPROACH → ATTACK → ESCAPE → RESULT (→ DEPARTURE)
   (params/*.json, 기획 소유)는 분리 — 코드→JSON 역기록 금지.
 - 신 스코프 가드(7항목·장비 4종)는 `UpgradeStatId`·`EquipmentId` 유니언
   타입 상한으로 기계 강제.
+
+## 스프린트 A 통합 계약 (INT-CORE-008·009)
+
+### 선수 발사관 소켓 — 단일 진실 공급원 (7차 결의 1 · 13차 결의 2)
+
+```
+world/torpedoTubeAnchor  (앵커 로컬 위치 + 안전 오프셋 — 유일한 정의 지점)
+ └ core/TorpedoTubeSocketRig (TorpedoTubeSocketSource 단일 구현)
+    ├─ aimCameraSocket    앵커 정위치 · 동일 전방축   → 그래픽스 조준 카메라
+    └─ torpedoSpawnSocket 동일 전방축 + 안전 오프셋  → 게임플레이 어뢰 생성
+```
+
+- 전방축은 `conventions.aimForwardDirection(heading, aimYaw, aimPitch)`
+  **한 함수**에서만 — 십자선 = 탄도. 미세각 클램프도
+  `clampAimYawRadians`/`clampAimPitchRadians` 공용 함수만(이중 부호 금지).
+- 하향 제한각은 params에 **양수 크기**로 저장, 음수 적용은 클램프 계산에서만.
+- 조준 중 자기 선체 제외는 **조준 카메라 레이어 마스크로 한정** — 객체 전역
+  숨김 금지(그림자·파문·타 카메라 보존).
+- 조준 해제 = yaw·pitch 0 reset 단일 동작. `aimReturnBehavior`·persist는
+  계약·스키마·코드 어디에도 만들지 않는다.
+
+### 원자적 구매·장비 트랜잭션 (13차 결의 7)
+
+`meta/PurchaseTransaction`·`meta/EquipmentTransaction`(리드 = 틀):
+스냅샷 → 재검증 → 차감 → 적용 → 저장 → 저장 성공 시 확정 / 실패 시 전체
+롤백(부분 성공 금지). 판정 내용(가격·상한·슬롯·사유 5종)은 게임플레이 판정
+포트, 영속 저장은 툴링 SavePort(`save(): boolean`, throw 금지), 결과 표시는
+그래픽스(BaseScreenPort 소비). 저장 실패는 `saveFailedRolledBack`으로 일반
+불가 사유와 구분하며 내부 예외 문자열을 UI에 싣지 않는다.
+
+**저장 시점 5종** [13차 결의 4]: 이벤트 3종(`saveRequested` —
+settlement·rarePart·sortieLaunch) + 트랜잭션 직접 저장 2종(구매·장비 변경
+직후, SavePort 동기 호출 — 중복 이벤트 금지). 그 외 자동·주기 저장 없음.
+
+### 스프린트 A 최종 조립 기준 (composition root 전용)
+
+| 연결 | 방식 |
+|---|---|
+| 조준 소켓 소스 → 게임플레이 AimSystem·그래픽스 조준 카메라 | `tubeSockets`(단일 rig) — 게임플레이 조준이 `FineAimSource` 구현 시 `attachFineAimSource`, 카메라·어뢰는 소켓 소비만 |
+| 어뢰 spawn socket → TorpedoSystem | `torpedoSpawnSocket` 소비 — 게임플레이 자체 SPAWN_OFFSET 상수 삭제 |
+| 구매 UI command → PurchaseTransaction → 게임플레이 판정 → SavePort | `BaseScreenPort.purchaseUpgrade` — UI는 포트만 호출 |
+| 장비 UI command → EquipmentTransaction → 게임플레이 판정 → SavePort | `BaseScreenPort.changeEquipment` |
+| MetaLoop 상태 → 기지·해역 UI | `metaStateChanged` 구독 + `BaseScreenPort` 읽기 상태 |
+
+금지: EventBus·어뢰·저장 시스템 중복 생성 / 그래픽스의 지갑 직접 수정 /
+게임플레이의 localStorage 직접 접근 / UI의 params 직접 변경 / any 캐스팅
+계약 우회 / 전역 싱글턴 추가.
 
 ## 게임 상태 전환과 장면 전환의 분리
 

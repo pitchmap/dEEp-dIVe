@@ -8,8 +8,31 @@
 import { EventBus } from '../../core/EventBus';
 import type { SystemContext } from '../../core/GameSystem';
 import type { GameStateMachine } from '../../core/GameStateMachine';
-import type { SortieSessionPort } from '../../contracts/meta';
+import type {
+  CurrencyBundle,
+  EquipmentChangeJudgePort,
+  EquipmentChangeRequest,
+  EquipmentLoadout,
+  PurchaseCost,
+  PurchaseDenialReason,
+  SavePort,
+  SortieSessionPort,
+  UpgradeLevelsPort,
+  UpgradePurchaseJudgePort,
+  UpgradeStatId,
+  WalletTransactionPort,
+} from '../../contracts/meta';
+import type { FineAimSource, SubmarinePoseSource } from '../../contracts/systems';
+import {
+  bowDirectionXZ,
+  clampAimPitchRadians,
+  clampAimYawRadians,
+} from '../../core/conventions';
+import { TorpedoTubeSocketRig } from '../../core/TorpedoTubeSocketRig';
+import { TORPEDO_TUBE_ANCHOR } from '../../world/torpedoTubeAnchor';
 import { MetaLoop } from '../MetaLoop';
+import { EquipmentTransaction } from '../EquipmentTransaction';
+import { PurchaseTransaction } from '../PurchaseTransaction';
 import { computeSortieSettlement } from '../settlement';
 import { effectiveDurationSeconds, effectiveValue, mergeModifiers, modifierSumFor } from '../upgradeMath';
 
@@ -256,6 +279,286 @@ export function runMetaVerification(): VerificationResult[] {
       '업그레이드: params 원본 불변 (mutate 없음)',
       JSON.stringify(paramsLike) === before,
       'JSON 직렬화 비교 일치',
+    );
+  }
+
+  // ── 스프린트 A: 원자적 구매 트랜잭션 (13차 결의 7, A5-T1~T4 대응) ──
+  const makeWallet = (credits: number, rareParts = 0): WalletTransactionPort & { current: CurrencyBundle } => {
+    const state = { current: { credits, rareParts } as CurrencyBundle };
+    return {
+      get current() {
+        return state.current;
+      },
+      snapshotWallet: () => ({ ...state.current }),
+      spendFromWallet: (cost: PurchaseCost) => {
+        if (state.current.credits < cost.credits || state.current.rareParts < cost.rareParts) {
+          return false;
+        }
+        state.current = {
+          credits: state.current.credits - cost.credits,
+          rareParts: state.current.rareParts - cost.rareParts,
+        };
+        return true;
+      },
+      restoreWallet: (wallet: CurrencyBundle) => {
+        state.current = { ...wallet };
+      },
+    };
+  };
+  const makeLevels = (initial: Record<string, number> = {}): UpgradeLevelsPort & { current: Record<string, number> } => {
+    const state = { current: { ...initial } };
+    return {
+      get current() {
+        return state.current;
+      },
+      snapshotLevels: () => ({ ...state.current }),
+      applyPurchasedLevel: (id: UpgradeStatId) => {
+        state.current = { ...state.current, [id]: (state.current[id] ?? 0) + 1 };
+      },
+      restoreLevels: (levels: Readonly<Record<string, number>>) => {
+        state.current = { ...levels };
+      },
+    };
+  };
+  const judgeAllow = (cost: PurchaseCost): UpgradePurchaseJudgePort => ({
+    evaluateUpgradePurchase: () => ({ denial: null, cost }),
+  });
+  const judgeDeny = (reason: PurchaseDenialReason): UpgradePurchaseJudgePort => ({
+    evaluateUpgradePurchase: () => ({ denial: reason, cost: { credits: 0, rareParts: 0 } }),
+  });
+  /** 저장 실패를 n회 강제한 뒤 성공하는 테스트 SavePort */
+  const flakySave = (failures: number): SavePort & { calls: number } => {
+    const state = { failures, calls: 0 };
+    return {
+      get calls() {
+        return state.calls;
+      },
+      save: () => {
+        state.calls += 1;
+        if (state.failures > 0) {
+          state.failures -= 1;
+          return false;
+        }
+        return true;
+      },
+    };
+  };
+
+  {
+    const wallet = makeWallet(200);
+    const levels = makeLevels();
+    const save = flakySave(0);
+    const tx = new PurchaseTransaction(judgeAllow({ credits: 120, rareParts: 0 }), wallet, levels, save);
+    const result = tx.run('maxSpeed');
+    check(
+      '구매: 성공 시 commit — 차감·단계 +1·저장 1회 (A5-T1)',
+      result.status === 'success' && wallet.current.credits === 80 && levels.current['maxSpeed'] === 1 && save.calls === 1,
+      `result=${result.status}, credits=${wallet.current.credits}, level=${levels.current['maxSpeed']}`,
+    );
+  }
+  {
+    const wallet = makeWallet(50);
+    const levels = makeLevels({ maxSpeed: 3 });
+    const save = flakySave(0);
+    const tx = new PurchaseTransaction(judgeDeny('maxLevelReached'), wallet, levels, save);
+    const result = tx.run('maxSpeed');
+    check(
+      '구매: 판정 거부 시 상태 무변경·저장 미호출 (A5-T2)',
+      result.status === 'denied' &&
+        result.reason === 'maxLevelReached' &&
+        wallet.current.credits === 50 &&
+        levels.current['maxSpeed'] === 3 &&
+        save.calls === 0,
+      `result=${JSON.stringify(result)}, credits=${wallet.current.credits}`,
+    );
+  }
+  {
+    const wallet = makeWallet(200, 1);
+    const levels = makeLevels({ torpedoDamage: 1 });
+    const save = flakySave(1);
+    const tx = new PurchaseTransaction(judgeAllow({ credits: 150, rareParts: 1 }), wallet, levels, save);
+    const result = tx.run('torpedoDamage');
+    check(
+      '구매: 저장 실패 시 크레딧·희귀 부품 롤백 (A5-T3)',
+      result.status === 'saveFailedRolledBack' && wallet.current.credits === 200 && wallet.current.rareParts === 1,
+      `result=${result.status}, wallet=${JSON.stringify(wallet.current)}`,
+    );
+    check(
+      '구매: 저장 실패 시 업그레이드 단계 롤백 (A5-T4)',
+      levels.current['torpedoDamage'] === 1,
+      `level=${levels.current['torpedoDamage']}`,
+    );
+    // 실패 후 재시도 — 상태가 구매 전과 동일하므로 같은 요청이 성공해야 한다
+    const retry = tx.run('torpedoDamage');
+    check(
+      '구매: 트랜잭션 실패 후 재시도 가능 — 다음 저장 성공 시 확정',
+      retry.status === 'success' && wallet.current.credits === 50 && levels.current['torpedoDamage'] === 2,
+      `retry=${retry.status}, credits=${wallet.current.credits}, level=${levels.current['torpedoDamage']}`,
+    );
+  }
+  {
+    // SavePort가 계약을 어기고 throw해도 트랜잭션은 던지지 않고 롤백한다
+    const wallet = makeWallet(100);
+    const levels = makeLevels();
+    const throwingSave: SavePort = {
+      save: () => {
+        throw new Error('storage exploded');
+      },
+    };
+    const tx = new PurchaseTransaction(judgeAllow({ credits: 10, rareParts: 0 }), wallet, levels, throwingSave);
+    let threw = false;
+    let result;
+    try {
+      result = tx.run('sonarRange');
+    } catch {
+      threw = true;
+    }
+    check(
+      '구매: 저장 예외를 루프 밖으로 전파하지 않고 안전 결과 + 전체 롤백',
+      !threw && result?.status === 'saveFailedRolledBack' && wallet.current.credits === 100 && (levels.current['sonarRange'] ?? 0) === 0,
+      `threw=${threw}, result=${result?.status}, credits=${wallet.current.credits}`,
+    );
+  }
+
+  // ── 스프린트 A: 장비 변경 트랜잭션 ──
+  const makeLoadoutJudge = (
+    initial: readonly ('standardTorpedo' | 'fastTorpedo' | 'heavyTorpedo' | 'decoy')[],
+    denial: PurchaseDenialReason | null = null,
+  ): EquipmentChangeJudgePort & { current: EquipmentLoadout } => {
+    const state = { equipped: [...initial] };
+    return {
+      get current(): EquipmentLoadout {
+        return { slotCapacity: 2, equipped: [...state.equipped] };
+      },
+      evaluateEquipmentChange: () => denial,
+      applyEquipmentChange: (request: EquipmentChangeRequest) => {
+        if (request.kind === 'unequip') state.equipped.splice(request.slotIndex, 1);
+        else state.equipped[request.slotIndex] = request.equipmentId;
+      },
+      snapshotLoadout: (): EquipmentLoadout => ({ slotCapacity: 2, equipped: [...state.equipped] }),
+      restoreLoadout: (loadout: EquipmentLoadout) => {
+        state.equipped = [...loadout.equipped] as typeof state.equipped;
+      },
+    };
+  };
+  {
+    const judge = makeLoadoutJudge(['standardTorpedo']);
+    const save = flakySave(1);
+    const tx = new EquipmentTransaction(judge, save);
+    const result = tx.run({ kind: 'replace', slotIndex: 0, equipmentId: 'heavyTorpedo' });
+    check(
+      '장비: 저장 실패 시 이전 loadout 복원',
+      result.status === 'saveFailedRolledBack' && judge.current.equipped[0] === 'standardTorpedo',
+      `result=${result.status}, slot0=${judge.current.equipped[0]}`,
+    );
+    const retry = tx.run({ kind: 'replace', slotIndex: 0, equipmentId: 'heavyTorpedo' });
+    check(
+      '장비: 실패 후 재시도 — 저장 성공 시 교체 확정',
+      retry.status === 'success' && judge.current.equipped[0] === 'heavyTorpedo',
+      `retry=${retry.status}, slot0=${judge.current.equipped[0]}`,
+    );
+  }
+  {
+    const judge = makeLoadoutJudge(['standardTorpedo', 'decoy'], 'alreadyEquipped');
+    const save = flakySave(0);
+    const tx = new EquipmentTransaction(judge, save);
+    const result = tx.run({ kind: 'equip', slotIndex: 1, equipmentId: 'decoy' });
+    check(
+      '장비: 판정 거부(이미 장착) 시 무변경·저장 미호출',
+      result.status === 'denied' && result.reason === 'alreadyEquipped' && save.calls === 0 && judge.current.equipped.length === 2,
+      `result=${JSON.stringify(result)}`,
+    );
+  }
+
+  // ── 스프린트 A: 발사관 소켓 (7차 결의 1·13차 결의 2, A3 대응) ──
+  const posedAt = (
+    x: number,
+    y: number,
+    z: number,
+    heading: number,
+  ): SubmarinePoseSource => ({
+    positionX: x,
+    positionY: y,
+    positionZ: z,
+    headingRadians: heading,
+    forwardSpeedMetersPerSecond: 0,
+  });
+  {
+    const fineAim: FineAimSource = { aimYawRadians: 0.1, aimPitchRadians: -0.15 };
+    const rig = new TorpedoTubeSocketRig(posedAt(3, -2, 7, 0.7), fineAim);
+    const cam = rig.aimCameraSocket;
+    const spawn = rig.torpedoSpawnSocket;
+    const sameForward =
+      Math.abs(cam.forwardX - spawn.forwardX) < 1e-12 &&
+      Math.abs(cam.forwardY - spawn.forwardY) < 1e-12 &&
+      Math.abs(cam.forwardZ - spawn.forwardZ) < 1e-12;
+    check(
+      '소켓: 조준 카메라와 어뢰 spawn의 전방축 완전 일치 (십자선 = 탄도)',
+      sameForward,
+      `cam=(${cam.forwardX.toFixed(4)},${cam.forwardY.toFixed(4)},${cam.forwardZ.toFixed(4)})`,
+    );
+    const offset = TORPEDO_TUBE_ANCHOR.spawnForwardSafetyOffsetMeters;
+    const offsetOk =
+      Math.abs(spawn.positionX - (cam.positionX + cam.forwardX * offset)) < 1e-12 &&
+      Math.abs(spawn.positionY - (cam.positionY + cam.forwardY * offset)) < 1e-12 &&
+      Math.abs(spawn.positionZ - (cam.positionZ + cam.forwardZ * offset)) < 1e-12;
+    check(
+      '소켓: spawn = 카메라 + 전방 × 안전 오프셋 — 오프셋 정의는 앵커 한 곳뿐',
+      offsetOk,
+      `offset=${offset}`,
+    );
+  }
+  {
+    // 미세 조준 미연결(= 조준 해제 reset 기준 상태): 전방 수평 성분 = 선수 방향
+    const heading = -1.2;
+    const rig = new TorpedoTubeSocketRig(posedAt(0, 0, 0, heading));
+    const cam = rig.aimCameraSocket;
+    const bow = bowDirectionXZ(heading);
+    check(
+      '소켓: 미세각 0(해제 reset 기준) — 전방 = 선수 방향, 피치 0',
+      Math.abs(cam.forwardX - bow.x) < 1e-12 && Math.abs(cam.forwardZ - bow.z) < 1e-12 && cam.forwardY === 0,
+      `forward=(${cam.forwardX.toFixed(4)},${cam.forwardY},${cam.forwardZ.toFixed(4)})`,
+    );
+  }
+  {
+    // 하향 제한 부호 규칙: 설정값은 양의 크기, 계산에서만 음수 적용 (13차 결의 8)
+    const clampedDown = clampAimPitchRadians(-1.0, 10, 15);
+    const clampedUp = clampAimPitchRadians(1.0, 10, 15);
+    const downOk = Math.abs(clampedDown - -(15 * Math.PI) / 180) < 1e-12;
+    const upOk = Math.abs(clampedUp - (10 * Math.PI) / 180) < 1e-12;
+    const yawOk =
+      Math.abs(clampAimYawRadians(9, 15) - (15 * Math.PI) / 180) < 1e-12 &&
+      Math.abs(clampAimYawRadians(-9, 15) + (15 * Math.PI) / 180) < 1e-12;
+    check(
+      '조준각: 양수 크기 한계 → 하향에만 음수 적용, yaw ± 대칭 (공용 클램프 함수)',
+      downOk && upOk && yawOk,
+      `down=${clampedDown.toFixed(4)}, up=${clampedUp.toFixed(4)}`,
+    );
+  }
+
+  // ── 스프린트 A: MetaLoop 지갑 포트·출항 직전 저장 ──
+  {
+    const { loop, events } = buildLoop();
+    loop.restoreWallet({ credits: 100, rareParts: 2 });
+    const spent = loop.spendFromWallet({ credits: 40, rareParts: 1 });
+    const insufficient = loop.spendFromWallet({ credits: 1000, rareParts: 0 });
+    check(
+      '지갑 포트: BASE에서 차감 성공 / 부족 시 false·무변경',
+      spent && !insufficient && loop.wallet.credits === 60 && loop.wallet.rareParts === 1,
+      `wallet=${JSON.stringify(loop.wallet)}`,
+    );
+    loop.beginSortiePrep();
+    loop.launchSortie();
+    const spentAtSea = loop.spendFromWallet({ credits: 1, rareParts: 0 });
+    check(
+      '지갑 포트: 출항 중 차감 거부 (구매는 기지 전용)',
+      !spentAtSea && loop.wallet.credits === 60,
+      `spentAtSea=${spentAtSea}`,
+    );
+    check(
+      '저장 시점: 출항 확정 직전 saveRequested(sortieLaunch) 발행',
+      events.includes('save:sortieLaunch'),
+      `events=${events.filter((e) => e.startsWith('save')).join(',')}`,
     );
   }
 
