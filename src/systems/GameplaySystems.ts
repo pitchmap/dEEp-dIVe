@@ -38,6 +38,27 @@ import type { GameSystem, SystemContext } from '../core/GameSystem';
 import { TorpedoTubeSocketRig } from '../core/TorpedoTubeSocketRig';
 import { STARTING_CANYON_LAYOUT } from '../world/startingCanyonLayout';
 import { CargoShipSystem, cargoShipConfigFromOfficial } from './CargoShipSystem';
+import { CanyonPatrolSpawnLocation } from './faction/CanyonPatrolSpawnLocation';
+import { HighValueTransportSystem } from './faction/HighValueTransportSystem';
+import type { SurfaceShipMotionPortFactory } from '../contracts/guard';
+import type { PatrolShipEntity } from './faction/PatrolShipEntity';
+import { PatrolShipFleet } from './faction/PatrolShipFleet';
+import {
+  CombinedShipWorldSource,
+  type ShipWorldSource,
+} from './faction/ShipWorldSource';
+import {
+  ShipIdentificationSystem,
+  type IdentifiableShipView,
+} from './faction/ShipIdentificationSystem';
+import {
+  patrolShipMotionProfile,
+  shipPlacementsFromOfficialCargo,
+} from './faction/shipPlacements';
+import {
+  canyonHorizontalBounds,
+  type CanyonHorizontalBounds,
+} from './collision/canyonBounds';
 import { CollisionWorld } from './collision/CollisionWorld';
 import { computeShipBoxPush } from './collision/shipHullBox';
 import { computeHullSpheres } from './collision/submarineHull';
@@ -136,6 +157,42 @@ export class GameplaySystems implements GameSystem {
    */
   readonly cargoShip: CargoShipSystem;
   /**
+   * [B1] 적대 화물선 외의 선박들 (현재 중립 1척) — 같은 `CargoShipSystem`
+   * 원형을 세력 태그만 바꿔 재사용한다. 렌더 배선은 그래픽스가 다중 선박
+   * 소스를 소비할 때 연결된다 (INT-GAME-012 그래픽스 지침).
+   */
+  private otherShips: readonly CargoShipSystem[];
+  /**
+   * [B2] 선박 식별 read model — 계약 `ShipIdentificationSource` 구현.
+   * composition root가 렌더에 주입한다 (렌더는 게임플레이를 직접 import하지
+   * 않는다). 그래픽스가 모델명으로 세력을 추측할 필요가 없다.
+   */
+  readonly shipIdentification: ShipIdentificationSystem;
+  /**
+   * [B4] 경비함 스폰 위치 전략 — 계약 `GuardSpawnLocationStrategy` 구현.
+   * 조립부가 `GuardSpawnCoordinator.attachLocationStrategy`로 연결한다.
+   */
+  readonly guardSpawnLocation: CanyonPatrolSpawnLocation;
+  /**
+   * [B5] 경비함 함대 — 계약 `SurfaceShipMotionPortFactory` production 구현.
+   * 스폰 1건마다 월드 엔티티(pose 정본) 1개와 이동 포트 1개를 만든다.
+   * 조립부가 `createProductionDestroyerAIFactory(gameplay.surfaceShipMotionPortFactory)`
+   * 로 연결한다 — 검증 더블은 production 경로에 들어오지 않는다.
+   */
+  private readonly patrolFleet: PatrolShipFleet;
+  /**
+   * 다중 선박 read source — 적대·중립 화물선 + 경비함을 한 목록으로 노출한다.
+   * 렌더는 이 **읽기 전용 스냅샷**만 소비한다(게임플레이 객체 참조 없음).
+   */
+  private readonly shipWorldSourceValue: CombinedShipWorldSource;
+  /** 월드 수평 경계 (레이아웃 블록 + 공식 항로 파생) — 소비자 공용 단일 인스턴스 */
+  private readonly worldBoundsValue: CanyonHorizontalBounds | null;
+  /**
+   * [B6] 고가치 수송선·호위 — **핵심 게이트 B1~B5와 독립**이다.
+   * 이 시스템을 빼도 배치·식별·보상·중립 사건·경비 스폰은 그대로 동작한다.
+   */
+  readonly highValueTransport: HighValueTransportSystem;
+  /**
    * 정적 충돌 월드 — 공유 CanyonLayout.blocks를 충돌체로 해석해 등록한다
    * (렌더와 동일 데이터, INT-CORE-004). 레벨 교체 = 새 레이아웃 주입
    * (clear() 후 재등록) — colliders는 시야 차폐와 공유(읽기 전용).
@@ -144,6 +201,13 @@ export class GameplaySystems implements GameSystem {
   /** 소비 중인 협곡 레이아웃 (단일 소스) — 렌더·검증 참조용 읽기 전용 */
   readonly layout: CanyonLayout;
 
+  /** 월드 수평 경계 (읽기 전용) — 스폰·이동 판정이 공유하는 값 */
+  get worldBounds(): CanyonHorizontalBounds | null {
+    return this.worldBoundsValue;
+  }
+
+  /** 이벤트 버스 — B1 추가 선박을 나중에 배치할 때 필요 (attach 경로) */
+  private readonly bus: EventBus;
   private readonly subscribeToParamsReload: ParamsReloadSubscribe | null;
   private unsubscribeParamsReload: (() => void) | null = null;
   private officialWired = false;
@@ -165,6 +229,7 @@ export class GameplaySystems implements GameSystem {
     // 지연 참조용 자기 별칭 (조준↔어뢰 조립 순환 해소)
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
+    this.bus = bus;
     this.layout = layout;
     this.input = new KeyboardInput();
     this.mouse = new MouseCombatInput();
@@ -180,11 +245,20 @@ export class GameplaySystems implements GameSystem {
     this.targets = new TargetRegistry();
     // 화물선 수치는 공식 params가 유일한 출처다 — 해수면 높이만 공유
     // 레이아웃(월드 소유)에서 온다. 미주입이면 비활성(표적 미등록).
+    // [B1] 적대 1척 + 중립 1척을 **같은 원형**으로 동시에 배치한다 —
+    // 세력은 태그로만 구분되며 세력별 선박 클래스·AI를 만들지 않는다.
+    // `cargoShip`은 기존 적대 화물선 그대로다(렌더 배선·A 회귀 보호).
+    const placements = official
+      ? shipPlacementsFromOfficialCargo(official.cargo, layout.seaSurfaceY)
+      : [];
     this.cargoShip = new CargoShipSystem(
       bus,
       this.targets,
       official ? cargoShipConfigFromOfficial(official.cargo, layout.seaSurfaceY) : null,
     );
+    this.otherShips = placements
+      .filter((placement) => placement.faction !== 'hostile')
+      .map((placement) => new CargoShipSystem(bus, this.targets, placement.config));
     this.equipment = new EquipmentSystem();
     if (official) this.equipment.applyCatalog(official.equipment);
     // 발사관 소켓 rig — 공식 정본(리드) 단일 인스턴스. 조준 카메라(그래픽스)와
@@ -210,6 +284,64 @@ export class GameplaySystems implements GameSystem {
       () => this.ships,
       official ? official.economy : null,
     );
+    // [B2] 식별 판정 — 거리 조건은 어뢰 유효 사거리(기존 판정 범위)를
+    //      재사용한다. 새 식별 거리 상수를 만들지 않는다.
+    //      [B5] 경비함(patrol)도 같은 목록에 들어간다 — 렌더가 원형 이름으로
+    //      세력을 추측하지 않도록 세 세력이 한 소스에서 나온다.
+    this.shipIdentification = new ShipIdentificationSystem(
+      () => this.identifiableShips,
+      this.player,
+      this.aim,
+      this.torpedo,
+    );
+    // 월드 수평 경계 — 공유 레이아웃 블록 + **공식 선박 항로 끝점**에서
+    // 파생한다(협곡 벽만으로 잡으면 수면 항로가 경계 밖이 된다). 스폰 위치
+    // 전략과 경비함 함대가 **같은 인스턴스**를 소비해야 스폰이 자기 경계에서
+    // 거부되지 않는다.
+    this.worldBoundsValue = canyonHorizontalBounds(
+      layout,
+      placements.flatMap((placement) => [placement.config.waypointA, placement.config.waypointB]),
+    );
+    // [B5] 경비함 함대 — 운동 수치는 전부 기존 공식·검증 값 상속이며
+    //      경비함 전용 공식 튜닝값이 아니다(patrolShipMotionProfile 참조).
+    //      공식 params가 없으면 함대를 만들지 않는다(수치 발명 금지).
+    this.patrolFleet = new PatrolShipFleet(
+      this.targets,
+      this.player,
+      official
+        ? patrolShipMotionProfile(
+            official.cargo,
+            layout.seaSurfaceY,
+            params.movement.turn90Seconds.value,
+          )
+        : null,
+      this.worldBoundsValue,
+    );
+    this.shipWorldSourceValue = new CombinedShipWorldSource(
+      () => this.ships,
+      () => this.patrolFleet.ships,
+      {
+        isHighValue: (entityId) =>
+          this.highValueTransport.highValueTransports.some(
+            (view) => view.entityId === entityId,
+          ),
+        escortedTransportIdOf: (entityId) =>
+          this.highValueTransport.escortBindings.find(
+            (binding) => binding.escortEntityId === entityId,
+          )?.escortedTransportId ?? null,
+      },
+    );
+    // [B4] 스폰 위치 — 지형·플레이어·사건 지점 회피는 기존 충돌 월드와
+    //      공유 레이아웃으로 판정한다. 후보가 없으면 null(임의 좌표 금지).
+    this.guardSpawnLocation = new CanyonPatrolSpawnLocation(
+      this.player,
+      this.collision,
+      layout,
+      this.torpedo,
+      this.cargoShip,
+      this.worldBoundsValue,
+    );
+    this.highValueTransport = new HighValueTransportSystem(bus);
     this.officialWired = official !== null;
     this.subscribeToParamsReload = subscribeToParamsReload ?? null;
   }
@@ -227,6 +359,12 @@ export class GameplaySystems implements GameSystem {
       official.cargo,
       this.layout.seaSurfaceY,
     );
+    // [B1] 적대 외 선박(중립)도 같은 주입으로 배치된다 — 생성자 경로와
+    //      동일한 결과를 만든다(재호출 시 이전 배치를 먼저 정리).
+    for (const ship of this.otherShips) ship.dispose();
+    this.otherShips = shipPlacementsFromOfficialCargo(official.cargo, this.layout.seaSurfaceY)
+      .filter((placement) => placement.faction !== 'hostile')
+      .map((placement) => new CargoShipSystem(this.bus, this.targets, placement.config));
     this.equipment.applyCatalog(official.equipment);
     this.officialWired = true;
   }
@@ -254,9 +392,54 @@ export class GameplaySystems implements GameSystem {
     return this.economy.spawnSalvageFromPlan(entry);
   }
 
-  /** 세력 태그가 붙은 함선 목록 — 경제 반응·잠수함-함선 충돌이 순회한다 */
+  /**
+   * [B5] 계약 `SurfaceShipMotionPortFactory` production 구현 (읽기 전용).
+   * 조립부 배선: `createProductionDestroyerAIFactory(gameplay.surfaceShipMotionPortFactory)`.
+   * 스폰 1건마다 독립 pose를 가진 월드 엔티티와 전용 이동 포트를 만든다.
+   */
+  get surfaceShipMotionPortFactory(): SurfaceShipMotionPortFactory {
+    return this.patrolFleet;
+  }
+
+  /**
+   * 다중 선박 read source — 적대·중립 화물선 + 경비함(patrol)을 한 목록으로.
+   * 렌더가 소비하는 **읽기 전용 스냅샷**이며 게임플레이 객체 참조가 없다.
+   */
+  get shipWorldSource(): ShipWorldSource {
+    return this.shipWorldSourceValue;
+  }
+
+  /** 스폰된 경비함 (읽기 전용) — 검증·디버깅용 */
+  get patrolShips(): readonly PatrolShipEntity[] {
+    return this.patrolFleet.ships;
+  }
+
+  /**
+   * [B2] 식별 대상 선박 전체 — 적대·중립 화물선 + 경비함(patrol).
+   * 세 세력이 한 목록에서 나오므로 렌더가 원형으로 세력을 추측할 필요가 없다.
+   */
+  private get identifiableShips(): readonly IdentifiableShipView[] {
+    return [
+      ...this.ships,
+      ...this.patrolFleet.ships.map((ship) => ({
+        id: ship.entityId,
+        faction: ship.faction,
+        positionX: ship.positionX,
+        positionY: ship.positionY,
+        positionZ: ship.positionZ,
+        // 경비함은 피격 즉시 파괴된다 — hit/removed를 alive 하나로 표현한다.
+        hit: !ship.alive,
+        removed: !ship.alive,
+      })),
+    ];
+  }
+
+  /**
+   * 세력 태그가 붙은 함선 목록 — 경제 반응·잠수함-함선 충돌·식별이 같은
+   * 목록을 순회한다. [B1] 적대 1척 + 중립 1척이 동시에 들어 있다.
+   */
   get ships(): readonly CargoShipSystem[] {
-    return [this.cargoShip];
+    return [this.cargoShip, ...this.otherShips];
   }
 
   /**
@@ -423,6 +606,9 @@ export class GameplaySystems implements GameSystem {
     this.torpedo.resetForNewSortie(params.combat.torpedoCapacity.value);
     this.equipment.refillDecoyStock(); // 출항당 보유 수 (공식 stockPerSortie)
     this.cargoShip.resetForNewSortie(this.targets);
+    for (const ship of this.otherShips) ship.resetForNewSortie(this.targets);
+    this.patrolFleet.resetForNewSortie();
+    this.highValueTransport.resetForNewSortie();
     this.economy.resetForNewSortie();
   }
 
@@ -453,6 +639,10 @@ export class GameplaySystems implements GameSystem {
 
     // 3) 화물선 항행·침몰 진행 — 함선 충돌·어뢰 판정보다 먼저 최신 위치로
     this.cargoShip.update(deltaSeconds);
+    for (const ship of this.otherShips) ship.update(deltaSeconds);
+    // 경비함 이동은 AI(리드 GuardShipAdapter)가 포트로 수행한다 — 여기서는
+    // 파괴분 정리만 한다(수명주기). 판단·조종을 중복 실행하지 않는다.
+    this.patrolFleet.update(deltaSeconds);
 
     // 3.5) 잠수함-함선 충돌 — 통과 방지·밀어냄만, 피해 없음 (5차 결의 1).
     //      어뢰 명중 판정과 동일한 박스 근사(hullBox)를 공유한다.
@@ -523,6 +713,8 @@ export class GameplaySystems implements GameSystem {
     this.unsubscribeParamsReload = null;
     this.economy.dispose(); // 해저 재화 등록·드롭 정리
     this.cargoShip.dispose(); // 표적 등록·참조 정리
+    for (const ship of this.otherShips) ship.dispose();
+    this.patrolFleet.dispose();
     this.detachInput();
   }
 }
