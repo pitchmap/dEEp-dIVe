@@ -15,7 +15,12 @@
  *     계산은 리드 `meta/upgradeMath`, 카탈로그는 툴링 `tools/upgradeMath`.
  */
 
-import type { CurrencyBundle, UpgradeModifiers, UpgradeStatId } from '../contracts/meta';
+import type {
+  CurrencyBundle,
+  UpgradeLevelsPort,
+  UpgradeModifiers,
+  UpgradeStatId,
+} from '../contracts/meta';
 import type { GameParams } from '../contracts/params';
 import { effectiveDurationSeconds, effectiveValue, modifierSumFor } from '../meta/upgradeMath';
 import type { SaveData } from '../meta/save/saveSchema';
@@ -249,7 +254,7 @@ function isUpgradeStatId(id: string): id is UpgradeStatId {
  * `tools/upgradeMath`가 소유한다. 이 클래스는 둘을 잇기만 한다.
  * `params/*.json` 원본은 절대 수정하지 않는다 — 유효값은 파생 복사본이다.
  */
-export class UpgradeState {
+export class UpgradeState implements UpgradeLevelsPort {
   private readonly catalog: readonly UpgradeDefinition[];
   private levels: Record<string, number> = {};
 
@@ -271,6 +276,30 @@ export class UpgradeState {
       next[def.id] = Math.min(Math.max(level, 0), def.maxLevel);
     }
     this.levels = next;
+  }
+
+  /* ── UpgradeLevelsPort (구매 트랜잭션 전용 — 단계 보관자로서 구현) ── */
+
+  /** 트랜잭션 스냅샷 — 내부 참조가 아닌 복사본을 돌려준다 */
+  snapshotLevels(): Readonly<Record<string, number>> {
+    return { ...this.levels };
+  }
+
+  /**
+   * 구매 확정 후보 적용 — 해당 항목 단계 +1 (카탈로그 상한으로 클램프).
+   * 상한 도달 여부 판정은 게임플레이 판정 포트 몫이며, 여기의 클램프는
+   * 계약 위반 방어일 뿐이다.
+   */
+  applyPurchasedLevel(id: UpgradeStatId): void {
+    const def = this.catalog.find((entry) => entry.id === id);
+    if (!def) return; // 카탈로그 밖 id — 무시 (판정 포트가 걸렀어야 함)
+    const current = this.levels[id] ?? 0;
+    this.levels = { ...this.levels, [id]: Math.min(current + 1, def.maxLevel) };
+  }
+
+  /** 트랜잭션 롤백 — 스냅샷 전체 복원 (setLevels와 동일 클램프 경로) */
+  restoreLevels(levels: Readonly<Record<string, number>>): void {
+    this.setLevels(levels);
   }
 
   /** 공식 계약 보정 집합 — 항목 id가 곧 UpgradeStatId다 (이름 통일 완료) */
