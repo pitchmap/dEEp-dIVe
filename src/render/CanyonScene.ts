@@ -46,6 +46,7 @@ import { SegmentedSwimMotion } from './boss/SegmentedSwimMotion';
 import type { BossMotionStyle } from './boss/BossMotionStyle';
 import { CameraRig } from './CameraRig';
 import { CargoShipVisual } from './CargoShipVisual';
+import type { ShipWorldSource, ShipWorldView } from '../systems/faction/ShipWorldSource';
 import { EnvironmentDressing } from './EnvironmentDressing';
 import { LeadShotIndicator } from './LeadShotIndicator';
 import { PeriscopeView } from './PeriscopeView';
@@ -150,6 +151,15 @@ export class CanyonScene implements ManagedScene {
    */
   private torpedoTubeSocketSource: TorpedoTubeSocketSource | null = null;
   private cargoShip: CargoShipVisual | null = null;
+  /**
+   * 다중 선박 read source (B1·B5) — 적대·중립 화물선과 경비함이 한 목록으로
+   * 온다. 주입되면 단일 화물선 경로(`cargoShipSource`)를 **대체**한다:
+   * 같은 개체가 두 경로로 그려지지 않게 하기 위한 것이며, 렌더는 목록에
+   * 있는 것만 그린다 (없는 배를 지어내지 않는다).
+   */
+  private shipWorldSource: ShipWorldSource | null = null;
+  /** entityId → 시각 인스턴스 (다중 선박 경로 전용) */
+  private readonly shipVisuals = new Map<number, CargoShipVisual>();
   private xraySpike: XrayFloodingSpike | null = null;
 
   // QA 격리 경로 — 기지 화면 미리보기(?base=1)·보스 분절 스파이크(?bossSpike=1)
@@ -374,6 +384,18 @@ export class CanyonScene implements ManagedScene {
   /** 화물선 상태(계약 CargoShipStateSource) 연결점 — composition root가 1회 주입 */
   attachCargoShipSource(source: CargoShipStateSource): void {
     this.cargoShipSource = source;
+  }
+
+  /**
+   * 다중 선박 상태(`ShipWorldSource`) 연결점 — 적대·중립 화물선 + 경비함을
+   * 한 목록으로 받는다 (B1·B5). composition root가 1회 주입한다.
+   *
+   * 주입되면 단일 화물선 경로를 **대체**한다 — 적대 화물선이 두 경로로
+   * 중복 렌더되지 않게 하기 위한 것이다. 세력 변형은 목록이 준 `faction`
+   * 값으로만 선택되며 렌더는 모델·클래스 이름으로 세력을 추측하지 않는다.
+   */
+  attachShipWorldSource(source: ShipWorldSource): void {
+    this.shipWorldSource = source;
   }
 
   /**
@@ -715,6 +737,8 @@ export class CanyonScene implements ManagedScene {
   }
 
   dispose(): void {
+    for (const visual of this.shipVisuals.values()) visual.removeAndDispose();
+    this.shipVisuals.clear();
     // 조준 카메라 레이어 복원 — 장면 수명과 함께 마스크 상태를 남기지 않는다
     this.renderer.camera.layers.enable(SELF_HULL_LAYER);
     this.unsubscribeParamsReload?.();
@@ -809,6 +833,12 @@ export class CanyonScene implements ManagedScene {
 
   /** torpedoHit — 현재 화물선 id와 일치할 때만 폭발 시작 (멱등 처리) */
   private onTorpedoHit(payload: GameEvents['torpedoHit']): void {
+    // 다중 선박 경로 — 맞은 개체의 인스턴스에서만 폭발을 시작한다 (멱등).
+    const struck = this.shipVisuals.get(payload.targetId);
+    if (struck) {
+      struck.startHitExplosion();
+      return;
+    }
     const source = this.cargoShipSource ?? this.shipDemoSnapshot;
     if (!source || payload.targetId !== source.id) return;
     this.cargoShip?.startHitExplosion();
@@ -820,6 +850,11 @@ export class CanyonScene implements ManagedScene {
    * 화물선을 그리지 않는다 (렌더가 상태를 지어내지 않는다).
    */
   private updateCargoShip(deltaSeconds: number): void {
+    // 다중 선박 소스가 있으면 그쪽이 유일 경로다 (중복 렌더 방지).
+    if (this.shipWorldSource) {
+      this.updateShipWorld(deltaSeconds);
+      return;
+    }
     const source = this.cargoShipSource ?? this.shipDemoSnapshot;
     if (!source) return;
 
@@ -841,6 +876,40 @@ export class CanyonScene implements ManagedScene {
       this.cargoShip.startHitExplosion();
     }
     this.cargoShip.update(deltaSeconds);
+  }
+
+  /**
+   * 다중 선박 렌더 — 목록에 있는 개체마다 시각 인스턴스를 하나 유지한다.
+   *
+   *  - 새 entityId → 그 세력 변형으로 인스턴스 생성
+   *  - 목록에서 사라지거나 `alive=false` → 인스턴스 제거·dispose
+   *  - 세력 변형 교체·침몰 매핑은 기존 `applyState`가 그대로 담당한다
+   *
+   * 렌더는 판정하지 않는다: 위치·세력·생존·침몰 진행 전부 게임플레이
+   * 스냅샷 값이고, 여기서는 표현만 매핑한다.
+   */
+  private updateShipWorld(deltaSeconds: number): void {
+    const views = this.shipWorldSource?.shipViews ?? [];
+    const seen = new Set<number>();
+
+    for (const view of views) {
+      if (!view.alive) continue;
+      seen.add(view.entityId);
+      let visual = this.shipVisuals.get(view.entityId);
+      if (!visual) {
+        visual = new CargoShipVisual(view.faction);
+        this.scene.add(visual.root);
+        this.shipVisuals.set(view.entityId, visual);
+      }
+      visual.applyState(shipWorldViewAsCargoState(view));
+      visual.update(deltaSeconds);
+    }
+
+    for (const [entityId, visual] of [...this.shipVisuals]) {
+      if (seen.has(entityId)) continue;
+      visual.removeAndDispose();
+      this.shipVisuals.delete(entityId);
+    }
   }
 
   /**
@@ -889,4 +958,26 @@ export class CanyonScene implements ManagedScene {
       );
     }
   }
+}
+
+/**
+ * `ShipWorldView` → `CargoShipStateSource` 어댑터 (표현 매핑 전용).
+ * `CargoShipVisual.applyState`가 쓰는 필드만 채운다 — 속도·명중 플래그는
+ * 이 경로에서 쓰이지 않으므로 0/false로 두고, 폭발은 `torpedoHit`
+ * 이벤트가 개체별로 시작한다. 렌더가 값을 지어내지 않는다.
+ */
+function shipWorldViewAsCargoState(view: ShipWorldView): CargoShipStateSource {
+  return {
+    id: view.entityId,
+    faction: view.faction,
+    positionX: view.positionX,
+    positionY: view.positionY,
+    positionZ: view.positionZ,
+    headingRadians: view.headingRadians,
+    velocityX: 0,
+    velocityZ: 0,
+    hit: false,
+    sinkProgress: view.sinkProgress,
+    removed: !view.alive,
+  };
 }

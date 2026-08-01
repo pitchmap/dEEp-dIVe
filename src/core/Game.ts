@@ -589,6 +589,19 @@ export class Game {
     //  - EventBus (torpedoHit 폭발 연출 등 이벤트 구독용)
     scene.attachPoseSource(gameplay.poseSource);
     scene.attachCargoShipSource(gameplay.cargoShipState);
+    // 다중 선박(B1·B5) — 적대·중립 화물선 + 스폰된 경비함이 한 목록으로 온다.
+    // 이 소스가 주입되면 렌더의 단일 화물선 경로를 **대체**하므로 적대
+    // 화물선이 두 경로로 중복 렌더되지 않는다. 세력 변형 선택은 목록이 준
+    // faction 값으로만 이뤄진다 (렌더가 모델·클래스 이름으로 추측 금지).
+    scene.attachShipWorldSource(gameplay.shipWorldSource);
+    // 식별 태그(B2) — 판정은 게임플레이 `ShipIdentificationSystem` 소유이고
+    // 렌더는 read model만 표시한다. 미식별 상태에서는 세력 문자열이 나오지
+    // 않는다(계약이 faction을 노출하지 않음).
+    scene.attachIdentificationSource(gameplay.shipIdentification);
+    // 호위 표현(B6 구조) — 고가치 수송선·결속 read model. 공식 params가 없어
+    // production에서 목록은 비어 있고, 따라서 배지·결속선도 표시되지 않는다
+    // (수치·개체를 지어내지 않는다).
+    scene.attachConvoySource(gameplay.highValueTransport);
     scene.attachEventBus(this.bus);
     // 어뢰 모델·기포 항적 — 실제 발사 어뢰 상태를 그대로 소비한다
     // (INT-RENDER-006. 렌더는 스냅샷만 읽고 판정하지 않는다).
