@@ -133,10 +133,13 @@
   - **스프린트 A 리드 창 (창 1 — 계약 생산자, 회의 12~14 반영):**
     - **선행 계약 (INT-CORE-008, 커밋 `2542c7b`)** — TorpedoTubeSocketSource(앵커·2소켓, 십자선=탄도, 오프셋 단일 지점)·FineAimSource·AimingParams 4종(양수 크기, aimReturnBehavior 없음)·구매 불가 5종·TransactionResult·판정/지갑/단계/저장 포트·EquipmentChangeRequest·BaseScreenPort·saveRequested sortieLaunch. **AimSystem 계약에서 '전 심도 조준(구 심도 전용 규칙 폐기)' 폐기 규칙 삭제**(전 심도·심도 불변·해제 reset). conventions에 공용 클램프·aimForwardDirection
     - **구현 (INT-CORE-009)** — world/torpedoTubeAnchor(안전 오프셋 0.55 단일 정의)·core/TorpedoTubeSocketRig·meta/PurchaseTransaction·EquipmentTransaction(스냅샷→재검증→차감→적용→저장→commit/rollback, 예외 무전파)·MetaLoop WalletTransactionPort+출항 직전 저장·UpgradeState UpgradeLevelsPort. Game 조립: tubeSockets rig 배선. 결정적 검증 **35/35**(트랜잭션·소켓·클램프 16항목 신규)
+  - **스프린트 A 마감 — production 기지 경제 조립 (INT-CORE-010):**
+    - **선행 계약 (커밋 `9472d66`)** — `BaseScreenPort` v2(읽기 모델 9종: wallet·sortieCreditsEarned·sortieRarePartsSecured·upgradeCatalog·upgradeLevels·equipmentCatalog·loadout·canLaunchSortie·lastResult / 명령 5종: purchaseUpgrade·equipItem·replaceItem·unequipItem·confirmDeparture), `BaseCommandOutcome`(success + 불가 6종 + saveFailedRolledBack), `DepartureResult`(departed·saveFailed·invalidState·economyDataUnavailable), `noFreeSlot`→**`slotFull`** 통일(게임플레이 purchaseTypes 정합), **`economyDataUnavailable`** 신설(null 가격 = 트랜잭션 진입 전 차단·상태/저장 변경 0·null→0 변환 금지·임시 가격 사용 금지), `EquipmentChangeJudgePort` 개정(판정+적용 통합 — 판정 로직 복제 금지), `saveRequested` cause를 settlement·rarePart 2종으로 축소(**sortieLaunch 폐기**), INTERFACES §2d **저장 책임 표**(사용자 명령 1회 = SavePort 1회)
+    - **구현 (커밋 `2ae4d24`)** — PveIntegration: `CountingSavePort`(명령당 저장 호출 계측)·`EquipmentJudgeAdapter`(EquipmentSystem 위임 — 판정 복제 없음)·`DepartureCommand`(출항 = 전환 **전** 저장, 실패 시 BASE 유지·재시도 가능)·`createBaseScreenPort`(공식 카탈로그 null 사전 차단)·`createMetaUiPorts`(그래픽스 metaEconomyPorts 구조 어댑터 — DOM 무수정). Game 조립: 단계 단일 저장소 = `UpgradePurchaseSystem.levelSnapshot`(UpgradeState는 파생 뷰), EquipmentSystem 내부 저장 경로 차단(`attachBaseEconomy(purchase, null)`)·MetaLoop sortieLaunch 저장 제거 — **이중 저장 3경로 소멸**, EconomyHud·SortiePrepScreen production 마운트(실지갑·실카탈로그), HUD 출항 버튼 → DepartureCommand. QA 데모(`?econdemo`)는 CanyonScene 전용 유지 + 러너 정적 검사로 production composition 미포함 보증. 결정적 검증 **46/46**(production 조립 저장 횟수 1/0·롤백·출항 실패 무전환·실지갑 동일성·null 차단 10항목 신규)
 - **진행 중:** 없음
-- **다음 작업:** ① 게임플레이(조준 재작성·판정 포트) 병합 후 트랜잭션·BaseScreenPort·attachFineAimSource 실배선 (INT-CORE-009 스니펫) ② 병합 순서 리드→게임플레이→그래픽스→툴링, dev 통합 빌드에서 A1~A8 판정 ③ 보스 AI는 스프린트 C(C1~C9) 통과 후 본개발 — 스프린트 B·C·어뢰 캠은 착수 금지 상태(14차 결의 1)
-- **차단 문제:** 없음 (병목: 기획 경제 데이터 — ID·단계·가격·배율·장비 비용 확정이 그래픽스 UI 4종의 선행 조건, 7차 결의 4)
-- **변경된 계약:** INT-CORE-008(스프린트 A 선행 계약)·INT-CORE-009(리드 구현·조립 기준). 이전: INT-CORE-006·007, INT-CORE-004·003·002, INT-GAME-001
+- **다음 작업:** ① dev 통합 빌드에서 A1~A8 재판정(특히 A4·A5·A6 — production UI 배선 완료분) ② 기획 경제 수치표 도착 시 provisional 3종 폐기·A8 판정 ③ 보스 AI는 스프린트 C(C1~C9) 통과 후 본개발 — 스프린트 B·C·어뢰 캠은 착수 금지 상태(14차 결의 1)
+- **차단 문제:** 없음 (병목: 기획 경제 수치표 — 114개 미확정 필드가 A8 통과의 유일 조건, 리드 측 null 차단 배선은 완료)
+- **변경된 계약:** INT-CORE-010(BaseScreenPort v2·저장 책임 표·economyDataUnavailable·slotFull 통일·saveRequested 축소). 이전: INT-CORE-008·009, INT-CORE-006·007, INT-CORE-004·003·002, INT-GAME-001
 - **통합 주의사항:**
   - 각 파트는 자기 소유 영역에서 `GameSystem`(`src/core/GameSystem.ts`) 구현체를 export하고, 이 문서 자기 구역에 등록 요청을 남긴다. `src/core` 배선은 feat→dev 병합 시 리드가 수행
   - 파트 간 통신은 EventBus만 — 구현체 간 직접 참조(포즈 주입 등)는 composeSystems(composition root)에서만 잇는다
@@ -150,9 +153,12 @@
   - **[INT-CORE-004 적용 요청 — 그래픽스]** `buildCanyonBlockout` 자체 수식 삭제 → 주입받은 `CanyonLayout.blocks`로 메시 생성 (수치는 현행 그래픽과 1:1 — 시각 변화 없음). CameraRig의 `cameraRecenterYawRadians(h) + π` 우회를 `cameraRecenterOffsetDirectionXZ` 기준 배치로 교체 (결과 동일: 선미 뒤 상단 → 선수 방향)
   - **[INT-CORE-003 적용 요청 — 빌드·툴]** 오디오 배관은 `torpedoHit`(과장 폭발음)·`aimModeChanged` 구독 항목을 사운드 세트(D+10) 배선 목록에 추가
   - **[PvE 적용 요청 — 전 파트]** INT-CORE-007 하단 '각 파트 적용 요청' 참조: 게임플레이(economy·Faction·세션 리셋 API·약점 판정), 툴링(src/meta/save·시뮬레이터는 upgradeMath 동일 함수·가드 빌드 경고·중도 귀환 버튼), 그래픽스(기지 화면 metaStateChanged 구독·보스 연출 이벤트 소비·분절 애니 스파이크), 기획(economy.json·upgrades.json — PvE D+3 병목)
+  - **[INT-CORE-010 적용 요청 — 게임플레이]** purchaseTypes는 이미 slotFull·maxLevelReached 사용 — 변경 불필요. EquipmentSystem 내부 저장 경로는 production 조립에서 비활성(`attachBaseEconomy(purchase, null)`) — 장비 저장은 리드 EquipmentTransaction 단일 책임
+  - **[INT-CORE-010 적용 요청 — 그래픽스]** 기지 UI는 `BaseScreenPort` v2만 소비(직접 시스템 참조 금지). `metaEconomyPorts`에 결과 코드 2종 추가됨(economyDataUnavailable='가격 데이터 대기'·invalidState) — 타입 합집합·문구만 추가, DOM·스타일 무변경이므로 그대로 수용
+  - **[INT-CORE-010 적용 요청 — 빌드·툴]** SAVE_SYSTEM.md 저장 시점 5종·책임 표 정합 확인, A5-T1~T6 계측은 `CountingSavePort` 재사용 가능. saveRequested cause에서 sortieLaunch 소비 코드가 있으면 삭제
   - **계층 경계 [확정]:** 상위(src/meta)가 하위 세션 내부 상태를 읽는 코드, 하위가 메타 상태를 참조하는 코드는 리뷰 반려 대상 — 통신은 SortieSessionPort + 이벤트 3종뿐
-- **마지막 업데이트:** PvE 1단계 착수 (선행 계약 + [LOOP] 메타 루프 커밋)
-- **담당 브랜치:** `claude/deep-dive-core-lead-uyg77p` (리드 세션 — D+10 통합분 `6e62356` 머지 완료)
+- **마지막 업데이트:** 스프린트 A 마감 — production 기지 경제 조립 (INT-CORE-010, 계약 `9472d66` + 구현 `2ae4d24`)
+- **담당 브랜치:** `claude/deep-dive-core-lead-uyg77p` (리드 세션 — 기준 통합 커밋 `ebea23b` 머지 완료)
 
 ## 게임플레이
 

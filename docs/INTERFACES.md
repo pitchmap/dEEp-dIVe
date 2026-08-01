@@ -27,7 +27,7 @@
 | `returnToBaseRequested` | UI/입력 | (없음) | meta/MetaLoop | 중도 귀환 입력 시 (③) | SORTIE 상태 밖 요청은 무시 |
 | `lootDropped` | 게임플레이 economy | source, credits, rareParts, x, z | meta(집계·희귀 즉시 확정), UI, 렌더·오디오 | 드롭 발생 시 | 음수 금지(발행측 책임) |
 | `guardShipRequested` | 게임플레이 판정 | x, z | 경비함 AI(리드 — 구축함 AI 재활용) | 중립 선박 공격 시 | MVP 불이익 단일 [6차 결의 3] |
-| `saveRequested` | meta/MetaLoop | cause('settlement'/'rarePart'/'sortieLaunch') | SaveSystem(툴링, src/meta/save) | 정산 확정·희귀 획득 즉시·출항 확정 직전 | 저장 시점 5종 [13차 결의 4] 중 이벤트 3종 — 구매·장비 변경 직후 2종은 트랜잭션이 SavePort 직접 호출(중복 이벤트 금지). 그 외 자동 저장 없음 |
+| `saveRequested` | meta/MetaLoop | cause('settlement'/'rarePart') | SaveSystem(툴링, src/meta/save) | 정산 확정·희귀 획득 즉시 | **이벤트 경로는 2종뿐** [INT-CORE-010 저장 책임 단일화] — 구매·장비·출항 저장은 트랜잭션·Departure command의 SavePort 직접 호출(동일 명령 이중 저장 금지). 구 'sortieLaunch' cause 폐기 |
 | `bossPhaseChanged` | 보스 AI (리드) | phase(1/2/3) | 렌더(단계 연출), 오디오(침묵 전환·음정 하강), UI | 단계 전환 시 | — |
 | `bossWeakPointChanged` | 게임플레이 약점 판정 | active | 렌더(발광·개방 연출), UI | 약점 활성/해제 시 | 판정=게임플레이 / 연출=렌더 경계 [소회의 결의 5] |
 
@@ -66,10 +66,24 @@
 | `UpgradeStatId`(7항목 상한)·`UpgradeModifiers` | 합연산 보정 집합 — 최종값 = 기준값 × (1 + 보정 합), params 원본 불변 | 계산은 src/meta/upgradeMath.ts 순수 함수만 (툴 시뮬레이터 동일 함수). 8항목째 추가는 계약 개정 사안 |
 | `EquipmentId`(4종 상한)·`EquipmentLoadout` | 장비 교체 슬롯 — 상위호환 금지 | 장착 상태는 메타 소유, 장비 로직은 게임플레이 |
 | `BossPhase` | 보스 3단계 | 단계 소유는 보스 AI(리드), 약점 판정은 게임플레이, 연출은 렌더 |
-| `PurchaseDenialReason`(5종 고정)·`TransactionResult` | 크레딧 부족/부품 부족/최대 단계/슬롯 부족/이미 장착 — success/denied/saveFailedRolledBack | 미구현 기능 사유 문구 금지 [7차 결의 4]. 저장 실패 ≠ 구매 불가 사유. 내부 예외 문자열 UI 비노출 [13차 결의 7] |
-| `UpgradePurchaseJudgePort`·`EquipmentChangeJudgePort` | 판정·적용·loadout 스냅샷/복원 | 내용(가격·상한·슬롯 규칙)은 게임플레이 소유, throw 금지 — 틀(순서·롤백)은 리드 트랜잭션 |
+| `PurchaseDenialReason`(확정 5종 + economyDataUnavailable)·`TransactionResult`·`BaseCommandOutcome`·`DepartureResult` | slotFull로 통일(구 noFreeSlot 폐기) + economyDataUnavailable(공식 params null — 상태·저장 변경 전 반환, 0 변환·provisional 대입 금지) — success/denied/saveFailedRolledBack, 출항은 departed/saveFailed/invalidState/economyDataUnavailable | 미구현 기능 사유 문구 금지 [7차 결의 4]. 저장 실패 ≠ 불가 사유. 내부 예외 문자열 UI 비노출 [13차 결의 7] |
+| `UpgradePurchaseJudgePort`·`EquipmentChangeJudgePort` [개정] | 구매: 무변경 판정(evaluate) / 장비: **판정+적용 결합**(applyEquipmentChange — 불가 시 사유·무변경) + snapshotSlots/restoreSlots(빈 슬롯 위치 보존) | 내용(가격·상한·슬롯 규칙)은 게임플레이 소유, throw 금지·저장 금지 — 틀(순서·저장·롤백)은 리드 트랜잭션 |
 | `WalletTransactionPort`·`UpgradeLevelsPort`·`SavePort` | 지갑 스냅샷/차감/복원(MetaLoop) · 단계 스냅샷/+1/복원(UpgradeState) · save():boolean(툴링 SaveStore 어댑터 — throw 금지) | 트랜잭션 오케스트레이터(리드 src/meta)만 호출 — UI·렌더 직접 호출 금지 |
-| `BaseScreenPort` | wallet·upgradeLevels·loadout·canLaunchSortie + launchSortie/purchaseUpgrade/changeEquipment | 기지 UI(그래픽스)의 유일한 진입점 — MetaLoop·상태 객체 직접 수정 금지. 조립은 composition root |
+| `BaseScreenPort` **v2** [INT-CORE-010] | 읽기: wallet(실지갑)·sortieCreditsEarned(미정산)·sortieRarePartsSecured·upgradeCatalog(nextCost null=미확정)·upgradeLevels·equipmentCatalog·loadout·canLaunchSortie·lastResult / 명령: purchaseUpgrade·equipItem·replaceItem·unequipItem·confirmDeparture | production UI(그래픽스)의 유일한 진입점 — wallet·업그레이드·loadout·SaveStore 직접 수정 금지, 별도 saveRequested 발행 금지. 조립은 composition root |
+
+## 2d. 저장 책임 표 (스프린트 A — INT-CORE-010 확정)
+
+> 원칙: **한 사용자 명령 = SavePort 최대 1회.** UI·판정 포트는 저장하지
+> 않고 saveRequested를 발행하지도 않는다. `CountingSavePort`(조립부)로
+> 명령당 호출 횟수를 계측할 수 있다.
+
+| 저장 시점 [13차 결의 4] | 저장 책임 (유일) | 경로 |
+|---|---|---|
+| 업그레이드 구매 성공 직후 | `meta/PurchaseTransaction` | SavePort 직접 호출 (실패 시 지갑·단계 롤백) |
+| 장비 장착·교체·해제 직후 | `meta/EquipmentTransaction` | SavePort 직접 호출 (실패 시 슬롯 원복). EquipmentSystem의 attachSavePort 내부 경로는 production 미연결 |
+| 출항 확정 직전 | Departure command (조립부) | SavePort 직접 호출 — 실패 시 **해역 전환 없음**. MetaLoop.launchSortie는 저장하지 않음 |
+| 귀환 정산 확정 | MetaLoop → `saveRequested('settlement')` | SaveBridge 구독 기록 |
+| 희귀 부품 획득 즉시 | MetaLoop → `saveRequested('rarePart')` | SaveBridge 구독 기록 |
 
 ## 3. 파라미터 계약
 

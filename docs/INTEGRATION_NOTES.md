@@ -90,6 +90,26 @@
 
 ## 제안 목록
 
+### INT-CORE-010 — 스프린트 A 마감 계약: BaseScreenPort v2·결과 계약·저장 책임 단일화·경제 미확정 처리
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (스프린트 A 잔여 A4·A5/A6 UI·A8 마감 — 매니페스트 §7-3·§7-4·재판정 10 해소) |
+| 대상 시스템 | `src/contracts/meta.ts`(PurchaseDenialReason 개정·DepartureResult·카탈로그 뷰·BaseScreenPort v2·EquipmentChangeJudgePort 개정), `src/contracts/events.ts`(saveRequested cause 2종으로 정리), `src/meta/MetaLoop.ts`(sortieLaunch 발행 제거), `src/meta/EquipmentTransaction.ts`(개정 포트 적용) |
+| 필요한 변경 | ① 사유 통일: `slotFull`(구 noFreeSlot 폐기 — 게임플레이 purchaseTypes와 이원화 해소) + `economyDataUnavailable` 추가(공식 params null — **상태·저장 변경 전 반환**, null→0 변환·provisional 대입 금지) ② `DepartureResult`(departed/saveFailed/invalidState/economyDataUnavailable) ③ BaseScreenPort v2 — 읽기 모델(실지갑·미정산 출항 재화·공식 카탈로그 2종·단계·loadout·출항 가능·lastResult) + 명령 5종(purchaseUpgrade/equipItem/replaceItem/unequipItem/confirmDeparture) ④ **저장 책임 단일화** — INTERFACES §2d 표: 구매=PurchaseTransaction / 장비=EquipmentTransaction / 출항=Departure command / 정산·희귀=saveRequested 유지. UI command의 saveRequested 발행 금지, 동일 명령 SavePort 2회 호출 금지, `sortieLaunch` cause 폐기(MetaLoop 발행 제거) ⑤ 장비 판정 포트를 판정+적용 결합형으로 개정(실존 EquipmentSystem 형태와 1:1 — 판정 복제 제거), 스냅샷은 빈 슬롯 위치 보존 배열 |
+| 변경 이유 | A4 실패·A5/A6 UI 미배선·A8 실패·이중 저장 위험(매니페스트 §7-3: EquipmentSystem attachSavePort 경로와 리드 트랜잭션 병존)의 계약 원인 제거. production UI가 소비할 유일 진입점 확정 |
+| 관련 게이트 | A4·A5(T1~T6)·A6·A7·A8 |
+| 영향을 받는 파일 | 계약 2파일 + 리드 구현 3파일(정합) + INTERFACES §1·§2c·§2d |
+| 하위 호환 여부 | `noFreeSlot` 리터럴 소비자는 계약 파일뿐(게임플레이는 이미 slotFull) — 깨짐 없음. `sortieLaunch` 소비자는 MetaLoop 발행뿐 — 제거로 정합. 구 BaseScreenPort(v1, 미배선)는 v2로 대체 — production 소비자 아직 없음 |
+| 개발 리드 결정 | 승인 — 저장 책임 표를 INTERFACES §2d에 상설 표로 두고, 명령당 SavePort 호출 횟수는 CountingSavePort로 계측 가능하게 한다 |
+| 적용 커밋 | (본 브랜치 선행 계약 커밋) |
+
+**각 창 소비 지침 (스프린트 A 마감):**
+- **게임플레이**: purchaseTypes의 `slotFull`·`maxLevelReached`는 이제 공식 계약과 일치(변경 불요). `UpgradePurchaseSystem` 판정 포트는 그대로 소비된다 — 비용 resolver는 조립부가 공식 params로 주입(provisional 기본값은 production 미사용). EquipmentSystem 변경 불요 — attachSavePort는 production에서 null 유지(저장은 리드 트랜잭션 소유)
+- **그래픽스**: production UI는 BaseScreenPort v2(또는 metaEconomyPorts 구조 단면)만 소비. 가격 null(nextCostPending) = 버튼 비활성 + '가격 데이터 대기'. `MetaCommandFailure`에 economyDataUnavailable 표기 추가분(조립부가 최소 반영)을 확인·수용할 것. DOM·스타일은 리드가 건드리지 않았음
+- **툴링**: SaveStore·SaveBridge 변경 불요. SAVE_SYSTEM.md 저장 시점 표가 §2d와 일치하는지 확인(sortieLaunch 이벤트 폐기 — Departure command 직접 저장으로 대체). A5-T 시나리오는 CountingSavePort 계측으로 호출 횟수 단언 가능
+- **기획**: A8 해소의 유일 입력 = 경제 수치표(114 null 필드 확정). null인 항목은 구매 자체가 economyDataUnavailable로 차단된다 — 임시값 선진행 없음(7차 결의 4 데이터→UI 순서)
+
 ### INT-TOOL-008 — [LOOP][ECON] 스프린트 A 툴링 산출물 + 이관·문서 회귀 차단 요청
 
 | 필드 | 내용 |

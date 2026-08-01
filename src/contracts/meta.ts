@@ -116,17 +116,25 @@ export type BossPhase = 1 | 2 | 3;
 /* ── 구매·장비 트랜잭션 (스프린트 A — 7차 결의 4·13차 결의 7) ── */
 
 /**
- * 일반 구매·장비 변경 불가 사유 — **정확히 5종** [확정 7차 결의 4].
- * '선행 업그레이드 미충족' 등 미구현 기능의 사유는 코드·UI 어디에도 만들지
- * 않는다 (테크 트리 MVP 기각 — 스텁 금지 준용).
- * 저장 실패는 불가 사유가 아니라 트랜잭션 실패(saveFailedRolledBack)다.
+ * 일반 구매·장비 변경 불가 사유 [확정 7차 결의 4 + INT-CORE-010 개정].
+ *
+ *  - 확정 5종(크레딧 부족/부품 부족/최대 단계/슬롯 부족/이미 장착) +
+ *    `economyDataUnavailable`(공식 경제 params 미확정 — null 가격).
+ *  - `slotFull`로 통일 — 구 `noFreeSlot`은 폐기 (게임플레이 purchaseTypes와
+ *    이원화 해소, 매니페스트 §7-4).
+ *  - `economyDataUnavailable`은 **어떤 상태 변경·저장도 일어나기 전에**
+ *    반환된다: null을 0으로 바꾸지 않고, provisional 비용을 대입하지 않는다.
+ *  - '선행 업그레이드 미충족' 등 미구현 기능의 사유는 코드·UI 어디에도 만들지
+ *    않는다 (테크 트리 MVP 기각 — 스텁 금지 준용).
+ *  - 저장 실패는 불가 사유가 아니라 트랜잭션 실패(saveFailedRolledBack)다.
  */
 export type PurchaseDenialReason =
   | 'insufficientCredits'
   | 'insufficientRareParts'
   | 'maxLevelReached'
-  | 'noFreeSlot'
-  | 'alreadyEquipped';
+  | 'slotFull'
+  | 'alreadyEquipped'
+  | 'economyDataUnavailable';
 
 /**
  * 트랜잭션 결과 — 성공 / 조건 불충족 / 저장 실패 롤백 [13차 결의 7].
@@ -166,15 +174,23 @@ export type EquipmentChangeRequest =
   | { readonly kind: 'unequip'; readonly slotIndex: number };
 
 /**
- * 장비 변경 판정·적용 포트 — 내용은 게임플레이(EquipmentSystem) 소유.
- * evaluate는 무변경 판정, apply는 적용, snapshot/restore는 롤백용 전체
- * loadout 보존·복원. 전부 throw 금지.
+ * 장비 변경 판정·적용 포트 [INT-CORE-010 개정] — 내용은 게임플레이
+ * (EquipmentSystem) 소유.
+ *
+ *  - `applyEquipmentChange` = 판정+적용 결합: 불가 시 사유 반환·**무변경**,
+ *    가능 시 적용 후 null. (실존 EquipmentSystem의 equip/replace/unequip
+ *    형태와 1:1 — 무변경 사전 판정 API를 강요해 판정 로직을 복제하게 만들던
+ *    구 evaluate/apply 분리를 폐기.)
+ *  - **이 포트 구현은 저장하지 않는다** — 저장·롤백 순서는 리드
+ *    EquipmentTransaction 소유 (저장 책임 표). EquipmentSystem의
+ *    attachSavePort 내부 경로는 production에서 연결하지 않는다(이중 저장 금지).
+ *  - snapshot/restore는 슬롯 위치를 보존하는 배열 형태 — 롤백 시 빈 슬롯
+ *    위치까지 원복된다. 전부 throw 금지.
  */
 export interface EquipmentChangeJudgePort {
-  evaluateEquipmentChange(request: EquipmentChangeRequest): PurchaseDenialReason | null;
-  applyEquipmentChange(request: EquipmentChangeRequest): void;
-  snapshotLoadout(): EquipmentLoadout;
-  restoreLoadout(loadout: EquipmentLoadout): void;
+  applyEquipmentChange(request: EquipmentChangeRequest): PurchaseDenialReason | null;
+  snapshotSlots(): readonly (EquipmentId | null)[];
+  restoreSlots(slots: readonly (EquipmentId | null)[]): void;
 }
 
 /** 지갑 트랜잭션 포트 — 구현은 MetaLoop(리드, 지갑 소유자) */
@@ -201,19 +217,76 @@ export interface SavePort {
   save(): boolean;
 }
 
+/* ── 기지 화면 포트 v2 (INT-CORE-010 — production UI의 유일한 진입점) ── */
+
+/** 명령 결과 코드 — success / 판정 사유 6종 / 저장 실패 롤백 */
+export type BaseCommandOutcome = 'success' | PurchaseDenialReason | 'saveFailedRolledBack';
+
 /**
- * 기지 화면 소비 포트 (스프린트 A 출항 준비 흐름) — UI는 MetaLoop·상태 객체를
- * 직접 수정하지 않고 이 포트의 읽기 상태와 명령만 사용한다.
- * 구현은 composition root가 조립한다 (그래픽스 UI는 이 계약만 import).
+ * 출항 확정 결과 [INT-CORE-010].
+ *  - departed: 출항 확정 직전 저장 성공 → 해역 전환
+ *  - saveFailed: 저장 실패 — **해역 전환 없음** (기지 유지, 재시도 가능)
+ *  - invalidState: 기지(BASE) 밖에서의 요청 — 무동작
+ *  - economyDataUnavailable: 출항 전 필수 경제 검증 실패 시 예약 코드 —
+ *    현 배선에서는 출항이 경제 데이터에 의존하지 않아 반환되지 않는다
+ */
+export type DepartureResult = 'departed' | 'saveFailed' | 'invalidState' | 'economyDataUnavailable';
+
+/** 업그레이드 공식 카탈로그의 읽기 뷰 — 가격 미확정은 null (0 변환·발명 금지) */
+export interface UpgradeCatalogItem {
+  readonly id: UpgradeStatId;
+  readonly label: string;
+  readonly maxLevel: number;
+  /** 현재 단계 기준 다음 단계 비용 — 최대 단계면 null(비용 없음), 미확정도 null.
+   *  구분은 nextCostPending으로 한다 */
+  readonly nextCost: PurchaseCost | null;
+  /** true = 공식 경제 params 미확정(economyDataUnavailable 상태) — UI는 구매
+   *  버튼을 비활성하고 '가격 데이터 대기'를 표시한다 */
+  readonly nextCostPending: boolean;
+}
+
+/** 장비 공식 카탈로그의 읽기 뷰 */
+export interface EquipmentCatalogItem {
+  readonly id: EquipmentId;
+  readonly label: string;
+  /** 획득 비용 — 미확정 null (스프린트 A 장착·교체·해제는 비용 미적용) */
+  readonly cost: PurchaseCost | null;
+}
+
+/** 마지막 명령 결과 — UI 결과 표시·검증용 (내부 예외 문자열 없음) */
+export interface BaseScreenLastResult {
+  readonly command: 'purchaseUpgrade' | 'equipItem' | 'replaceItem' | 'unequipItem' | 'confirmDeparture';
+  readonly outcome: BaseCommandOutcome | DepartureResult;
+}
+
+/**
+ * 기지 화면 소비 포트 v2 (스프린트 A production) — UI는 wallet·업그레이드
+ * 상태·loadout·SaveStore를 **직접 수정하지 않고** 이 포트의 읽기 모델과
+ * 명령만 사용한다. 구현은 composition root가 조립한다 (그래픽스 UI는 이
+ * 계약 또는 그 구조적 부분집합만 소비).
+ *
+ * 저장 규칙: 명령 구현(트랜잭션·출항 command)이 SavePort를 직접 호출한다 —
+ * **UI·이 포트가 별도 saveRequested 이벤트를 발행하지 않으며**, 동일 사용자
+ * 명령으로 SavePort가 두 번 호출되지 않는다 (저장 책임 표 — INTERFACES).
  */
 export interface BaseScreenPort {
+  /** 실제 영구 지갑 (MetaLoop 실상태 — 사본·임시 지갑 아님) */
   readonly wallet: CurrencyBundle;
+  /** 이번 출항에서 획득했지만 아직 정산되지 않은 크레딧 (파괴 시 손실 대상) */
+  readonly sortieCreditsEarned: number;
+  /** 이번 출항에서 획득한 희귀 부품 (획득 즉시 확정 — 표시 구분용) */
+  readonly sortieRarePartsSecured: number;
+  readonly upgradeCatalog: readonly UpgradeCatalogItem[];
   readonly upgradeLevels: Readonly<Record<string, number>>;
+  readonly equipmentCatalog: readonly EquipmentCatalogItem[];
   readonly loadout: EquipmentLoadout;
   /** 기지(BASE) 상태에서만 true — 출항 명령 가능 여부 */
   readonly canLaunchSortie: boolean;
-  /** 출항 — 성공 시 true (BASE 밖에서는 false·무동작) */
-  launchSortie(): boolean;
-  purchaseUpgrade(id: UpgradeStatId): TransactionResult;
-  changeEquipment(request: EquipmentChangeRequest): TransactionResult;
+  readonly lastResult: BaseScreenLastResult | null;
+  purchaseUpgrade(upgradeId: UpgradeStatId): BaseCommandOutcome;
+  equipItem(equipmentId: EquipmentId, slotIndex: number): BaseCommandOutcome;
+  replaceItem(equipmentId: EquipmentId, slotIndex: number): BaseCommandOutcome;
+  unequipItem(slotIndex: number): BaseCommandOutcome;
+  /** 출항 확정 — 확정 직전 저장(SavePort 1회) 성공 시에만 해역 전환 */
+  confirmDeparture(): DepartureResult;
 }
