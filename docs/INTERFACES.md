@@ -85,6 +85,19 @@
 | 귀환 정산 확정 | MetaLoop → `saveRequested('settlement')` | SaveBridge 구독 기록 |
 | 희귀 부품 획득 즉시 | MetaLoop → `saveRequested('rarePart')` | SaveBridge 구독 기록 |
 
+## 2e. 공식 런타임 params 소비 계약 (INT-CORE-011 — contracts/officialParams.ts)
+
+> 원칙: **공식 로더 호출은 composition root 1회.** 시스템·UI는 params
+> JSON을 직접 import하거나 툴링 로더를 직접 호출하지 않고, 주입된 값만
+> 소비한다 (JSON → 시스템 단방향).
+
+| 계약 | 내용 | 소유 |
+|---|---|---|
+| `OfficialRuntimeParams` | `loadEconomyParams()`(upgrades·equipment·economy·cargo) + `loadAimingParams()` 각 1회 호출 번들. 소비자: MetaLoop(손실률)·GameplaySystems(경제·조준)·BaseScreenPort(카탈로그)·Purchase/EquipmentTransaction·DepartureCommand | 로더·타입 = 툴링, 조립 = 리드 |
+| `SalvagePlacementSource` | salvage 배치의 **월드 좌표 소유** — spawnId·worldPosition·(선택)orientation. 경제 params(`economy.salvageSpawns`)는 spawnId·kind·dropTableId(credits)·rarePartId 소유. composition이 동일 spawnId로 결합 | 좌표 = 월드·그래픽스, 보상 = 기획(economy.json), 결합 = 리드 |
+| `SalvageSpawnPlanEntry` | 결합 결과 — 보상은 economy에서, 좌표는 placement에서만 파생. 누락·중복·미지 spawnId·미지 dropTableId·미지 kind = **거부**(무시 금지) | 리드 (`composeSalvageSpawnPlan`) |
+| production spawn 규칙 | 출항 월드 초기화 시 salvageSpawns 전체(MVP 3개) 1회 생성. 같은 출항 중복·파괴분 재생성 금지(출항당 1회 가드). 새 출항 시 재생성(resetSortieSession 규칙). 배치 미도착 시 임시 좌표 금지 — 명시적 unwired | 스포너 = 리드, 드롭 런타임 = 게임플레이 |
+
 ## 3. 파라미터 계약
 
 | 파일 | 소유자 | 내용 | 검증 |

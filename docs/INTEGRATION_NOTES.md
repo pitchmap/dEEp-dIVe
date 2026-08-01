@@ -90,6 +90,26 @@
 
 ## 제안 목록
 
+### INT-CORE-011 — 공식 런타임 params 소비 계약: OfficialRuntimeParams·SalvagePlacementSource·production spawn 규칙
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (스프린트 A 공식 경제 연결 — 툴링 승인 params `2a89400`·loader `60ece41` 소비) |
+| 대상 시스템 | `src/contracts/officialParams.ts`(신규), `src/core/Game.ts`(provisional 제거·loader 1회), `src/core/PveIntegration.ts`(spawnId 결합·출항당 spawn 가드) |
+| 필요한 변경 | ① **OfficialRuntimeParams** — composition root가 `loadEconomyParams()`(upgrades·equipment·economy·cargo) + `loadAimingParams()`를 **각 1회** 호출해 번들을 만들고 MetaLoop·GameplaySystems·BaseScreenPort·PurchaseTransaction·EquipmentTransaction·DepartureCommand에 주입. 시스템·UI의 JSON 직접 import·로더 직접 호출 금지 ② **SalvagePlacementSource** — 소유 분리: 경제 params가 spawnId·kind·dropTableId(credits)·rarePartId 소유, 월드·그래픽스가 spawnId·worldPosition·orientation 소유. composition이 동일 spawnId로 결합(`composeSalvageSpawnPlan`). 누락·중복·미지 spawnId·미지 dropTableId·미지 kind는 **거부**(무시 금지) ③ **production spawn 규칙** — 출항 월드 초기화 시 salvageSpawns 전체(MVP 3개) 생성, 같은 출항 중복 생성 금지(파괴분 재생성 금지 — 출항당 1회 가드), 새 출항 시 재생성(resetSortieSession 규칙과 일치), 보상=economy params만·좌표=placement만. 그래픽스 배치 미도착 시 임시 좌표 생성 금지 — 명시적 unwired 상태 유지 |
+| 변경 이유 | 승인된 공식 경제값을 production 런타임이 실제로 소비하게 하는 마지막 배선. provisional(Game.ts→meta/provisionalEconomy)의 production import 제거. 경제 수치와 월드 좌표의 소유 경계를 계약으로 고정 |
+| 관련 게이트 | A8(공식 수치 소비)·MVP 재화 루프 |
+| 영향을 받는 파일 | 계약 1파일 신규 + 리드 조립 2파일 + 문서(INTERFACES §2e) |
+| 하위 호환 여부 | 깨짐 없음 — 신규 계약 추가. 게임플레이 provisional 파일(`systems/economy/provisionalEconomy` 등)은 소유 역할이 주입 경로로 교체 후 삭제(아래 지침). `upgradeCalculator` 로더는 툴링 시뮬레이터 전용으로 존치(production composition은 economyParams 번들만) |
+| 개발 리드 결정 | 승인 — spawnId 결합 함수와 출항당 spawn 가드는 리드 소유(PveIntegration), 좌표 데이터는 월드·그래픽스 소유, 드롭 생성·회수 런타임은 게임플레이 소유 유지 |
+| 적용 커밋 | (본 브랜치 선행 계약 커밋) |
+
+**각 창 소비 지침:**
+- **게임플레이**: `EconomySystem`의 `PROVISIONAL_DROP_TABLES`·`PROVISIONAL_PICKUP_RADIUS_METERS`·`PROVISIONAL_DEFEAT_CREDIT_LOSS_RATIO` 직접 import를 **주입 경로로 교체**(생성자 또는 attach API — 조립부가 `official.economy`의 dropTables·pickupRadiusMeters·creditLossOnDestroyedRatio를 전달). 교체 후 `systems/economy/provisionalEconomy.ts` 삭제. `spawnSalvage(kind,x,y,z,rarePartId)` 시그니처는 그대로 — composition이 결합 plan으로 호출한다. 조준은 `loadAimingParams` 값(aimingMath 동일 함수)을 주입받는 구조 유지 — `provisionalAiming` 삭제 시점은 게임플레이 결정
+- **그래픽스**: `SalvagePlacementSource` 구현체 1개를 제공(레이아웃·씬 소유 — spawnId 3종 `salvage-1/2/3` 각 1개 좌표, 협곡 내 도달 가능 위치). credits·rareParts 값 정의 금지 — 시각 표현(chest/container/mineral 메시)은 `kind`로 분기. 조립부 연결점: `SortieSalvageSpawner.attachPlacementSource`
+- **툴링**: economyParams 번들이 production 유일 공급원임을 시뮬레이터 문서에 반영. `upgradeCalculator` 로더는 시뮬레이터 전용 — production 소비 금지 유지
+- **기획**: salvageSpawns 추가·변경은 economy.json에서만 — 좌표 필드를 economy.json에 넣지 않는다(소유 분리)
+
 ### INT-CORE-010 — 스프린트 A 마감 계약: BaseScreenPort v2·결과 계약·저장 책임 단일화·경제 미확정 처리
 
 | 필드 | 내용 |
