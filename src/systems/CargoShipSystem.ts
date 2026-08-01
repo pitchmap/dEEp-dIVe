@@ -24,11 +24,17 @@
  *    구현은 코어 전투 루프 잔여 작업(D6~D9)에서 별도 배선한다.
  */
 
+import { factionRule } from '../contracts/faction';
 import type { CargoShipStateSource, Updatable } from '../contracts/systems';
 import type { EventBus } from '../core/EventBus';
 import type { ShipHullBox } from './collision/shipHullBox';
 import type { CargoRuntimeParams } from './economy/officialEconomyCatalog';
-import type { CombatTarget, FactionId, TargetRegistry } from './TargetRegistry';
+import type {
+  CombatTarget,
+  FactionId,
+  TargetRegistry,
+  TorpedoAttackContext,
+} from './TargetRegistry';
 
 export interface CargoShipWaypoint {
   readonly x: number;
@@ -113,6 +119,10 @@ export class CargoShipSystem implements Updatable, CargoShipStateSource, CombatT
   private sinkElapsed = 0;
   private removedFlag = false;
   private unregisterFromTargets: (() => void) | null = null;
+  /** 이 표적에 적용된 유효 중립 피격 횟수 — firstValidNeutralHit 판정용 */
+  private neutralHits = 0;
+  /** 시뮬레이션 경과 시간 (초) — 사건 timestamp. 결정적 값이라 재현 가능하다 */
+  private elapsedSeconds = 0;
 
   // 생성자 매개변수 프로퍼티 미사용 — 검증 러너(run.mjs)의 Node 타입
   // 스트리핑 호환(삭제 가능 문법만)을 위해 명시적 필드로 둔다.
@@ -220,15 +230,54 @@ export class CargoShipSystem implements Updatable, CargoShipStateSource, CombatT
     };
   }
 
-  /** 어뢰 명중 통지 — 첫 명중만 유효 (1발 격침 — 장비 피해량 무시). 즉시 표적 목록에서 빠져 중복 침몰 방지 */
-  onTorpedoHit(hitX: number, hitZ: number, _damage: number): void {
+  /**
+   * 어뢰 명중 통지 — 첫 명중만 유효 (1발 격침 — 장비 피해량 무시).
+   * 즉시 표적 목록에서 빠져 중복 침몰 방지.
+   *
+   * **여기가 유효 피해가 적용되는 정확한 지점이다** (B4). 중립 세력이고
+   * damage > 0이며 아직 파괴되지 않았을 때에만 `neutralShipHit`를 1회
+   * 발행한다 — 조준·발사·빗나감은 이 메서드에 도달하지 않고, 파괴 후
+   * 재호출은 위 가드에서 끊긴다.
+   */
+  onTorpedoHit(hitX: number, hitZ: number, damage: number, attack?: TorpedoAttackContext): void {
     if (this.hitFlag || this.removedFlag) return;
+    // 유효 피해가 아니면 상태를 바꾸지 않는다 — 사건도 발행하지 않는다.
+    if (!Number.isFinite(damage) || damage <= 0) return;
 
     this.hitFlag = true;
     this.velX = 0;
     this.velZ = 0;
     this.releaseTargetRegistration();
     this.bus.emit('torpedoHit', { targetId: this.config.id, x: hitX, z: hitZ });
+    this.reportEffectiveHit(hitX, hitZ, damage, attack);
+  }
+
+  /**
+   * 세력 규칙표가 '중립 사건 발생'으로 정한 세력에서만 사건을 발행한다 —
+   * 문자열 비교가 아니라 계약 규칙표 조회다. 공격 맥락(상관 id)이 없는
+   * 호출(내부 검증·비어뢰 경로)에서는 발행하지 않는다: 상관 id를 여기서
+   * 만들어 내면 중복 방지 키가 두 곳에서 생긴다.
+   */
+  private reportEffectiveHit(
+    hitX: number,
+    hitZ: number,
+    damage: number,
+    attack?: TorpedoAttackContext,
+  ): void {
+    if (!attack) return;
+    if (!factionRule(this.config.faction).raisesNeutralIncident) return;
+
+    this.neutralHits += 1;
+    this.bus.emit('neutralShipHit', {
+      targetEntityId: this.config.id,
+      attackerEntityId: attack.attackerEntityId,
+      targetFaction: this.config.faction,
+      attackWorldPosition: { x: hitX, z: hitZ },
+      damageAmount: damage,
+      attackCorrelationId: attack.attackCorrelationId,
+      timestamp: this.elapsedSeconds,
+      firstValidNeutralHit: this.neutralHits === 1,
+    });
   }
 
   // ── 시뮬레이션 ─────────────────────────────────────────────────────────
@@ -236,6 +285,7 @@ export class CargoShipSystem implements Updatable, CargoShipStateSource, CombatT
   update(deltaSeconds: number): void {
     if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0) return;
     if (!this.configured || this.removedFlag) return;
+    this.elapsedSeconds += deltaSeconds;
 
     if (this.hitFlag) {
       this.sinkElapsed += deltaSeconds;
@@ -282,6 +332,8 @@ export class CargoShipSystem implements Updatable, CargoShipStateSource, CombatT
     this.hitFlag = false;
     this.sinkElapsed = 0;
     this.removedFlag = false;
+    this.neutralHits = 0;
+    this.elapsedSeconds = 0;
     this.velX = 0;
     this.velZ = 0;
     this.faceCurrentWaypoint();
