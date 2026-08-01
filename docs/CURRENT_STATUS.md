@@ -55,8 +55,9 @@ HUD 34/34** · 브라우저 최종 인수 **미실시(범위 밖)**.
 ### 판정
 
 ```
-A_STACK_READY = true
-B 선행개발 = 가능 (선행개발 상태로만)
+A_STACK_READY      = true
+A_STACK_BASE_COMMIT = 85ec32b044b7b501f71740eb29a5cc708ffd05b7
+B 선행개발          = 가능 (선행개발 상태로만)
 ```
 
 **A_STACK_READY ≠** 스프린트 A 공식 인수 / A PR 병합 / B 공식 발효 /
