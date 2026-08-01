@@ -142,6 +142,13 @@ export class Game {
         layout: gameplay.layout,
         camera: this.renderer.camera,
         meta: this.metaLoop,
+        // PvE 통합 검증용 추가 핸들 (읽기 전용 실제 인스턴스)
+        bus: this.bus,
+        depth: gameplay.depth,
+        economy: gameplay.economy,
+        equipment: gameplay.equipment,
+        upgrades: this.upgrades,
+        effectiveParams: this.effectiveParams,
       };
     }
 
