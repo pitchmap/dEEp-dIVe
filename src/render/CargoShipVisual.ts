@@ -17,8 +17,10 @@
  */
 
 import * as THREE from 'three';
+import type { FactionId } from '../contracts/meta';
 import type { CargoShipStateSource } from '../contracts/systems';
 import { meshYawRadians } from '../core/conventions';
+import { factionVisualVariant, type FactionVisualVariant } from './factionVisuals';
 import visualParams from './renderVisualParams.json';
 
 const PARAMS = visualParams.cargoShip;
@@ -37,16 +39,26 @@ const TILT_FULL_AT_PROGRESS = 0.625;
 export class CargoShipVisual {
   readonly root = new THREE.Group();
 
+  /** 이 선박이 표현 중인 세력 변형 (게임플레이 faction 값으로만 선택된다) */
+  private variant: FactionVisualVariant;
+  /** 세력 변형 파츠(무장·마크·항해등) — faction 변경 시 통째로 교체 */
+  private variantGroup: THREE.Group | null = null;
+  private warningLight: THREE.Mesh | null = null;
+  private elapsed = 0;
+
   private readonly disposables: Array<{ dispose(): void }> = [];
+  private hullMaterial!: THREE.MeshLambertMaterial;
+  private upperMaterial!: THREE.MeshLambertMaterial;
   private readonly explosion: THREE.Mesh;
   private readonly explosionMaterial: THREE.MeshBasicMaterial;
   private explosionStarted = false;
   private explosionElapsed = 0;
   private disposed = false;
 
-  constructor() {
+  constructor(faction: FactionId | undefined = undefined) {
+    this.variant = factionVisualVariant(faction);
     const hullMaterial = new THREE.MeshLambertMaterial({
-      color: 0x2a3940,
+      color: this.variant.hullColor,
       flatShading: true,
     });
     const upperMaterial = new THREE.MeshLambertMaterial({
@@ -92,6 +104,10 @@ export class CargoShipVisual {
     this.explosion.renderOrder = 4;
     this.root.add(this.explosion);
 
+    this.hullMaterial = hullMaterial;
+    this.upperMaterial = upperMaterial;
+    this.buildVariantParts();
+
     this.disposables.push(
       hullMaterial,
       upperMaterial,
@@ -110,6 +126,13 @@ export class CargoShipVisual {
    */
   applyState(state: CargoShipStateSource): void {
     if (this.disposed) return;
+    // 세력 변형은 **게임플레이 상태의 faction 값**으로만 바뀐다 (추측 없음)
+    const nextVariant = factionVisualVariant(state.faction);
+    if (nextVariant.faction !== this.variant.faction) {
+      this.variant = nextVariant;
+      this.hullMaterial.color.setHex(nextVariant.hullColor);
+      this.buildVariantParts();
+    }
     const progress = THREE.MathUtils.clamp(state.sinkProgress, 0, 1);
     const eased = progress * progress; // 천천히 시작해 가속 (시각 이징만)
 
@@ -121,6 +144,104 @@ export class CargoShipVisual {
     this.root.rotation.y = meshYawRadians(state.headingRadians);
     this.root.rotation.x =
       -PARAMS.sinkTiltRadians * Math.min(progress / TILT_FULL_AT_PROGRESS, 1);
+  }
+
+  /**
+   * 세력 변형 파츠 생성 — 무장 실루엣·식별 마크·항해등.
+   * **색 이전에 형태로 구분한다** (§10): 실루엣 종류, 마크 기하 형태,
+   * 경고등 유무가 각 세력마다 다르다. 저해상도·원거리에서는 색·마크가
+   * 사라져도 상부 실루엣 차이가 남는다.
+   */
+  private buildVariantParts(): void {
+    if (this.variantGroup) {
+      this.root.remove(this.variantGroup);
+      this.variantGroup = null;
+      this.warningLight = null;
+    }
+    const group = new THREE.Group();
+    const v = this.variant;
+    const deckY = HULL_HEIGHT - DRAFT;
+
+    // ① 무장 실루엣 — 적대 2기·경비 1기·중립 0기 (원거리 실루엣 1차 구분자)
+    for (let i = 0; i < v.weaponMountCount; i += 1) {
+      const mount = new THREE.Group();
+      const baseGeometry = new THREE.BoxGeometry(1.6, 0.7, 1.6);
+      const base = new THREE.Mesh(baseGeometry, this.upperMaterial);
+      mount.add(base);
+      // 포신 — 각진 실루엣을 만드는 돌출부
+      const barrelGeometry = new THREE.BoxGeometry(0.3, 0.3, 3.2);
+      const barrel = new THREE.Mesh(barrelGeometry, this.upperMaterial);
+      barrel.position.set(0, 0.45, -1.6);
+      mount.add(barrel);
+      mount.position.set(0, deckY + 0.35, i === 0 ? -HULL_LENGTH / 4 : HULL_LENGTH / 5);
+      group.add(mount);
+      this.disposables.push(baseGeometry, barrelGeometry);
+    }
+
+    // ② 민간형 전용 — 매끈한 화물 적재 실루엣 (무장 대신 낮고 긴 덱 하우스)
+    if (v.silhouette === 'civilianSmooth') {
+      const cargoGeometry = new THREE.BoxGeometry(HULL_BEAM * 0.8, 1.6, HULL_LENGTH * 0.42);
+      const cargo = new THREE.Mesh(cargoGeometry, this.upperMaterial);
+      cargo.position.set(0, deckY + 0.8, -HULL_LENGTH * 0.12);
+      group.add(cargo);
+      this.disposables.push(cargoGeometry);
+    }
+
+    // ③ 저현 전투형(경비) — 상부를 낮추는 경사 갑판 블록
+    if (v.silhouette === 'lowProfileCombat') {
+      const deckGeometry = new THREE.BoxGeometry(HULL_BEAM * 0.72, 0.9, HULL_LENGTH * 0.55);
+      const deck = new THREE.Mesh(deckGeometry, this.upperMaterial);
+      deck.position.set(0, deckY + 0.45, 0);
+      group.add(deck);
+      this.disposables.push(deckGeometry);
+    }
+
+    // ④ 식별 마크 — **형태**로 구분(삼각/사각/마름모). 색은 보조 채널
+    const markGeometry = this.buildMarkGeometry(v.markShape);
+    const markMaterial = new THREE.MeshBasicMaterial({
+      color: v.markColor,
+      side: THREE.DoubleSide,
+    });
+    for (const side of [-1, 1]) {
+      const mark = new THREE.Mesh(markGeometry, markMaterial);
+      mark.position.set(side * (HULL_BEAM / 2 + 0.02), deckY - 1.1, -HULL_LENGTH * 0.28);
+      mark.rotation.y = side * Math.PI / 2;
+      group.add(mark);
+    }
+    this.disposables.push(markGeometry, markMaterial);
+
+    // ⑤ 항해등 — 중립은 상시 백색, 적대·경비는 경고등 점멸(색+거동 구분)
+    const lightGeometry = new THREE.SphereGeometry(0.28, 8, 6);
+    const navMaterial = new THREE.MeshBasicMaterial({ color: 0xf2f6f8 });
+    const navLight = new THREE.Mesh(lightGeometry, navMaterial);
+    navLight.position.set(0, deckY + 4.6, HULL_LENGTH / 2 - 4);
+    group.add(navLight);
+    this.disposables.push(lightGeometry, navMaterial);
+
+    if (v.hasWarningLight) {
+      const warnMaterial = new THREE.MeshBasicMaterial({ color: v.markColor });
+      const warningLight = new THREE.Mesh(lightGeometry, warnMaterial);
+      warningLight.position.set(0, deckY + 5.2, -HULL_LENGTH * 0.1);
+      group.add(warningLight);
+      this.warningLight = warningLight;
+      this.disposables.push(warnMaterial);
+    }
+
+    this.root.add(group);
+    this.variantGroup = group;
+  }
+
+  /** 식별 마크 기하 — 색과 독립된 형태 구분자 (삼각·사각·마름모) */
+  private buildMarkGeometry(shape: FactionVisualVariant['markShape']): THREE.BufferGeometry {
+    if (shape === 'square') return new THREE.PlaneGeometry(1.5, 1.5);
+    const triangle = new THREE.CircleGeometry(1.05, 3);
+    if (shape === 'diamond') {
+      const diamond = new THREE.CircleGeometry(1.05, 4);
+      diamond.rotateZ(Math.PI / 4);
+      triangle.dispose();
+      return diamond;
+    }
+    return triangle;
   }
 
   /**
@@ -136,7 +257,14 @@ export class CargoShipVisual {
 
   /** 매 프레임 — 폭발 잔광(1회성 연출)만 진행. 침몰은 applyState가 매핑한다 */
   update(deltaSeconds: number): void {
-    if (this.disposed || !this.explosion.visible) return;
+    if (this.disposed) return;
+    this.elapsed += deltaSeconds;
+    // 항해등 거동 — 중립은 상시 점등, 적대·경비는 세력별 주기로 점멸
+    if (this.warningLight) {
+      const hz = this.variant.navLightBlinkHz;
+      this.warningLight.visible = hz <= 0 || Math.sin(this.elapsed * hz * Math.PI * 2) > 0;
+    }
+    if (!this.explosion.visible) return;
     this.explosionElapsed += deltaSeconds;
     const progress = Math.min(
       this.explosionElapsed / PARAMS.explosionDurationSeconds,
