@@ -218,17 +218,50 @@ try {
     });
   }
 
-  // ② 스프린트 C 범위(탐지 게이지·소나 상태 머신·폭뢰·선체 체력·침수) 구현
-  //    파일이 B 선행개발에서 생기지 않았는지 — 계약 파일의 예약 정의는 A 이전
-  //    부터 존재하므로 구현 파일(시스템)만 검사한다.
+  // ② C 소유 경계 (INT-CORE-014 — C 공식 착수 후 개정).
+  //    C1~C9는 전 항목 공식 범위지만 **창별 소유가 다르다**: 탐지 게이지·
+  //    소나·폭뢰 판정은 게임플레이 창 소유이며 리드가 만들지 않는다.
+  //    리드 소유는 생존 공용 코어(선체·침수·실패 정산)뿐이다.
   {
-    const cScopeFiles = sourceFiles.filter((file) =>
-      /(DetectionSystem|SonarSystem|DepthCharge|HullSystem|Flooding)\.ts$/.test(path.basename(file)),
+    const leadFiles = sourceFiles.filter((file) => file.startsWith('src/core/'));
+    const forbiddenInLead = leadFiles.filter((file) =>
+      /(DetectionSystem|SonarSystem|DepthCharge|Repair)\.ts$/.test(path.basename(file)),
     );
+    // 생존 공용 코어는 정확히 이 3개 — 이름을 바꿔 늘리지 않는다.
+    const survivalCore = leadFiles.filter((file) =>
+      /(PlayerHullSystem|FloodingCore|SortieFailureCoordinator)\.ts$/.test(path.basename(file)),
+    );
+    const passed = forbiddenInLead.length === 0 && survivalCore.length === 3;
     results.push({
-      name: 'B 범위 밖(C) 구현 파일 없음 — 탐지·소나·폭뢰·내구도·침수 시스템 미생성',
-      passed: cScopeFiles.length === 0,
-      detail: cScopeFiles.length === 0 ? '통과' : `발견: ${cScopeFiles.join(', ')}`,
+      name: 'C 소유 경계: 리드는 탐지·소나·폭뢰·수리를 만들지 않음 (생존 공용 코어 3개만)',
+      passed,
+      detail: passed
+        ? '생존 코어 3개 · 게임플레이 소유 시스템 0개'
+        : `금지 파일: ${forbiddenInLead.join(', ') || '없음'} / 생존 코어 ${survivalCore.length}개`,
+    });
+  }
+
+  // ③ C 수치 발명 금지 — 생존 코어에 밸런스 상수 리터럴이 없어야 한다.
+  //    (선체 기준값·피해량·침수 속도·압력은 C9 [COMBAT] params 이관 대상)
+  {
+    const coreFiles = [
+      'src/core/PlayerHullSystem.ts',
+      'src/core/FloodingCore.ts',
+      'src/core/SortieFailureCoordinator.ts',
+    ];
+    const numericLiteral = /(?:^|[^\w.])(?!0\b|1\b)\d+(?:\.\d+)?\s*(?:;|,|\)|\})/;
+    const offenders = [];
+    for (const file of coreFiles) {
+      const body = read(file)
+        .split('\n')
+        .filter((line) => !line.trim().startsWith('*') && !line.trim().startsWith('//'))
+        .join('\n');
+      if (numericLiteral.test(body)) offenders.push(file);
+    }
+    results.push({
+      name: 'C 수치 발명 금지: 생존 코어에 밸런스 상수 없음 (0·1 경계값 제외)',
+      passed: offenders.length === 0,
+      detail: offenders.length === 0 ? '통과' : `숫자 리터럴 발견: ${offenders.join(', ')}`,
     });
   }
 }

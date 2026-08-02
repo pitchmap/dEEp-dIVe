@@ -58,6 +58,15 @@ import type {
   NeutralShipHitPayload,
   SurfaceShipMotionPort,
 } from '../../contracts/guard';
+import { PlayerHullSystem } from '../../core/PlayerHullSystem';
+import { FloodingCore } from '../../core/FloodingCore';
+import { SortieFailureCoordinator } from '../../core/SortieFailureCoordinator';
+import type {
+  DamageRequest,
+  FloodingParams,
+  HullBaseParams,
+  SortieFailureReport,
+} from '../../contracts/survival';
 import type {
   IdentificationLogSink,
   IdentificationOpportunityLog,
@@ -1449,6 +1458,360 @@ export function runMetaVerification(): VerificationResult[] {
           collected[0]?.resultClassification === 'misidentification' &&
           Object.keys(log).length === 9,
         `필드수=${Object.keys(log).length}(notes 포함), 분류=${collected[0]?.resultClassification}`,
+      );
+    }
+  }
+
+  // ── 스프린트 C: 생존 루프 공용 코어 (INT-CORE-014) ──
+  {
+    // 픽스처 수치 — **공식 params가 아니다.** 공식 선체·침수 수치는 C9
+    // [COMBAT] 이관 대기이며, 여기서는 코어 로직(중복·전이·결정성)만 본다.
+    const hullParams: HullBaseParams = {
+      baseMaxHull: 100,
+      damagedRatioThreshold: 0.6,
+      criticalRatioThreshold: 0.25,
+    };
+    const floodParams: FloodingParams = {
+      minorThreshold: 0.2,
+      majorThreshold: 0.5,
+      catastrophicThreshold: 0.8,
+      hullDamagePerSecondAtFull: 10,
+      spreadPerSecond: 0.1,
+    };
+    const damage = (overrides: Partial<DamageRequest> = {}): DamageRequest => ({
+      damageEventId: 'dmg-1',
+      targetEntityId: PLAYER_ENTITY_ID,
+      attackerEntityId: 8000,
+      sourceType: 'enemyWeapon',
+      rawDamage: 30,
+      worldPosition: { x: 1, y: -2, z: 3 },
+      occurredAt: 1000,
+      correlationId: 'atk-1',
+      causesFlooding: false,
+      floodingContribution: 0,
+      ...overrides,
+    });
+    const buildHull = (
+      options: { wired?: boolean } = {},
+    ): { hull: PlayerHullSystem; flooding: FloodingCore; bus: EventBus; destroyedCount: () => number } => {
+      const bus = new EventBus();
+      const flooding = new FloodingCore(options.wired === false ? null : floodParams);
+      const hull = new PlayerHullSystem(
+        PLAYER_ENTITY_ID,
+        flooding,
+        options.wired === false ? null : hullParams,
+      );
+      let destroyed = 0;
+      bus.on('playerDestroyed', () => {
+        destroyed += 1;
+      });
+      hull.initialize(verificationContext(bus));
+      return { hull, flooding, bus, destroyedCount: () => destroyed };
+    };
+
+    {
+      const { hull } = buildHull({ wired: false });
+      const result = hull.applyDamage(damage());
+      const snapshot = hull.snapshot();
+      check(
+        'C 미주입: 선체 기준값 없으면 unwired — 피해 미적용·상태 변경 0 (임시 수치 없음)',
+        result.outcome === 'unwired' &&
+          result.appliedDamage === 0 &&
+          snapshot.unwired &&
+          snapshot.hullRatio === null &&
+          !snapshot.isDestroyed,
+        `outcome=${result.outcome}, unwired=${snapshot.unwired}, ratio=${snapshot.hullRatio}`,
+      );
+    }
+    {
+      const { hull } = buildHull();
+      const first = hull.applyDamage(damage());
+      const dupEvent = hull.applyDamage(damage({ correlationId: 'atk-2' }));
+      const dupCorrelation = hull.applyDamage(damage({ damageEventId: 'dmg-2' }));
+      check(
+        'C 중복 방지: 동일 damageEventId·correlationId 각각 1회만 적용',
+        first.outcome === 'applied' &&
+          first.appliedDamage === 30 &&
+          dupEvent.outcome === 'ignoredDuplicate' &&
+          dupCorrelation.outcome === 'ignoredDuplicate' &&
+          hull.snapshot().currentHull === 70,
+        `first=${first.outcome}, dupId=${dupEvent.outcome}, dupCorr=${dupCorrelation.outcome}, hull=${hull.snapshot().currentHull}`,
+      );
+    }
+    {
+      const { hull } = buildHull();
+      const zero = hull.applyDamage(damage({ rawDamage: 0, damageEventId: 'z', correlationId: 'z' }));
+      const negative = hull.applyDamage(damage({ rawDamage: -5, damageEventId: 'n', correlationId: 'n' }));
+      const nan = hull.applyDamage(damage({ rawDamage: Number.NaN, damageEventId: 'a', correlationId: 'a' }));
+      const infinity = hull.applyDamage(
+        damage({ rawDamage: Number.POSITIVE_INFINITY, damageEventId: 'i', correlationId: 'i' }),
+      );
+      const wrongTarget = hull.applyDamage(
+        damage({ targetEntityId: 999, damageEventId: 't', correlationId: 't' }),
+      );
+      check(
+        'C 검증: 0·음수·NaN·Infinity 피해 거부 + 다른 표적 = targetNotFound (상태 변경 0)',
+        zero.outcome === 'invalidDamage' &&
+          negative.outcome === 'invalidDamage' &&
+          nan.outcome === 'invalidDamage' &&
+          infinity.outcome === 'invalidDamage' &&
+          wrongTarget.outcome === 'targetNotFound' &&
+          hull.snapshot().currentHull === 100,
+        `zero=${zero.outcome}, neg=${negative.outcome}, nan=${nan.outcome}, inf=${infinity.outcome}, target=${wrongTarget.outcome}`,
+      );
+    }
+    {
+      const { hull, destroyedCount } = buildHull();
+      const states: string[] = [hull.snapshot().survivalState];
+      hull.applyDamage(damage({ rawDamage: 50, damageEventId: 'd1', correlationId: 'c1' }));
+      states.push(hull.snapshot().survivalState);
+      hull.applyDamage(damage({ rawDamage: 30, damageEventId: 'd2', correlationId: 'c2' }));
+      states.push(hull.snapshot().survivalState);
+      const lethal = hull.applyDamage(damage({ rawDamage: 100, damageEventId: 'd3', correlationId: 'c3' }));
+      states.push(hull.snapshot().survivalState);
+      const afterDeath = hull.applyDamage(damage({ rawDamage: 10, damageEventId: 'd4', correlationId: 'c4' }));
+      check(
+        'C 전이: stable→damaged→critical→destroyed · 파괴 이벤트 1회 · 파괴 후 피해 무시',
+        states.join('>') === 'stable>damaged>critical>destroyed' &&
+          lethal.outcome === 'destroyed' &&
+          destroyedCount() === 1 &&
+          afterDeath.outcome === 'ignoredDestroyed' &&
+          hull.snapshot().currentHull === 0 &&
+          !hull.isPlayerAlive,
+        `states=${states.join('>')}, destroyedEvents=${destroyedCount()}, after=${afterDeath.outcome}`,
+      );
+    }
+    {
+      // 침수: 결정성 — dt를 쪼개도 결과가 같다
+      const coarse = new FloodingCore(floodParams);
+      const fine = new FloodingCore(floodParams);
+      coarse.addContribution(0.3);
+      fine.addContribution(0.3);
+      coarse.update(1);
+      fine.update(0.5);
+      fine.update(0.5);
+      check(
+        'C 침수 결정성: dt 분할 누적 = 단일 누적 (프레임률 독립)',
+        Math.abs(coarse.level - fine.level) < 1e-9 && coarse.level > 0.3,
+        `coarse=${coarse.level}, fine=${fine.level}`,
+      );
+    }
+    {
+      const flooding = new FloodingCore(floodParams);
+      const stages = [flooding.stage];
+      flooding.addContribution(0.25);
+      stages.push(flooding.stage);
+      flooding.addContribution(0.3);
+      stages.push(flooding.stage);
+      flooding.addContribution(0.3);
+      stages.push(flooding.stage);
+      flooding.resetForNewSortie();
+      stages.push(flooding.stage);
+      check(
+        'C 침수 전이: none→minor→major→catastrophic + 출항 초기화 (단계는 level 파생)',
+        stages.join('>') === 'none>minor>major>catastrophic>none' && flooding.level === 0,
+        `stages=${stages.join('>')}`,
+      );
+    }
+    {
+      const unwired = new FloodingCore(null);
+      const added = unwired.addContribution(0.5);
+      const damageFromFlood = unwired.update(1);
+      check(
+        'C 침수 미주입: 수치 없으면 침수 증가·피해 0 (임의 속도 생성 없음)',
+        added === 0 && damageFromFlood === 0 && unwired.level === 0 && unwired.snapshot().unwired,
+        `added=${added}, damage=${damageFromFlood}`,
+      );
+    }
+    {
+      const { hull } = buildHull();
+      hull.applyDamage(damage({ rawDamage: 40, causesFlooding: true, floodingContribution: 0.5 }));
+      hull.update(1); // 침수 지속 피해 = 10 × 0.6(확산 후) ≈ 6
+      const afterFlood = hull.snapshot();
+      hull.resetForNewSortie();
+      const afterReset = hull.snapshot();
+      check(
+        'C 출항 초기화: 선체·침수·중복 원장·파괴 플래그 초기화 (지갑·업그레이드 무관)',
+        afterFlood.currentHull < 60 &&
+          afterFlood.floodingLevel > 0.5 &&
+          afterReset.currentHull === 100 &&
+          afterReset.floodingLevel === 0 &&
+          !afterReset.isDestroyed &&
+          hull.applyDamage(damage()).outcome === 'applied',
+        `afterFlood=${afterFlood.currentHull}/${afterFlood.floodingLevel}, afterReset=${afterReset.currentHull}`,
+      );
+    }
+    {
+      const { hull } = buildHull();
+      hull.applyHullIntegrityModifier(0.2);
+      const boosted = hull.snapshot();
+      hull.resetForNewSortie();
+      const reset = hull.snapshot();
+      check(
+        'C hullIntegrity 소비: 최대치 = 기준값 × (1 + 보정 합) — upgradeMath 정본 사용',
+        boosted.maxHull === 120 && reset.maxHull === 120 && reset.currentHull === 120,
+        `maxHull=${boosted.maxHull}`,
+      );
+    }
+    {
+      const { hull } = buildHull();
+      hull.applyDamage(damage({ rawDamage: 50 }));
+      const model = hull.survivalReadModel();
+      const before = hull.snapshot().currentHull;
+      // UI 소비 모델은 값 복사본이며, 여기에 쓴다고 상태가 바뀌지 않는다.
+      (model as { currentHull: number }).currentHull = 999;
+      check(
+        'C 읽기 모델: UI가 상태를 바꿀 수 없음 · 경고는 키만 제공',
+        hull.snapshot().currentHull === before &&
+          model.warningIds.includes('hull.damaged') &&
+          model.failureCountdown === null &&
+          model.damageFlashRequested,
+        `hull=${hull.snapshot().currentHull}, warnings=${model.warningIds.join(',')}`,
+      );
+    }
+
+    // 실패 정산 — 기존 MetaLoop 경로 재사용
+    const buildFailure = (
+      options: { saveOk?: boolean } = {},
+    ): {
+      bus: EventBus;
+      loop: MetaLoop;
+      hull: PlayerHullSystem;
+      coordinator: SortieFailureCoordinator;
+      saves: number;
+      events: string[];
+      failures: SortieFailureReport[];
+      saveOk: { value: boolean };
+    } => {
+      const bus = new EventBus();
+      const port = new RecordingSessionPort();
+      const loop = new MetaLoop(bus, port, { creditLossOnDestroyedRatio: 0.5 });
+      loop.initialize(verificationContext(bus));
+      const events: string[] = [];
+      let saves = 0;
+      const saveOk = { value: options.saveOk !== false };
+      bus.on('saveRequested', (p) => {
+        saves += 1;
+        events.push(`save:${p.cause}`);
+      });
+      bus.on('sortieEnded', (p) => events.push(`ended:${p.settlement.outcome}`));
+      const flooding = new FloodingCore(floodParams);
+      const hull = new PlayerHullSystem(PLAYER_ENTITY_ID, flooding, hullParams);
+      hull.initialize(verificationContext(bus));
+      const coordinator = new SortieFailureCoordinator(
+        loop,
+        { get lastSaveSucceeded() { return saveOk.value; } },
+        () => hull.markFailureSettled(),
+      );
+      coordinator.initialize(verificationContext(bus));
+      const failures: SortieFailureReport[] = [];
+      bus.on('sortieFailed', (p) => failures.push(p.report));
+      loop.beginSortiePrep();
+      loop.launchSortie();
+      return {
+        bus,
+        loop,
+        hull,
+        coordinator,
+        get saves() { return saves; },
+        events,
+        failures,
+        saveOk,
+      } as never;
+    };
+
+    {
+      const ctx = buildFailure();
+      ctx.bus.emit('lootDropped', { source: 'cargoShip', credits: 100, rareParts: 1, x: 0, z: 0 });
+      ctx.hull.applyDamage(damage({ rawDamage: 200 }));
+      // 파괴 후 두 번째 보고는 무시돼야 한다
+      const second = ctx.coordinator.reportDestroyed({
+        failureId: 'again',
+        reason: 'hullDestroyed',
+        destroyedByEntityId: 8000,
+        damageSource: 'enemyWeapon',
+      });
+      const report = ctx.coordinator.lastReport;
+      const settlementSaves = ctx.events.filter((e) => e === 'save:settlement').length;
+      const endedCount = ctx.events.filter((e) => e.startsWith('ended:')).length;
+      check(
+        'C 실패: 파괴 1회 → 실패 1회 → 정산 1회 → 저장 1회 → BASE (중복 실패·중복 정산 없음)',
+        report !== null &&
+          report.reason === 'hullDestroyed' &&
+          report.pendingCredits === 100 &&
+          report.appliedLoss === 50 &&
+          report.finalCredits === 50 &&
+          report.securedRareParts === 1 &&
+          report.finalRareParts === 1 &&
+          report.saveStatus === 'saved' &&
+          report.nextState === 'BASE' &&
+          ctx.loop.metaState === 'BASE' &&
+          settlementSaves === 1 &&
+          endedCount === 1 &&
+          second === null &&
+          ctx.failures.length === 1,
+        `report=${JSON.stringify(report)}, saves=${settlementSaves}, ended=${endedCount}`,
+      );
+    }
+    {
+      const ctx = buildFailure({ saveOk: false });
+      ctx.bus.emit('lootDropped', { source: 'cargoShip', credits: 80, rareParts: 0, x: 0, z: 0 });
+      ctx.hull.applyDamage(damage({ rawDamage: 200 }));
+      const failed = ctx.coordinator.lastReport;
+      const stateAfterFail = ctx.loop.metaState;
+      const creditsAfterFail = ctx.loop.wallet.credits;
+      ctx.saveOk.value = true;
+      const retried = ctx.coordinator.retrySave(() => true);
+      const settlementSaves = ctx.events.filter((e) => e === 'save:settlement').length;
+      const endedCount = ctx.events.filter((e) => e.startsWith('ended:')).length;
+      check(
+        'C 저장 실패: 성공으로 위장 없음 · DEBRIEF 유지 · 재시도는 재정산 없이 BASE 전환',
+        failed?.saveStatus === 'saveFailed' &&
+          failed.nextState === 'DEBRIEF' &&
+          stateAfterFail === 'DEBRIEF' &&
+          retried?.saveStatus === 'saved' &&
+          retried.nextState === 'BASE' &&
+          ctx.loop.metaState === 'BASE' &&
+          ctx.loop.wallet.credits === creditsAfterFail &&
+          settlementSaves === 1 &&
+          endedCount === 1,
+        `failed=${failed?.saveStatus}/${failed?.nextState}, retried=${retried?.saveStatus}/${retried?.nextState}, saves=${settlementSaves}`,
+      );
+    }
+    {
+      // 다음 출항: 초기화 후 다시 실패를 처리할 수 있어야 한다
+      const ctx = buildFailure();
+      ctx.hull.applyDamage(damage({ rawDamage: 200 }));
+      ctx.hull.resetForNewSortie();
+      ctx.coordinator.resetForNewSortie();
+      ctx.loop.beginSortiePrep();
+      ctx.loop.launchSortie();
+      ctx.hull.applyDamage(damage({ damageEventId: 'dmg-next', correlationId: 'atk-next', rawDamage: 200 }));
+      const endedCount = ctx.events.filter((e) => e.startsWith('ended:')).length;
+      check(
+        'C 다음 출항: reset 후 정상 상태로 재시작 · 두 번째 실패도 1회 정산',
+        endedCount === 2 && ctx.failures.length === 2 && ctx.loop.metaState === 'BASE',
+        `ended=${endedCount}, failures=${ctx.failures.length}, state=${ctx.loop.metaState}`,
+      );
+    }
+    {
+      // 해역 밖 파괴 보고는 무시 (기지에서 정산 금지)
+      const bus = new EventBus();
+      const port = new RecordingSessionPort();
+      const loop = new MetaLoop(bus, port, { creditLossOnDestroyedRatio: 0.5 });
+      loop.initialize(verificationContext(bus));
+      const coordinator = new SortieFailureCoordinator(loop, null, null);
+      coordinator.initialize(verificationContext(bus));
+      const report = coordinator.reportDestroyed({
+        failureId: 'base-failure',
+        reason: 'hullDestroyed',
+        destroyedByEntityId: null,
+        damageSource: null,
+      });
+      check(
+        'C 실패 경계: SORTIE 밖(기지) 파괴 보고는 무시 — 파괴 전 정산 없음',
+        report === null && loop.metaState === 'BASE',
+        `report=${report === null ? 'null' : 'created'}, state=${loop.metaState}`,
       );
     }
   }
