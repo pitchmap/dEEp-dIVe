@@ -65,6 +65,11 @@
 | B-2 | **중립 사건 1건 = 경비 요청 1건 = 스폰 1척**: 중복 방지 저장소는 `GuardIncidentLedger` **1곳**(상관 id·요청 id 공용, 출항 경계 리셋). `neutralShipHit`은 유효 피해 적용 후 1회 — 조준·발사·빗나감·중복·파괴 후 발행 금지. `guardShipRequested`는 기존 이벤트 재사용(payload v2) | [확정 — INT-CORE-012] |
 | B-3 | **경비함 = 범용 구축함 AI 재사용** [개정]: production `DestroyerAI` 구현체가 0개였음이 확인되어 '기존 구현체 재사용/신규 AI 0'을 폐기하고, **범용 production 구현 정확히 1개**(`core/DestroyerAIController`)를 신설한다. 경비함·일반 적대 구축함이 같은 구현체를 소비하며 `GuardShipAdapter`는 주입(세력 patrol·초기 표적=공격자·스폰 이유·identity)과 수명주기 전달만 한다. 경비 전용 GuardAI·GuardBehavior·GuardStateMachine은 **계속 금지**. 이동은 게임플레이 `SurfaceShipMotionPort`(리드가 선박 transform 직접 조작 금지), 탐지·폭뢰·내구도는 미포함(C). 팩토리·이동 포트 미연결 = `spawnFailed`, 위치 전략 미연결 = `noSpawnLocation`, 검증 더블의 production 사용 금지 | [개정 확정 — INT-CORE-013, 15차 diff-only 변경. 구 규칙(INT-CORE-012 B5)은 전제 오류로 폐기] |
 | B-4 | **세력별 보상**: hostile = 공식 적대 드롭 테이블 / neutral = 보상 없음(크레딧 0·지갑 불변) / patrol = 공식 params 도착 전까지 없음(수치 발명 금지). 평판·도덕성 시스템은 스프린트 B 범위 밖 | [확정 — INT-CORE-012, B3] |
+| C-1 | **피해 수신 단일 창구**: 플레이어 피해는 `DamageReceiverPort`(리드 `PlayerHullSystem`) 한 곳으로만 들어오며 검증→중복 방지→차감→전이→파괴 판정이 한 트랜잭션이다. 같은 `damageEventId`·`correlationId` 재적용 금지, 파괴 후 피해 무시, 0·음수·NaN·Infinity 거부. 게임플레이는 자체 체력 상태를 두지 않는다 | [확정 — INT-CORE-014, C5] |
+| C-2 | **파괴 사실은 한 곳이 소유**: `PlayerHullState.isDestroyed`. `MetaState`를 확장하지 않고 기존 `SORTIE→DEBRIEF→BASE`를 쓴다. 파괴 1회 = `playerDestroyed` 1회 = 실패 1회 = 정산 1회 | [확정 — INT-CORE-014, C6] |
+| C-3 | **실패 정산은 기존 경로 재사용**: 손실률·지갑·상태 전이는 `MetaLoop.settleSortie({outcome:'destroyed'})`, 저장은 기존 `saveRequested('settlement')`. 실패 코디네이터는 SavePort를 직접 호출하지 않는다(A-12 유지). 저장 실패 시 DEBRIEF 유지·재정산 없이 저장만 재시도, 성공 시 BASE. C에서 별도 지갑 구현 금지 | [확정 — INT-CORE-014, C7·C8] |
+| C-4 | **전투 수치 발명 금지**: 선체 기준값·피해량·침수 속도·압력은 C9 [COMBAT] params 이관 대상이며 도착 전까지 시스템은 `unwired`(피해 미적용·UI 위장 금지). 침수 누적은 프레임률 독립(dt 비례), 침수 단계는 level에서 파생(이중 저장 금지) | [확정 — INT-CORE-014, C5·C9] |
+| C-5 | **압력 피해·수리 미도입**: 압력 피해는 공식 종료 조건 C1~C9에 없고 기준값도 없어 `DepthPressurePort` 계약과 `maxDepth` 소비 경계만 둔다. 수리 미니게임·침수로 인한 조작 불능도 근거 없음 → 구현 금지. 선체 영구 손상 여부·구매 직후 현재 선체 처리도 **결정 요청** 상태 | [확정(경계) — INT-CORE-014, 결정 대기 3건] |
 
 ## 버티컬 슬라이스 트랙 유효 결정 (구현 기준 — PvE에서 이월·재편)
 
