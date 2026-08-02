@@ -29,6 +29,8 @@
 | `neutralShipHit` | 게임플레이 유효 피해 판정 | targetEntityId, attackerEntityId, targetFaction, attackWorldPosition, damageAmount, attackCorrelationId, timestamp, firstValidNeutralHit | composition 중복 방지 경계 → guardShipRequested | 중립 선박에 **실제 피해 적용 후 1회** | 조준·발사·빗나감으로 발행 금지. 같은 attackCorrelationId·파괴 이후 재발행 금지 [INT-CORE-012] |
 | `guardShipRequested` | composition 중복 방지 경계 (리드) | requestId, sourceNeutralEntityId, attackerEntityId, incidentPosition, spawnReason, requestedFaction, correlationId | GuardSpawnPort → GuardShipAdapter → 기존 구축함 AI | 중립 유효 피격 1건당 1회 | payload v2 [INT-CORE-012] — 기존 이벤트 재사용(신규 이벤트 없음), 구 `{x,z}`는 incidentPosition으로 흡수. 같은 correlationId 중복 금지 |
 | `transportAttacked` | 게임플레이 (B6) | transportEntityId, attackerEntityId, attackWorldPosition, attackCorrelationId | 호위 교전 판정 | 고가치 수송선 유효 피격 시 | B1~B5 핵심 게이트 경로는 이 이벤트에 의존하지 않는다 |
+| `playerDestroyed` | 리드 PlayerHullSystem | reason, destroyedByEntityId, damageSource, worldPosition | SortieFailureCoordinator(실패 정산 1회), 렌더(실패 연출), 오디오 | 파괴 확정 시 **1회** | 파괴 사실의 주인은 선체 상태 하나 — MetaState 확장 금지 [INT-CORE-014] |
+| `sortieFailed` | 리드 SortieFailureCoordinator | report(SortieFailureReport) | 그래픽스 **실패 화면**(C6·C7), UI, 오디오 | 실패 정산 확정 시 1회 | 귀환 화면은 `sortieEnded` — 데이터·화면 분리(C7). 손실 계산은 MetaLoop 소유, 이 이벤트는 결과 전달만 |
 | `saveRequested` | meta/MetaLoop | cause('settlement'/'rarePart') | SaveSystem(툴링, src/meta/save) | 정산 확정·희귀 획득 즉시 | **이벤트 경로는 2종뿐** [INT-CORE-010 저장 책임 단일화] — 구매·장비·출항 저장은 트랜잭션·Departure command의 SavePort 직접 호출(동일 명령 이중 저장 금지). 구 'sortieLaunch' cause 폐기 |
 | `bossPhaseChanged` | 보스 AI (리드) | phase(1/2/3) | 렌더(단계 연출), 오디오(침묵 전환·음정 하강), UI | 단계 전환 시 | — |
 | `bossWeakPointChanged` | 게임플레이 약점 판정 | active | 렌더(발광·개방 연출), UI | 약점 활성/해제 시 | 판정=게임플레이 / 연출=렌더 경계 [소회의 결의 5] |
@@ -86,6 +88,29 @@
 | 출항 확정 직전 | Departure command (조립부) | SavePort 직접 호출 — 실패 시 **해역 전환 없음**. MetaLoop.launchSortie는 저장하지 않음 |
 | 귀환 정산 확정 | MetaLoop → `saveRequested('settlement')` | SaveBridge 구독 기록 |
 | 희귀 부품 획득 즉시 | MetaLoop → `saveRequested('rarePart')` | SaveBridge 구독 기록 |
+
+## 2g. 스프린트 C 생존 계약 (INT-CORE-014 — contracts/survival.ts)
+
+> 흐름 정본: 피해 source(게임플레이) → `DamageReceiverPort.applyDamage`
+> (리드 공용 코어 — 중복 방지·선체 변경·파괴 판정 한 트랜잭션) →
+> `playerDestroyed` → `SortieFailureCoordinator` → `MetaLoop.settleSortie
+> ({outcome:'destroyed'})` → `DEBRIEF` → `saveRequested('settlement')` →
+> 저장 성공 → `completeDebrief()` → `BASE`. **MetaState는 확장하지 않는다.**
+
+| 계약 | 내용 | 소유 |
+|---|---|---|
+| `PlayerHullState` | 선체 단일 읽기 모델 — currentHull·maxHull·hullRatio·floodingLevel/Rate·survivalState·isDestroyed·lastDamage*·recoverable·sortieFailurePending·**unwired** | 리드 (상태) / 게임플레이 (피해 source) |
+| `DamageEvent` / `DamageRequest` | damageEventId·correlationId·sourceType·raw/appliedDamage·worldPosition·lethal·causesFlooding·floodingContribution. 음수·NaN·Infinity·중복·파괴 후 적용 금지 | 발행=게임플레이 판정 |
+| `DamageSourceType` | enemyWeapon·pressure·collision·environment·scripted. 기존 `DamageCause`(direct/near)는 **폭뢰 근접도**로 의미가 달라 병존(중복 아님) | 리드 (계약) |
+| `DamageReceiverPort` | 결과 7종 applied·ignoredDuplicate·ignoredDestroyed·invalidDamage·targetNotFound·destroyed·**unwired**. UI·렌더는 읽기만 | 리드 (공용 코어) |
+| `FloodingParams` / `FloodingSnapshot` | 단계는 level에서 **파생**(이중 저장 금지). 프레임률 독립 누적. 이동 성능 저하·조작 불능은 공식 결정 없음 → 미구현 | 리드(코어) / 기획·툴링(수치) |
+| `DepthPressureParams` / `DepthPressurePort` | **월드 Y 좌표**(위가 +, 깊을수록 작아짐) 규약 명시. 안전 잠항 한계·피해 시작 Y·tick·즉시 파괴 여부 구분. 압력 피해는 C1~C9 목록에 없어 **구현 pending** | 리드(계약) / 게임플레이(판정) |
+| `HullUpgradeConsumer` / maxDepth | `hullIntegrity`·`maxDepth` 배율은 승인 완료(upgrades.json), **기준값 params 부재** → 소비 경계만 확정하고 production은 pending | 리드(경계) / 툴링(params) |
+| `EnemyAttackRequest` / `EnemyAttackPort` | 적 공격 → 피해 전달 경계. 무기·사거리·쿨다운 params 부재 → `unwired` 반환, 거리 무관 자동 피해·테스트용 즉시 피해 금지 | 리드(계약) / 게임플레이(판정) |
+| `SurvivalReadModel` | HUD 소비 전용 — hull·flooding·state·lastHitDirection·damageFlashRequested·warningIds(키만)·failureCountdown·isDestroyed. 문구·색·이펙트 없음 | 리드(모델) / 그래픽스(표현) |
+| `SortieFailureReport` / `SortieFailurePort` | failureId·reason 4종·pendingCredits·securedRareParts·appliedLoss·final*·saveStatus·nextState. 정산·손실률·지갑은 MetaLoop 소유(별도 지갑 금지), 저장은 기존 `saveRequested` 경로 | 리드 |
+| `PlayerAliveSource` | 파괴 후 적 AI·표적 판정이 소비하는 생사 소스(중복 상태 금지) | 리드(상태) / 게임플레이(소비) |
+| `SortieResettable` | 출항 한정 상태 초기화: 선체·침수·마지막 피해·파괴 플래그·중복 원장·적 공격·실패 코디네이터·경비 사건·salvage. **영구**: 지갑·업그레이드·loadout. 선체 영구 손상은 근거 없음 → 결정 요청 | 리드 |
 
 ## 2f. 스프린트 B 세력·식별·경비 계약 (INT-CORE-012 — 선행개발, B 미발효)
 

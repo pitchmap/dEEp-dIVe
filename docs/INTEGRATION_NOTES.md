@@ -90,6 +90,26 @@
 
 ## 제안 목록
 
+### INT-CORE-014 — 스프린트 C 선행 계약: 선체·피해·침수·심도 압력·실패 정산
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (C 공식 착수 — A 인수 통과·B_CORE_COMPLETE·dev가 3958ce4 포함 확인) |
+| 대상 시스템 | `src/contracts/survival.ts`(신규), `src/contracts/events.ts`(playerDestroyed·sortieFailed), `src/core/PlayerHullSystem.ts`·`FloodingCore.ts`·`SortieFailureCoordinator.ts`(신규), `src/core/Game.ts`(배선) |
+| 조사 결과 (근거) | ① **플레이어 피해 시스템이 존재하지 않는다** — `HullSystem` 계약만 있고 구현 0개, `hullDamaged`·`floodingChanged` 발행·구독 0건, `DepthChargeSystem` 구현 0개 ② **적이 플레이어를 공격할 수단이 전혀 없다** — `DestroyerAIController`·`PatrolShipEntity`에 무장 없음, 선박 충돌은 밀어내기 전용(피해 없음) ③ **선체 기준값·피해·침수·압력 params가 전무하다** — `upgrades.json`의 hullIntegrity·maxDepth는 배율만 승인·`paramRef` 없음("기준값 파라미터·소비자 미존재") ④ `settleSortie({outcome:'destroyed'})` 경로는 계산식만 있고 **production 호출자가 없다**(Game.ts는 `'aborted'` 고정) ⑤ `EconomySystem.settleDefeat`/`settleReturn`/`RunEconomy.settleSortie`는 **production 호출자 0건의 병행 정산 경로**다 |
+| 필요한 변경 | ① `PlayerHullState` 단일 읽기 모델(+`unwired` — 기준값 미주입 시 정상 선체로 위장 금지) ② `DamageEvent`/`DamageRequest`·`DamageSourceType`(기존 `DamageCause`는 폭뢰 근접도로 의미가 달라 **중복 아님**, 병존) ③ `DamageReceiverPort` — 결과 7종(applied·ignoredDuplicate·ignoredDestroyed·invalidDamage·targetNotFound·destroyed·unwired), 적용·선체 변경·파괴 판정이 **한 트랜잭션 경계** ④ `FloodingParams`·`FloodingSnapshot`(단계는 level에서 **파생** — 이중 저장 금지) ⑤ `DepthPressureParams`·`DepthPressurePort`(월드 Y 좌표 규약 명시, tick 기반 결정적 피해) ⑥ `EnemyAttackRequest`/`EnemyAttackPort` ⑦ `SurvivalReadModel`(경고는 key만, 문구·색 없음) ⑧ `SortieFailureReport`/`SortieFailurePort` ⑨ `playerDestroyed`·`sortieFailed` 이벤트 ⑩ **MetaState 미확장** — 파괴 사실은 `PlayerHullState.isDestroyed` 하나가 소유하고 메타는 기존 `DEBRIEF` 사용 |
+| 변경 이유 | C1~C9(전 항목 핵심 게이트)의 생존 루프를 4개 창이 병렬 구현할 수 있도록 경계를 먼저 고정. 특히 피해 중복 적용·이중 정산·이중 저장을 계약 수준에서 차단 |
+| 관련 게이트 | C4(피격)·C5(내구도·침수)·C6(실패 화면)·C7(정산 분리)·C8(영구 요소 보존). C1~C3(탐지·추적)·C9(params 이관)은 별도 계약·소유 |
+| 하위 호환 여부 | 추가만 — 기존 `HullSystem`·`hullDamaged`·`floodingChanged`·`DamageCause`·MetaState·저장 책임 표(A-12) 무변경. A·B 회귀 없음(검증 전 항목 통과) |
+| 개발 리드 결정 | 승인. **수치는 하나도 만들지 않는다** — 선체 기준값·피해량·침수 속도·압력은 C9 [COMBAT] params 이관 대상이며 도착 전까지 `unwired`로 남는다 |
+| 적용 커밋 | (본 브랜치 C 선행 계약 커밋) |
+
+**각 창 적용 지침 (스프린트 C):**
+- **게임플레이**(창 2 — C1·C2 탐지·은신, C4 폭뢰 판정, C5 내구도·침수·파괴 판정, C7 손실 계산): 리드 공용 코어(`PlayerHullSystem`)를 **피해 수신 단일 창구**로 소비하고 자체 체력 상태를 만들지 않는다. 실제 피해 source(폭뢰·충돌·압력)·판정 타이밍은 게임플레이 소유. `PatrolShipFleet.isTargetAlive(PLAYER_ENTITY_ID)`가 현재 항상 true인데, 리드가 제공하는 `PlayerAliveSource`를 구독해 파괴 후 추적을 멈추게 할 것. **`EconomySystem.settleDefeat`/`settleReturn`·`RunEconomy.settleSortie`는 production 호출자가 없는 병행 정산 경로다 — 정본은 MetaLoop이므로 삭제 요청**(C에서 별도 지갑 금지)
+- **그래픽스**(창 3 — C5 X-ray 침수, C1·C3 탐지 UI, C6 실패 화면, C7 귀환 화면): `SurvivalReadModel`만 소비. 침수량·피해량을 결정하지 않는다. **실패 화면은 `sortieFailed`, 귀환 화면은 `sortieEnded`** — 데이터·화면을 완전히 분리한다(C7). 경고는 `warningIds` 키로 오고 문구·색·이펙트는 그래픽스 소유
+- **빌드·툴**(창 4 — C9 [COMBAT] params 이관, C1~C9 검증): `params/combat.json` 확장 스키마 제안 — 선체 기준값(`baseMaxHull`)·survivalState 경계 2종·피해량(폭뢰 direct/near)·침수(단계 3종·확산율·선체 피해율)·압력(안전 심도 Y·피해 시작 Y·tick·tick당 피해). **전부 미확정이며 임의 수치 금지.** `verify:sprint-c` 신설은 툴링 몫이고 리드는 없는 script를 실행하지 않는다. C8은 '파괴 후 재접속 → 영구 요소 보존' 단언
+- **통합**: composition 순서 = 공식 params → PlayerHullSystem → FloodingCore → (게임플레이 피해 source) → SortieFailureCoordinator → MetaLoop 정산 → SaveBridge → BASE 복귀 → SurvivalReadModel → 렌더 HUD. B6·B7은 C core와 섞지 않는다(병렬 슬롯)
+
 ### INT-GAME-013 — B5 런타임 연결 완료 + production 배선 2줄 요청 (조립부)
 
 | 필드 | 내용 |
