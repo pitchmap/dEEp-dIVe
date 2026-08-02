@@ -203,6 +203,19 @@ export class Game {
         guardAdapter: this.guardAdapter,
         guardSpawn: this.guardSpawn,
         guardLedger: this.guardLedger,
+        // 스프린트 B 실측용 읽기 전용 핸들 (실제 인스턴스 — 더미 아님).
+        // 목록은 **접근 시점에 평가**되도록 getter로 노출한다 — 부팅 시점
+        // 스냅샷을 박아 두면 스폰 이후 상태를 관측할 수 없다.
+        get ships() {
+          return gameplay.ships;
+        },
+        shipWorldSource: gameplay.shipWorldSource,
+        shipIdentification: gameplay.shipIdentification,
+        get patrolFleet() {
+          return gameplay.patrolShips;
+        },
+        highValueTransport: gameplay.highValueTransport,
+        scene,
       };
     }
 
@@ -409,16 +422,46 @@ export class Game {
     this.guardAdapter = guardAdapter;
     const guardSpawn = new GuardSpawnCoordinator(guardLedger, guardAdapter, null);
     this.guardSpawn = guardSpawn;
+    //     스폰 위치 전략 — 월드 지식(협곡 bounds·지형·사건 위치·플레이어
+    //     선체 회피)이 필요하므로 게임플레이·월드 소유 정본을 연결한다.
+    //     **정확히 1회** 호출. 원점·플레이어 위치 fallback을 두지 않는다 —
+    //     전략이 자리를 못 찾으면 `noSpawnLocation`으로 끝나야 한다.
+    guardSpawn.attachLocationStrategy(gameplay.guardSpawnLocation);
     //     범용 구축함 AI 팩토리 (INT-CORE-013 — B5 개정). 판단은 리드 소유
     //     `DestroyerAIController`(production 유일 구현체), 실제 이동은
     //     게임플레이 소유 `SurfaceShipMotionPort`다. 이동 포트 팩토리가
-    //     도착하면 아래 상수만 교체하면 되고, 그 전까지 팩토리는 이동 포트를
-    //     만들지 못해 `create()`가 null → 스폰은 `spawnFailed`로 끝난다
-    //     (가짜 이동·대체 AI 생성 금지).
-    const surfaceMotionPorts: SurfaceShipMotionPortFactory = {
-      create: () => null, // 게임플레이 motion adapter 도착 시 교체 (1줄)
-    };
+    //     도착했으므로 게임플레이 production 팩토리(`PatrolShipFleet`)를 그대로
+    //     연결한다 — 테스트 더블 없음. 팩토리는 스폰마다 독립 `PatrolShipEntity`
+    //     와 그 entity에 붙은 포트를 만들며, AI는 transform을 소유하지 않는다
+    //     (pose 정본 = 게임플레이 entity 하나).
+    const surfaceMotionPorts: SurfaceShipMotionPortFactory =
+      gameplay.surfaceShipMotionPortFactory;
     guardAdapter.attachFactory(createProductionDestroyerAIFactory(surfaceMotionPorts));
+    //     경비함 등장 방향 표시(B5) — **실제 스폰 결과만** 렌더에 넘긴다.
+    //     스폰이 차단된 동안(위치 전략·AI 팩토리 미연결) 목록은 비어 있고
+    //     마커도 뜨지 않는다: 존재하지 않는 경비함을 가리키지 않는다.
+    const guardSightings: Array<{
+      requestId: string;
+      worldPosition: { x: number; y: number; z: number };
+    }> = [];
+    guardSpawn.attachSpawnListener((handle) => {
+      guardSightings.push({
+        requestId: handle.requestId,
+        // 실제 스폰 좌표 그대로 — 렌더가 위치를 추정하지 않는다.
+        // 경비함은 수상 전투함이므로 표시 높이는 해수면 기준이다.
+        worldPosition: {
+          x: handle.spawnPosition.x,
+          y: STARTING_CANYON_LAYOUT.seaSurfaceY,
+          z: handle.spawnPosition.z,
+        },
+      });
+    });
+    scene.attachGuardSightingSource({
+      get sightings() {
+        return guardSightings;
+      },
+    });
+
     this.registry.register(new NeutralIncidentBoundary(guardLedger));
     this.registry.register(new GuardSpawnBridge(guardSpawn));
     // ③ AI 그룹 — 스폰된 기존 구축함 AI들의 수명주기 전달만 담당한다.
@@ -559,6 +602,19 @@ export class Game {
     //  - EventBus (torpedoHit 폭발 연출 등 이벤트 구독용)
     scene.attachPoseSource(gameplay.poseSource);
     scene.attachCargoShipSource(gameplay.cargoShipState);
+    // 다중 선박(B1·B5) — 적대·중립 화물선 + 스폰된 경비함이 한 목록으로 온다.
+    // 이 소스가 주입되면 렌더의 단일 화물선 경로를 **대체**하므로 적대
+    // 화물선이 두 경로로 중복 렌더되지 않는다. 세력 변형 선택은 목록이 준
+    // faction 값으로만 이뤄진다 (렌더가 모델·클래스 이름으로 추측 금지).
+    scene.attachShipWorldSource(gameplay.shipWorldSource);
+    // 식별 태그(B2) — 판정은 게임플레이 `ShipIdentificationSystem` 소유이고
+    // 렌더는 read model만 표시한다. 미식별 상태에서는 세력 문자열이 나오지
+    // 않는다(계약이 faction을 노출하지 않음).
+    scene.attachIdentificationSource(gameplay.shipIdentification);
+    // 호위 표현(B6 구조) — 고가치 수송선·결속 read model. 공식 params가 없어
+    // production에서 목록은 비어 있고, 따라서 배지·결속선도 표시되지 않는다
+    // (수치·개체를 지어내지 않는다).
+    scene.attachConvoySource(gameplay.highValueTransport);
     scene.attachEventBus(this.bus);
     // 어뢰 모델·기포 항적 — 실제 발사 어뢰 상태를 그대로 소비한다
     // (INT-RENDER-006. 렌더는 스냅샷만 읽고 판정하지 않는다).

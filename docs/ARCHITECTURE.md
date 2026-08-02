@@ -520,3 +520,60 @@ gameplay.poseSource)`로 읽기 전용 잠수함 포즈를 1회 주입한다. �
 판정·이동을 계산하지 않고, 시스템 update 이후 sceneManager.update가
 포즈를 소비한다. `WebAudioSystem`은 아직 미조립(후속 통합 항목 —
 CURRENT_STATUS 빌드·툴 구역).
+
+## 스프린트 B 조립 계약 (INT-CORE-012·013 — 세력·식별·경비함)
+
+```
+중립 유효 피해 (게임플레이 CargoShipSystem)
+        │  neutralShipHit { targetEntityId, damageAmount>0,
+        ▼                   attackCorrelationId: "torpedo:<어뢰 id>" }
+NeutralIncidentBoundary ──▶ GuardIncidentLedger.claimRequest(correlationId)
+        │                        └ 같은 사건 두 번째 요청은 여기서 멈춘다
+        ▼  guardShipRequested { requestId = correlationId, requestedFaction:'patrol' }
+GuardSpawnBridge ──▶ GuardSpawnCoordinator.spawnGuardShip()
+        ├─ ledger.claimSpawn(requestId)      → duplicateRequest
+        ├─ GuardSpawnLocationStrategy.resolve() → noSpawnLocation (임의 좌표 금지)
+        │     정본: gameplay.guardSpawnLocation (CanyonPatrolSpawnLocation)
+        ▼
+GuardShipAdapter.spawn()
+        └─ createProductionDestroyerAIFactory(surfaceMotionPorts)
+              ├─ 판단: DestroyerAIController      (리드 — production 유일 구현체)
+              └─ 이동: SurfaceShipMotionPort      (게임플레이 PatrolShipEntity)
+                     정본 팩토리: gameplay.surfaceShipMotionPortFactory
+        ▼
+GuardShipHandle { requestId, entityId, faction:'patrol',
+                  initialTargetEntityId = PLAYER_ENTITY_ID, spawnPosition }
+        ├─▶ TargetRegistry (어뢰 명중 판정)
+        ├─▶ gameplay.shipWorldSource     → 렌더 3D 표현
+        ├─▶ gameplay.shipIdentification  → 조준경 태그
+        └─▶ scene.attachGuardSightingSource → 등장 방향 마커 (실제 spawnPosition만)
+```
+
+**중복 방지 저장소는 `GuardIncidentLedger` 하나뿐이다** — 요청(상관 id)과
+스폰(요청 id)이 같은 원장을 공유한다. 시스템 내부에 별도 중복 표를 두지 않는다.
+새 출항에서 원장·함대·식별 상태가 전부 초기화되므로, 과거 requestId가 새
+출항의 정상 사건을 막지 않는다.
+
+**AI는 transform을 소유하지 않는다.** pose 정본은 게임플레이 `PatrolShipEntity`
+하나이고, AI는 이동 포트를 통해 명령만 낸다. 이 분리 덕분에 '경비함 = 기존
+구축함 AI 재사용'(신규 AI 코어 0)이 구조로 보장된다 — production
+`implements DestroyerAI` 구현체는 `src/core/DestroyerAIController.ts` **1개**뿐이며,
+검사는 파일명이 아니라 내용 기준이라 이름을 바꿔 피할 수 없다.
+
+### 다중 선박 렌더 경로
+
+```
+gameplay.shipWorldSource (ShipWorldView[] — 평면 스냅샷, 객체 참조 없음)
+        │  적대 화물선 + 중립 화물선 + 스폰된 경비함
+        ▼
+CanyonScene.attachShipWorldSource
+        └─ entityId → CargoShipVisual (변형 = view.faction 값으로만 선택)
+           · 주입 시 단일 화물선 경로(attachCargoShipSource)를 **대체**
+             → 적대 화물선이 두 경로로 중복 렌더되지 않는다
+           · 목록에서 사라지거나 alive=false → 인스턴스 제거·dispose
+           · torpedoHit 폭발은 맞은 개체 인스턴스에서만 시작 (멱등)
+```
+
+렌더는 모델·클래스 이름으로 세력을 추측하지 않는다 — `factionVisuals.ts`의
+변형 3종(적대 삼각·포탑 2 / 중립 사각·포탑 0 / 경비 마름모·포탑 1)은
+`FactionId` 값으로만 선택되며, **색 이전에 실루엣·마크 형태로 구분**된다.

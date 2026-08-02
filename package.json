@@ -19,7 +19,8 @@
     "verify:gameplay": "node src/systems/__verification__/run.mjs",
     "verify:hud": "node scripts/verify-hud.mjs",
     "verify:meta": "node src/meta/__verification__/run.mjs",
-    "verify:sprint-a": "node scripts/verify-sprint-a.mjs"
+    "verify:sprint-a": "node scripts/verify-sprint-a.mjs",
+    "verify:sprint-b": "node scripts/verify-sprint-b.mjs"
   },
   "dependencies": {
     "three": "^0.185.1"

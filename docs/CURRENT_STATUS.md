@@ -6,7 +6,78 @@
 
 ---
 
-## 스프린트 A 스택 통합 (A_STACK_BASE) — 통합 관리자, 최신
+## A+B 최종 기술 통합 — 통합 관리자, 최신
+
+> 상세: `docs/SPRINT_A_INTEGRATION_MANIFEST.md` §AB1~AB8 ·
+> `docs/SPRINT_B_ACCEPTANCE.md` 'A+B 최종 기술 통합 판정'.
+> 브랜치: `claude/deep-dive-d5-gray-box-integration-tree5i` (dev 미병합).
+
+### 병합된 역할 tip (원격 실측 = 보고값 일치)
+
+| 역할 | tip | 병합 커밋 | 충돌 |
+|---|---|---|---|
+| 개발 리드 | `5b443d5` | `c738316` | 없음 |
+| 게임플레이 | `a48dce5` | `480a99f` | 없음 |
+| 그래픽스 | `cc09fb9` | `4ca4f03` | 4건 |
+| 빌드·툴 | `2757a48` | `63a2549` | 없음 |
+
+필수 커밋 ancestry 6건(`5b443d5`·`b8ade9e`·`c4026f1`·`a48dce5`·`cc09fb9`·`2757a48`) 확인.
+
+### production composition 배선
+
+| 항목 | 상태 |
+|---|---|
+| `SurfaceShipMotionPortFactory` | ✅ `gameplay.surfaceShipMotionPortFactory` (null 더미 제거) |
+| `GuardSpawnLocationStrategy` | ✅ `gameplay.guardSpawnLocation` 1회 |
+| production `DestroyerAIFactory` | ✅ `DestroyerAIController` 1개 · Guard 전용 AI 0 |
+| 다중 선박 렌더 source | ✅ `gameplay.shipWorldSource` (단일 화물선 경로 대체 — 중복 렌더 없음) |
+| `ShipIdentificationSource` | ✅ 연결 / `IdentificationExposureSink` **미주입**(사유 기록) |
+| Guard spawn listener | ✅ 실제 `spawnPosition`만 마커에 전달 |
+| 출항 경계 reset | ✅ 원장·함대·식별·salvage 전부 초기화 실측 |
+
+### 자동 검증
+
+typecheck ✅ · build ✅ · size ✅ 4.8% · scope ✅ ·
+**gameplay 213/213 · meta 88/88 · tooling 26/26 · hud 34/34 ·
+sprint-a 자동 전 항목 · sprint-b 자동 23/23(차단 0)**
+
+### B1~B5 production 브라우저 실측 — 전 항목 통과
+
+| ID | 핵심 실측 |
+|---|---|
+| B1 | hostile 1 + neutral 1 동시 배치 · 렌더 변형이 실제 faction과 일치 · 사건 전 patrol 0 |
+| B2 | 조준 전 `unidentified`(세력 미노출) → 조준 후 `hostile`/`neutral`/`patrol` · 화면 태그 기호+문구+거리 |
+| B3 | hostile 격침 **+120** / neutral 격침 **0**(지갑·출항 재화·드롭 전부 불변) / patrol pending |
+| B4 | `neutralShipHit` 1건 · `attackCorrelationId="torpedo:1"` · `guardShipRequested` 1건(동일 id) · 중복 요청 `duplicateRequest` |
+| B5 | 경비함 1척 `patrol` 생성 · 초기 표적 `PLAYER_ENTITY_ID` · 수면 y=12 유지 · **거리 30.0 → 5.8 m 접근** · 방향 마커 실제 위치 |
+
+### A 회귀 — 전부 통과
+
+- **조준 10/10**: `periscope`(y 8.12) / `cruise`(3.95) / `deep`(−3.02) 3구간
+  진입 · 카메라 = `aimCameraSocket` 오차 0 · 자기 선체 layer 제외 ·
+  조준 유지 중 ΔY 0 · 소켓 `forwardY` = `sin(aimPitch)` 일치 · 콘솔 오류 0
+- **기지·경제**: BASE 시작 · EconomyHud · 업그레이드 7/장비 4 · 공식 가격 ·
+  출항 버튼 1개 · 구매(저장 1회) · 장비 4동작 · 저장 실패 rollback ·
+  출항 저장 실패 시 기지 유지 · 새로고침 복원 · 명시적 빈 loadout 유지
+- **출항 경제**: salvage 3종 배치·중복 없음 · hostile cargo 120
+
+**A 공식 인수 = 통과 (A1~A8).**
+
+### 판정
+
+```
+B_CORE_COMPLETE  = true
+B_FINAL_COMPLETE = false   (B6 실기동 미완 · B7 실측 pending)
+C 기술 선행개발   = 가능
+C 공식 발효       = 불가 (A 통합 PR 미병합)
+B 공식 발효       = 불가 (발효 조건 = A 통합 PR 병합)
+```
+
+B6·B7 pending은 B1~B5 실패가 아니다 (15차 결의 1·3 병렬 최종 조건).
+
+---
+
+## 스프린트 A 스택 통합 (A_STACK_BASE) — 이전 회차
 
 > 상세: `docs/SPRINT_A_INTEGRATION_MANIFEST.md` §A1~A12 ·
 > `docs/SPRINT_A_ACCEPTANCE.md` 'A_STACK 회차'.
@@ -271,12 +342,31 @@ B 선행개발          = 가능 (선행개발 상태로만)
     - **효과 소비자 조사**(`economy/upgradeEffectConsumers.ts`): **wired 4** — maxSpeed·turnRate(`SubmarinePlayerController`), reloadSpeed(`StraightRunTorpedoSystem`), torpedoDamage(`EquipmentSystem.setUpgradeModifiers`) / **`deferred consumer` 3 — hullIntegrity·maxDepth·sonarRange**(기준값 파라미터·소비 시스템 부재. 기준값 발명·체력 시스템 개발·C 내구도 선구현·스텁 전부 없음)
     - **저장 직접 호출 0건**: 러너 정적 검사(save 계열 import·`.save(`·localStorage) + 판정 포트 표면 검사 2중
     - 결정적 검증 **167항목**(167/167 — 기존 133 유지·공식화 반영 갱신 + 신규 34, 정적 검사 2 포함)
+  - **스프린트 B 선행개발 (INT-CORE-012 이행 — `[FACTION]`·`[AI]`·`[ECON]`·`[LOOP]`). B 공식 미발효 — dev/main·통합 병합 없음**
+    - **B1 적대·중립 동시 배치**: `faction/shipPlacements.ts` — 공식 `params/cargo.json` 값에서만 파생한 배치 2척(적대 1·중립 1). **수치 리터럴 0개**, 중립 항로는 공식 선체 길이(2×halfLength)만큼 평행 이동한 같은 항로다. 같은 `CargoShipSystem` 원형을 세력 태그만 바꿔 재사용 — 선박 클래스 분화·신규 AI 없음. 중립은 선제 공격하지 않는다(공격 진입점 자체가 없고 플레이어 위치를 읽지 않는다)
+    - **B2 식별 read model**: `faction/ShipIdentificationSystem.ts` = 계약 `ShipIdentificationSource`. 미식별 시 `displayLabelId === null`(세력 비노출), 식별 후 세력·라벨 키 일치, 죽은 표적은 `tagDisplayable=false`. 색·문구 미제공(그래픽스 소유). **식별 거리 공식 params가 없어** 기존 판정 범위(어뢰 유효 사거리 + 조준경 진입)를 재사용한다 — 새 거리 상수 발명 0, `attachIdentificationParams`로 교체 가능
+    - **B3 세력별 보상**: 판단 근거는 계약 규칙표 `rewardDropTableIdFor` 하나(시스템 내부 세력 분기 제거). hostile = 공식 `cargo-standard` 유지(120), neutral = 드롭 엔티티 0·크레딧 0·희귀 0·**지갑 전후 동일**, patrol = 공식 params 없음 → 보상 0(발명 금지). 평판·도덕성 미도입
+    - **B4 `neutralShipHit` 이행**: 발행 지점은 **유효 피해가 적용되는 곳 단 하나**(`CargoShipSystem.onTorpedoHit`, damage>0·미파괴·중립 규칙 충족). 조준·발사·빗나감·파괴 후·같은 correlationId 재발행 전부 0회. 상관 id = `torpedo:<어뢰 id>`(어뢰 1발 = 1건, `TorpedoAttackContext`로 전달). **레거시 `legacy:<targetId>` 경로 production 사용 제거** — 게임플레이가 경비 큐에 요청을 넣지 않으므로 같은 사건이 두 경로로 처리되지 않는다. 중복 방지 표는 리드 `GuardIncidentLedger` 하나뿐이며 게임플레이에 별도 표를 만들지 않았다
+    - **B4 스폰 위치 전략**: `faction/CanyonPatrolSpawnLocation.ts` = 계약 `GuardSpawnLocationStrategy`. 플레이어 선체·사건 지점·지형 내부 회피(기존 `CollisionWorld.intersectsSphere` 재사용), 가시 범위 내 진입, 후보 없으면 **null → `noSpawnLocation`**(원점·플레이어 위치 무조건 반환 금지). 경비 거리 params가 없어 어뢰 유효 사거리와 그 절반에서 파생 — `attachGuardSpawnParams`로 교체 가능
+    - **B5 = 차단(B5_BLOCKED=true, 경우 B)**: 전 브랜치 히스토리 조사 결과 **재사용할 구축함 AI 구현이 없다**(계약·어댑터·검증 더블뿐). 신규 Guard AI 코어를 만들지 않았고 러너 정적 검사로 0건을 강제한다. 체인 도달점 = 위치 해결 후 `spawnFailed`(AI 팩토리 미연결). 상세: INT-GAME-012
+    - **B6 고가치 수송선·호위 (B1~B5와 독립)**: `faction/HighValueTransportSystem.ts` — archetype·보상 배율 **참조 키**(숫자 아님, 공식 배율 미도착이라 `null` = 보상 변경 없음)·`EscortBinding`·`transportAttacked` 1회 발행·교전 요청 생성·`maximumEscortDistance` 소비. **실제 AI 기반 호위 기동은 미완료** — 구축함 AI 부재로 교전 요청 소비자가 없다(호위 전용 신규 AI 미작성)
+    - 결정적 검증 **192항목**(192/192 — 기존 167 유지 + 신규 25, B5 AI 코어 0건 정적 검사 포함). meta 77/77·tooling 26/26·sprint-a 30/30 동시 통과
+  - **B5 런타임 연결 (INT-CORE-013 이행 — `[AI]`·`[FACTION]`·`[LOOP]`). B 공식 미발효**
+    - **`SurfaceShipMotionPort` production 구현**(`faction/PatrolShipFleet` + `faction/PatrolShipEntity`): 리드 범용 `DestroyerAIController`가 실제 경비함을 움직인다. **스폰 1건 = 월드 엔티티 1개 = 포트 1개**, pose 정본은 엔티티 하나(AI는 transform 미보유). 플레이어 pose 재사용·렌더 객체 조작·중복 transform 저장소 전부 없음
+    - **이동 수치는 전부 임시 상속값**(경비함 전용 공식 튜닝값 아님): 속력·명중 반경·선체 박스 = 공식 `params/cargo.json` / 해수면 = 공유 `CanyonLayout.seaSurfaceY` / 선회 속도 = `params/movement.json` `turn90Seconds` 파생(수상함 선회 공식값 부재 → 잠수함 검증값 상속) / 월드 경계 = `CanyonLayout.blocks` 외곽 AABB + 공식 항로 끝점 파생(`collision/canyonBounds`). 공식 params 미주입 시 스폰 자체가 성립하지 않는다(수치 발명 0)
+    - **경비함 월드 엔티티**: faction=patrol·spawnPosition 그대로 초기 위치·보존, 기존 `TargetRegistry` 등록(별도 registry 신설 없음), 파괴·dispose·새 출항에서 정리, 같은 entityId 재요청 시 추가 생성 0
+    - **다중 선박 read source**(`faction/ShipWorldSource`): hostile cargo·neutral cargo·patrol guard를 **읽기 전용 스냅샷** 한 목록으로 노출(`gameplay.shipWorldSource`). 렌더가 게임플레이 객체를 바꿀 수 없다
+    - **식별 소스에 patrol 포함**: 세 세력이 한 소스에서 나오고 entityId가 월드 엔티티와 동일. 미식별 라벨 null·죽은 경비함 태그 제거
+    - **B4→B5 체인 검증**: 중립 유효 피격 → `neutralShipHit` → 원장 → `guardShipRequested` → 위치 전략 → production factory → 경비함 1척 생성(`spawned`) → 초기 표적=플레이어 → **실제 이동으로 접근**(거리 감소·수면 유지·AI attack 전이). 같은 correlationId 요청 0 추가, 같은 requestId `duplicateRequest`. **검증 더블 미사용**(production `createProductionDestroyerAIFactory` 그대로)
+    - **B6**: 교전 요청 → 경비함과 같은 범용 factory 입력 변환 어댑터 제공(호위 전용 AI 0). 이탈 거리 공식값이 없어 결속 비활성 — **실기동 미완료**
+    - 결정적 검증 **213항목**(213/213 — 기존 192 유지 + 신규 21). meta 88/88·tooling 26/26·sprint-a 30/30 동시 통과
+    - **브라우저 스모크(역할 브랜치)**: 부팅→출항 콘솔 오류 0, `guardAdapter.aiWired=true`. production 경비 스폰은 아직 **`noSpawnLocation`** — 조립 2줄(INT-GAME-013) 미연결 때문이며 게임플레이 준비는 끝났다
 - **진행 중:** 없음
-- **다음 작업:** INT-GAME-011 조립 3줄 배선(리드 결정 후 production 값 흐름 완성), INT-GAME-004·006 리드 결정 후 잔여 provisional 이관(심도 구간 경계·비율·어뢰 사거리), 격침 보상 어뢰 +1 배선(§5.9 — torpedoHit 구독), 임시 탐지·폭뢰·내구도(D6~D9 잔여)
-- **차단 문제:** **production 배선 대기 1건 (INT-GAME-011)** — 경제·화물선·장비 공식 params 주입과 저장 로드아웃 복원, salvage plan 전달은 조립부(`src/core/Game.ts`, 리드 소유) 3줄이 있어야 값이 흐른다. 그 전까지 세 시스템은 **설계된 unwired 상태**(임시 수치 생성 없음, `*ParamsWired === false`로 노출)로 남는다. 이전 **의존성 대기 2건** — ① 리드 창의 스프린트 A 계약(앵커·2소켓·구매 트랜잭션·지갑/저장 포트)이 원격에 아직 없어, 계약 복제 없이 게임플레이 쪽 **단일 소비 지점**으로 선진행함(도착 시 어댑터로 축소·삭제) ② 툴링 창의 `params/aiming.json`·경제 가격 params 미도착 → `provisionalAiming`·`provisionalUpgradeCost` R7 선진행. 그 외 ① 화물선 속력·반경·침몰 시간·경로와 심도 구간 경계·비율·어뢰 수치는 R7 선진행(`provisionalCargo/`, `provisionalMovement/`, `provisionalCombat/`, `provisionalWorld` 구간 경계 — INT-GAME-004·006·007) ② 격침 보상(어뢰 +1)은 TorpedoSystem 잔량 증가 경로(계약 메서드) 리드 결정 대기(INT-GAME-007)
+- **다음 작업:** INT-GAME-012 조립 배선(스폰 위치 전략·식별 소스·다중 선박 렌더 소스) + 공식 수치 4종 요청, INT-GAME-011 조립 3줄 배선(리드 결정 후 production 값 흐름 완성), INT-GAME-004·006 리드 결정 후 잔여 provisional 이관(심도 구간 경계·비율·어뢰 사거리), 격침 보상 어뢰 +1 배선(§5.9 — torpedoHit 구독), 임시 탐지·폭뢰·내구도(D6~D9 잔여)
+- **차단 문제:** **B5 차단 해소 (B5_BLOCKED=false)** — 리드가 범용 `DestroyerAIController`를 신설(INT-CORE-013)했고, 게임플레이가 `SurfaceShipMotionPort`를 구현해 경비함이 실제로 생성·이동한다(검증 확인). 남은 것은 **조립 2줄(INT-GAME-013)** — 그 전까지 production 스폰은 `noSpawnLocation`이다. **B 배선 대기 (INT-GAME-012)** — 스폰 위치 전략·식별 소스·다중 선박 렌더 소스가 조립부에 연결돼야 B1·B2·B4가 화면·런타임에서 성립한다. **production 배선 대기 1건 (INT-GAME-011)** — 경제·화물선·장비 공식 params 주입과 저장 로드아웃 복원, salvage plan 전달은 조립부(`src/core/Game.ts`, 리드 소유) 3줄이 있어야 값이 흐른다. 그 전까지 세 시스템은 **설계된 unwired 상태**(임시 수치 생성 없음, `*ParamsWired === false`로 노출)로 남는다. 이전 **의존성 대기 2건** — ① 리드 창의 스프린트 A 계약(앵커·2소켓·구매 트랜잭션·지갑/저장 포트)이 원격에 아직 없어, 계약 복제 없이 게임플레이 쪽 **단일 소비 지점**으로 선진행함(도착 시 어댑터로 축소·삭제) ② 툴링 창의 `params/aiming.json`·경제 가격 params 미도착 → `provisionalAiming`·`provisionalUpgradeCost` R7 선진행. 그 외 ① 화물선 속력·반경·침몰 시간·경로와 심도 구간 경계·비율·어뢰 수치는 R7 선진행(`provisionalCargo/`, `provisionalMovement/`, `provisionalCombat/`, `provisionalWorld` 구간 경계 — INT-GAME-004·006·007) ② 격침 보상(어뢰 +1)은 TorpedoSystem 잔량 증가 경로(계약 메서드) 리드 결정 대기(INT-GAME-007)
 - **변경된 계약:** 없음 (직접 변경 없음 — INT-GAME-008 제안 등록. aimRequired·경비 요청·희귀 부품 저장·보스 피격은 계약 확정 전까지 읽기 전용 상태·consume API·콜백으로 제공)
 - **통합 주의사항:** 좌표 규약 — **잠수함 로컬 -Z가 선수, +Z가 선미** (`src/core/conventions.ts`만 참조). heading은 Y축 요(yaw), heading 0 선수 = 월드 -Z, 렌더는 `mesh.rotation.y = headingRadians` 그대로. 속도 소비 규칙(INT-CORE-003): 프로펠러 등 부호가 필요하면 `poseSource.forwardSpeedMetersPerSecond`(+전진/−후진), 소음 산출 등 크기만 필요하면 계약 `player.speed`(비부호). 렌더 잠수함 Y는 `poseSource.positionY`. **화물선 상태는 `gameplay.cargoShipState`(계약 CargoShipStateSource)** — composition root가 CargoShipVisual에 주입, `hit`/`sinkProgress`(시간축 게임플레이 소유)/`removed`를 매핑만 할 것, 명중 연출·오디오는 `torpedoHit` 구독. 심도 초기 구간은 y=0 → `cruise`(초기 이벤트 없음). **충돌체 집합은 `gameplay.collision.colliders`(읽기 전용) 공유** — 은신 시야 차폐(D10~12)는 이 집합을 재사용할 것(별도 집합 금지). **협곡 배치의 유일 소스는 `src/world/startingCanyonLayout.ts`** — 렌더·충돌 모두 `CanyonLayout.blocks` 소비(미러 소멸), 레벨 교체 = 새 레이아웃을 `GameplaySystems` 생성자에 주입(또는 데이터 모듈 교체), 소비 중 레이아웃은 `gameplay.layout`으로 확인. **전투 입력은 반드시 `gameplay.aim`(계약 AimSystem) 하나로** — HUD 조준·발사 버튼은 composition root에서 `aim.beginAim()/endAim()/fireTorpedo()`를 호출(별도 전투 시스템 금지), UI는 `torpedo.remaining`·`torpedo.reloadRemainingSeconds`·`aim.aiming` 폴링 + `aimModeChanged` 구독. 리드샷 보조선 = `targets.list`(위치·속도) + `torpedo.torpedoSpeedMetersPerSecond` + `player` 포즈로 계산. 렌더 어뢰 항적은 `torpedo.torpedoes`(읽기 전용) 폴링. 화물선 시스템은 `targets.register()`로 표적 등록(콜백 `onTorpedoHit`는 어뢰 1발당 1회 보장)
-- **마지막 업데이트:** 공식 경제 params production 소비 전환 (provisional 3종 삭제·주입 단일 진입점·salvage spawnId 어댑터·효과 소비자 조사)
+- **마지막 업데이트:** B5 **런타임 연결** (SurfaceShipMotionPort·경비함 월드 엔티티·다중 선박 read source·patrol 식별·B4→B5 체인 검증. B5 차단 해소 — 남은 것은 조립 2줄. B 공식 미발효)
 - **담당 브랜치:** `claude/submarine-controls-depth-3wi424` (원격 세션 지정 브랜치 — `feat/gameplay` 역할, origin/dev + 리드 계약 브랜치 병합 기반)
 
 ## 그래픽스
@@ -290,13 +380,14 @@ B 선행개발          = 가능 (선행개발 상태로만)
   - **[LOOP][ECON] Sprint A 조준 시각·성장 UI (13·14차 창3)** — ① **선수 발사관 조준 카메라**: `SubmarineVisual.aimCameraSocket`(어뢰관 앵커 정위치·전방축 동일 — 13차 결의 2, 모델 소유 단일 지점) + `CanyonScene.updateAimCamera`(소켓 월드 위치·방향 그대로, 독자 오프셋 0, 전 심도 동일·심도 카메라 전환 없음, 발사 후 유지), 미세 조준각은 `attachAimAngleSource` 게임플레이 소스 소비(부재 시 0), 해제 시 `CameraRig.beginReturnFrom`으로 3인칭 자연 복귀 ② **자기 선체 레이어 제외**: 선체 서브트리를 layer 1에 두고 조준 중 조준 카메라 마스크에서만 disable — visible·material 전역 변경 없음(블롭 섀도·수면·타 카메라 보존), 해제·dispose 시 복원 ③ **2D 발사관 프레임**: `PeriscopeView` 하단 관 내부 어둠+관구 림 호+좌우 관벽(DOM, 마스크 overflow 일체화, 십자선·눈금·보조선 뒤 레이어) ④ **재화 HUD**(`EconomyHud` — 기지·해역, MetaLoop 실지갑 소비·내부 지갑 없음, 확정 vs 이번 출항(미확정) 구분, 집계 getter 부재 시 '배선 대기' 표기) ⑤ **출항 준비 화면**(`SortiePrepScreen` — 업그레이드 이름/단계/효과/가격/구매, 장비 4종 역할·장착/해제/교체, 출항 버튼, sticky 결과 피드백) — 전부 포트(`metaEconomyPorts`) 소비·command 호출·결과 코드 표시만, 불가 5종+저장 실패 지정 문구, 공식 가격 부재 시 '가격 데이터 대기' 비활성(가격 발명 금지) ⑥ Playwright 실측: 실경로 조준(잠망경 심도 화면 버튼)·발사 후 유지·해제 복귀·심도별 조준 시점·실지갑/실카탈로그/실장비 TEMP-WIRING 왕복(원복 완료) — 스크린샷 docs/screenshots/sprintA_*
   - **[LOOP][ECON] Sprint A 마감 — 경제·성장 UI production 배선 (INT-RENDER-009, 기준 통합 `ebea23b` 병합)** — ① UI 재작성: `SortiePrepScreen`·`EconomyHud`의 유일한 명령·상태 진입점을 공통 계약 **`BaseScreenPort`**로 교체(지갑·단계·loadout·저장소·게임플레이 내부 직접 접근 0), 결과 표시는 계약 `TransactionResult`(불가 5종·saveFailedRolledBack) + UI 전용 `economyDataUnavailable`(가격 null — 트랜잭션 미진입, 0원 구매 없음) ② Game 조립(INT-CORE-009 스니펫 적용): savePort(SaveBridge)·구매 판정(공식 catalog 가격 resolver — provisional 가격 미사용, null=도달 불가 거부 값)·`PurchaseTransaction`·장비 원자 경로 매핑(slotFull→noFreeSlot)·`baseScreenUi` registry 시스템 마운트, 구매 확정 시 유효 파라미터·장비 배율·외형 단계 재파생, 저장 loadout 부팅 복원 ③ 출항 단일 진입점(§6): 자동 출항 제거(**기지 시작**)·ControlsHud launchSortie 미주입, `BaseScreenPort.launchSortie` = 확정 직전 저장 실패 시 cancelSortiePrep(해역 전환 금지·기지 유지) ④ production 기본 URL Playwright 실측: 기지 화면·실지갑 일치·업그레이드 7종 null 비활성·장비 3동작·저장 결함 주입 롤백(지정 문구·loadout 무변경)·저장 실패 출항 거부·정상 출항 후 해역 미확정 집계 줄 — 스크린샷 `sprintA_*_production.png` ⑤ QA 데모(`?econdemo`)는 production 마운트와 분리 유지(가짜 BaseScreenPort — 배지 표기)
   - **[LOOP][ECON] Sprint A 마감 2 — BaseScreenPort v2 동기화·공식 가격 활성·해저 salvage 배치 (INT-RENDER-010, 리드 `ffa945a`·툴링 params `2a89400` 병합)** — ① **v2 직결**: UI가 읽기 모델 9종·명령 5종·결과 8종을 계약 그대로 소비. 게임플레이 로컬 결과 타입 참조 0건. **구계약 변환 어댑터 제거**(`createMetaUiPorts`·`toUiCommandResult`·`isOfficialUpgradeStatId` + 구 UI 포트 타입 일습) ② **공식 가격 활성**: 업그레이드 7종 가격·구매 조건 활성화(1단계 100), 장비 4종(기본 어뢰 시작 보유 / 고속 260 / 중어뢰 420+희귀 1 / 디코이 340+희귀 1). QA 데모 가격은 production 미사용 ③ **해저 salvage 배치**: `world/salvagePlacements.ts` = `SalvagePlacementSource` — spawnId·worldPosition·orientation만 정의(보상 수치 0건). salvage-1(-3.83,-4.5,-30)·salvage-2(5.62,-4.5,16)·salvage-3(2.65,-4.5,42), 지형 여유 ≥8.2m·상호 ≥26m·스폰 17.5m+·화물선 항로 19.7m·해저 접지(상단 -3m) ④ **salvage 시각**: `SalvageVisuals` 회색 박스 3종 + 회수 범위 링(게임플레이 실제 반경 주입) — `rarePartId` 미참조(희귀 부품 사전 노출 금지), 탐지 UI 미추가 ⑤ 출항 진입점 1개 유지(자동 출항 없음, HUD 출항 버튼 미노출)
+  - **[FACTION][RENDER] 스프린트 B 선행개발 — 식별 태그·세력 외형·경비 방향·호위 표현 (INT-RENDER-011, 리드 `1378834` 병합)** — ⚠ **B 공식 발효 전 선행개발**이며 dev/main 병합·B 완료 보고 대상이 아니다. ① **B2 식별 태그**(`IdentificationTags` — `ShipIdentificationSource`만 소비, 상태 4종 기호 ◇▲■◆+문구+거리+조준 가부, 미식별 시 세력 비노출, tagDisplayable/isAlive/isTargetable 계약 준수, 십자선 중심 회피·겹침 완화, z-31 별도 층으로 마스크·십자선·눈금 무변경) ② **B7 노출 신호**(`IdentificationExposureSink` — 최초 표시 시각·세력 실노출 여부만, 결과 분류·오인 판정 없음) ③ **B1 세력 외형**(`factionVisuals` + `CargoShipVisual` 변형 — 적대 각진 무장/중립 매끈 화물/경비 저현 전투, 마크 형태 삼각·사각·마름모, 등화 거동 구분 → **색 이외 구분 3중**) ④ **B5 경비 방향**(`GuardDirectionIndicator` — 실제 스폰 좌표만, 화면 밖 가장자리 화살표+거리, 화면 안 해제(0.25s 체류), 6초 소멸, 기지 억제, 시간 정지·컷신·탐지 게이지 없음) ⑤ **B6 호위**(`ConvoyVisuals` — ◈고가치/⚔호위 배지 + EscortBinding 점선 결속선, 거리 추측 없음, 보상 숫자 미노출) ⑥ fixture `?bdemo=1`(UI 단위 검증 전용 배지 표기 — production 아님, 가짜 경비함 3D 개체 없음)
 - **진행 중:** 없음
-- **다음 작업:** INT-RENDER-010 리드 확인(⚠ 조립부 최소 변경 2건 + v2 보완 요청 `slotPositions`·`startingItem`) / slotPositions 계약 채택 시 UI 임시 주입 삭제 / 보스 모션 리뷰(실기 60fps)
-- **차단 문제:** 없음 (공식 경제 params 도착으로 A8 null 해소 — 가격 활성 확인). v2 `loadout.equipped` 압축으로 실제 슬롯 인덱스를 복원할 수 없어 조립부 주입 뷰로 임시 해소 중(INT-RENDER-010 ②)
+- **다음 작업:** INT-RENDER-011 리드 확인(⚠ GuardShipHandle.spawnPosition · B5 가드레일 허용목록) / 게임플레이 `ShipIdentificationSource`·B6 소스 도착 시 1줄 배선 후 production 재검증 / 경비 위치 전략·AI 팩토리 연결 시 마커 실동작 확인
+- **차단 문제:** 게임플레이 B 판정 미구현 — `ShipIdentificationSource`·B6 소스 부재로 production 태그·호위 표시는 0건(가짜 데이터 없음), 경비 스폰은 위치 전략·AI 팩토리 미연결로 차단. 표시 규칙은 fixture(`?bdemo=1`) UI 단위 검증으로만 확인됨
 - **변경된 계약:** 없음 (`src/contracts/*` 미수정 — BaseScreenPort v2·officialParams 소비만). 조립부·게임플레이 최소 변경 2건은 INT-RENDER-010 ⑤ 확인 요청
 - **통합 주의사항:** 조준경은 `aimModeChanged`만 소비(홀드→토글 개편에도 렌더 무변경). 어뢰 소비 인터페이스(`TorpedoStateSource`)는 StraightRunTorpedoSystem이 구조적 충족. 환경 밀도는 renderVisualParams.environment가 상한 — 보스 전장 데코는 '추가'가 아니라 '이동'(11차 결의 1). 반투명 renderOrder 서열: 블롭1<X-ray2<수면3=기포3<폭발4<보조선5. 신규 모듈 전부 dispose 일괄 관리(geometry·material·InstancedMesh). **자기 선체 layer 1은 조준 카메라 전용 규약 — 다른 시스템이 layer 1을 쓰면 조준 중 함께 사라진다.** 출항 진입점은 기지 화면 출항 버튼(BaseScreenPort.launchSortie) 하나 — HUD `launchSortie` 재주입·자동 출항 재도입 금지(INT-RENDER-009 ③). **게임은 기지(BASE)에서 시작한다** — 해역 전제 검증·테스트는 출항 버튼 클릭을 선행해야 한다(verify-hud 도입부 참조). z-index 서열: 준비 화면 25 < 조준경 30 < 재화 HUD 32 < HUD 버튼 90. QA 플래그: `?xray` `?shipdemo` `?lookup` `?bossSpike=1(&bossMotion=b)` `?base=1` `?tiers=h,w` `?aimdemo=1` `?econdemo=1|savefail`
-- **마지막 업데이트:** Sprint A 마감 2 — v2 동기화·공식 가격·salvage 월드 배치 (feat/render)
-- **담당 브랜치:** `feat/render` (리드 `ffa945a` 병합 기반 — 공식 params·officialParams 계약 포함)
+- **마지막 업데이트:** 스프린트 B 선행개발 — 식별 태그·세력 외형·경비 방향·호위 표현 (feat/render, B 공식 발효 전)
+- **담당 브랜치:** `feat/render` (B 리드 최종 tip `1378834` 병합 기반 — A 스택 `85ec32b`/`8f40117` 포함)
 
 ## 빌드·툴
 
@@ -314,7 +405,9 @@ B 선행개발          = 가능 (선행개발 상태로만)
 - **완료(스프린트 A — 창 4 범위, 회의 14 결의 2):** ① **`params/aiming.json` + 검증기** — yaw 15 / 상향 10 / 하향 15 / 감도 0.5, 상·하향 모두 양수 크기 저장(부호는 `aimingMath.pitchLimitsDegrees()` 단일 지점에서만 적용 — 이중 부호 오류 차단), 음수·0·범위 밖·`aimReturnBehavior` 전부 로드 거부(보완분 결의 8·9). 카메라·게임플레이 공용 로더 `src/tools/aimingParams.ts` ② **공식 경제·장비 params 구조** — upgrades.json을 단계 배열 구조(단계 상한·단계별 가격·희귀 부품·효과 배율)로 전환, equipment.json 신설(4종 가격·희귀 부품·슬롯). 검증기 `economyMath`가 7항목·4종 초과·음수 가격·미존재 paramRef·단계 배열 누락·계약 밖 id를 거부. **수치는 전부 null = 기획 경제 수치표 미도착 — 임의 값 발명 없음** ③ **계산 정본 일원화** — 툴링 중복 `upgradeMath` 삭제, 시뮬레이터가 리드 `src/meta/upgradeMath.ts` 직접 사용(INT-CORE-007 이행). 시뮬레이터에 총비용·'보스까지 출항 4~6회' 판정 추가(미확정 시 판정 보류) ④ **저장 실패 주입 어댑터** `FaultInjectingStorage`(쓰기·백업 쓰기·quota 유사·직렬화 4종, 프로덕션 경로 미경유) + **원자적 변경·저장** `atomicSave`(스냅샷→변경→저장→실패 시 전부 롤백, `saveFailed`/`rejected` 타입 분리, 고정 안내 문구·내부 예외 비노출) ⑤ **스프린트 A 러너** `npm run verify:sprint-a` — A1~A8 + A5-T1~T6 + 문서 회귀(§8) 자동 판정 24항목, 타 창 병합 대기 항목 5건은 '수동 확인' 구역으로 분리 출력(가짜 초록불 금지) ⑥ 저장 시점 5종 개정 문서화(`docs/SAVE_SYSTEM.md`), 인수 기준 문서 `docs/SPRINT_A_ACCEPTANCE.md` 신설
 - **완료(A8 경제 수치 승인 반영):** 사용자 승인으로 미확정 필드를 전부 닫았다. ① **`params/upgrades.json` null 105→0** — 7항목 공통 크레딧 `[100,160,240,340,460]`·희귀 부품 `[0,0,0,1,2]`, `effectBonus`는 **단계별 증분** 저장(A군 `maxSpeed`·`turnRate`·`reloadSpeed`·`sonarRange` = 누적 5/10/16/22/30%, B군 `hullIntegrity`·`maxDepth`·`torpedoDamage` = 누적 10/20/32/44/60%) ② **`params/equipment.json` null 9→0** — 슬롯 용량 2, `standardTorpedo` 시작 보유·가격 0, `fastTorpedo` 260, `heavyTorpedo` 420+희귀 1, `decoy` 340+희귀 1. `performance`는 `provisionalEquipment` 런타임 값 그대로 이관(밸런스 변경 아님) ③ **`params/economy.json` 신설** — 손실률 0.5(D5: 게임플레이 0.4/메타 0.5 불일치를 6차 결의 7 명시값으로 통일), 회수 반경 6m, 드롭 테이블 4종, `salvageSpawns` 3건(`salvage-3`의 `rarePartId: rare-alloy-core` = MVP 유일 희귀 부품 경로, 확률 아닌 **확정 배치**. 좌표는 월드·그래픽스 소유라 `spawnId`만 정의) ④ **`params/cargo.json` 신설** — `provisionalCargo` 값 그대로 이관 ⑤ **공식 로더** `src/tools/economyParams.ts` — 4종을 검증 통과 형태로만 내보내는 단일 진입점(+HMR, 검증 실패 시 기존 값 유지). provisional 모듈의 대체 공급원 ⑥ **검증기 확장** — 장비 `slotCost`·`startingItem`·`performance` 스키마, 종류별 필수 성능 키, 희귀 부품·슬롯 정수 강제, 슬롯 용량 2 고정, 시작 보유 정확히 1종·가격 0 ⑦ **회귀 차단 검증** — `verify:sprint-a` 자동 **29/29**(A8-null0·A8-approved·A8-equipmentRules·A8-income 신설). 출항 최대 수입 245(수송선 120+해저 125)·희귀 1, 보스 준비 1200크레딧 → **4.9회**로 목표 4~6회 안. 소비 가능 기준 커밋 `2a89400`
 - **차단 문제(A 통과 불가 — 툴링 소유 밖):** ① **§8 문서 회귀 7건** — '전 심도 조준(구 심도 전용 규칙 폐기)/에서만'이 게임플레이 코드 2곳(`PeriscopeAimSystem.ts:9`, `verifyGameplay.ts:670`)과 상태 문서 5곳(CURRENT_STATUS 게임플레이 구역, PROJECT_STATE ×2, NEXT_SPRINT, D10_INTEGRATION_CHECKLIST)에 잔존. 7차 결의 1-⑦ 미이행 → 해당 창이 제거해야 A 통과 ② **A8 소비 측 배선 5건** — params 측 이관은 끝났고(미확정 0) 남은 것은 production의 provisional import다: `src/core/Game.ts:26`·`src/meta/provisionalEconomy.ts`(리드), `src/systems/CargoShipSystem.ts:37`·`EquipmentSystem.ts:34`·`economy/EconomySystem.ts:27`·`economy/UpgradePurchaseSystem.ts:30`(게임플레이). **툴링 창에서 수정 불가** — `loadEconomyParams()` 소비로 교체하면 되고 값이 동일해 동작 변화가 없다(손실률 0.4→0.5만 D5 승인 반영). `verify:sprint-a`의 `A8-migration-consumers`가 잔여 목록을 계속 출력한다 ③ **기준값 없는 업그레이드 4항목** — `hullIntegrity`·`maxDepth`·`sonarRange`는 base params도 소비 코드도 없고, `torpedoDamage`는 소비 후보(`EquipmentSystem.setUpgradeModifiers`)가 production 조립에 미배선. **기준값을 추정해 입력하지 않았다** — 승인된 배율만 정의하고 `paramRef`는 비워 둠. 상세: INTEGRATION_NOTES INT-TOOL-008
-- **마지막 업데이트:** A8 승인 경제 수치 확정 반영 (upgrades·equipment 미확정 0, economy·cargo 신설, 공식 로더·검증기·회귀 검증 29/29). 리드 마감 `384dd00` 병합 기준
+- **완료(스프린트 B 선행개발 — 15차 결의 2 창 4 범위):** ⚠ **B 미발효 상태의 선행개발**이다(15차 결의 1: B 발효 조건 = A 통합 PR 병합). 리드 B 계약 `1378834`(A_STACK `8f40117` 포함) 병합, 충돌 0건. ① **`economy.json` B 확장** — `factionRewards`(세력 3종 보상 **정책**만. 세력→드롭 테이블 매핑 정본은 계약 `FACTION_RULES`라 복제하지 않고 검증기가 **기계적으로 대조**한다), `highValueTransport`·`guardSpawn`(스키마만, 수치 전부 null). **A 경제 수치 무변경** ② **null과 0의 구조적 구분** — `none`=확정 무보상(0을 명시적으로 실음) / `pending`=공식 결정 없음(수치 필드를 가질 수 없음). pending에 0을 적으면 로드 거부 — 미정이 무보상 확정으로 위장되는 것을 막는다 ③ **검증기 거부 규칙 11종** — 미존재 테이블·음수 보상·계약 불일치(양방향)·계약 밖 세력 키·배율 1 이하(12차 B6 종료 조건에서 파생된 구조 조건)·범위 밖·스폰 영역 공집합 등 ④ **B7 측정 인프라** `src/tools/b7/` — 스키마 검증(분류 정합성 + 개인정보 거부), 수집기(`IdentificationLogSink` 구현 — 세션 저장·복원·거부 보존·재심사 대체), 집계(제외 3종이 분모에서 빠짐), 판정(20%·5% 임계 + 표본 5명·50회 미달 시 `INSUFFICIENT_SAMPLE`), CSV·JSON export, 결정적 픽스처 4종 ⑤ **`npm run verify:sprint-b` 신설** — 상태 5종 분리(pass/fail/manual/**blocked**/pending). 자동 **17/17 통과** · 보류 5 · 차단 2 · 대기 4 ⑥ 문서 5종: `SPRINT_B_ACCEPTANCE`·`SPRINT_B_TEST_PLAN`·`B7_IDENTIFICATION_STUDY`·`SPRINT_B_B6_PROPOSAL`(DRAFT)·`ECONOMY_PARAMS_SCHEMA`
+- **차단 문제(B — 툴링 소유 밖):** ① **`B5_BLOCKED_NO_DESTROYER_IMPLEMENTATION`** — 저장소에 `DestroyerAI` 계약은 있으나 production 구현체가 없다(`implements DestroyerAI` 정적 스캔 0건; `verifyMeta.ts`의 것은 테스트 대역). B5 조건이 '기존 구축함 AI 재사용'이므로 원본 없이는 성립 불가. **빈 어댑터를 통과로 만들지 않았다.** 계약 `guard.ts`대로 구축함 AI가 C 항목이면 B1~B5 통과가 C 착수 방아쇠인데 B5가 C 산출물을 기다리는 **순서 문제**가 생긴다 — 리드 판단 필요 ② **B1·B2·B4 게임플레이·그래픽스 미병합** — 중립 선박 정의 0건(production은 `hostile`만 2지점), `ShipIdentificationSource` 구현 0건, `neutralShipHit` 발행 0건. 리드의 수신 경계·스폰 배선은 이미 병합돼 발행만 시작하면 경로가 이어진다 ③ **경비함 스폰 수치 부재** — `guardSpawn` 5항목 전부 미확정. 회의록·저장소에 공식 수치가 없고 승계할 기존 수상함 스폰 규칙도 없어 **발명하지 않았다** ④ **B6 배율 미확정** — 12차 '배율은 튜닝표' 항목. 제안서에서 발견한 핵심: **배율보다 등장 빈도가 보스 준비 곡선의 지배 변수**이며, 매 출항 등장 시 어떤 배율이든 4~6회 목표를 깬다. 호위 이탈 거리는 근거 실측이 없어 제안 수치조차 내지 않았다. 상세: INTEGRATION_NOTES INT-TOOL-010
+- **마지막 업데이트:** 스프린트 B 선행개발 산출 (세력 보상 params·검증기·B7 로깅 인프라·`verify:sprint-b` 17/17). 리드 B 계약 `1378834` 병합 기준. A 회귀 `verify:sprint-a` 30/30 유지
 - **담당 브랜치:** `claude/deep-dive-tooling-phase-0-cj6c49` (`feat/tooling`의 세션 사본)
 
 ## 기획

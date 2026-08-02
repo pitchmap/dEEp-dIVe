@@ -18,6 +18,7 @@
  *  - delta time 기반 — dt≤0·비유한값 무시.
  */
 
+import { PLAYER_ENTITY_ID } from '../contracts/guard';
 import type { CombatParams } from '../contracts/params';
 import type { TorpedoSystem, TorpedoTubeSocketSource } from '../contracts/systems';
 import type { EventBus } from '../core/EventBus';
@@ -30,6 +31,14 @@ import {
   PROVISIONAL_TORPEDO_SPEED_MPS,
 } from './provisionalCombat';
 import type { CombatTarget, TargetRegistry } from './TargetRegistry';
+
+/**
+ * 어뢰 1발의 공격 상관 id (B4 정본 형식).
+ * 레거시 `legacy:<targetId>` 형식과 구분된다 — 표적이 아니라 **공격**이 키다.
+ */
+export function torpedoAttackCorrelationId(torpedoId: number): string {
+  return `torpedo:${torpedoId}`;
+}
 
 /**
  * 무장 공급 포트 — EquipmentSystem이 충족한다 (장비 4종 단일 소스).
@@ -144,6 +153,15 @@ export class StraightRunTorpedoSystem implements TorpedoSystem {
     return this.active;
   }
 
+  /**
+   * 어뢰 유효 사거리 (m) — **기존 판정 범위의 단일 노출 지점**.
+   * 식별(B2)·경비함 스폰 위치(B4)가 새 거리 상수를 만들지 않고 이 값을
+   * 재사용한다. 값의 출처는 어뢰 수치 모듈 하나뿐이다.
+   */
+  get maxRangeMeters(): number {
+    return PROVISIONAL_TORPEDO_MAX_RANGE_METERS;
+  }
+
   /** 활성 장비 어뢰 속력 (m/s) — 리드샷 보조선의 리드 지점 계산 입력 */
   get torpedoSpeedMetersPerSecond(): number {
     return this.armament.activeTorpedoProfile()?.speedMetersPerSecond ?? PROVISIONAL_TORPEDO_SPEED_MPS;
@@ -234,7 +252,12 @@ export class StraightRunTorpedoSystem implements TorpedoSystem {
   private tryHitTarget(torpedo: ActiveTorpedo): boolean {
     for (const target of this.targets.list) {
       if (this.overlapsTarget(torpedo, target)) {
-        target.onTorpedoHit(torpedo.x, torpedo.z, torpedo.damage);
+        // 공격 맥락은 **어뢰 1발 = 1건**이다 (B4 상관 id 정본). 명중한
+        // 어뢰는 즉시 제거되므로 같은 id로 두 번 통지될 수 없다.
+        target.onTorpedoHit(torpedo.x, torpedo.z, torpedo.damage, {
+          attackCorrelationId: torpedoAttackCorrelationId(torpedo.id),
+          attackerEntityId: PLAYER_ENTITY_ID,
+        });
         return true;
       }
     }

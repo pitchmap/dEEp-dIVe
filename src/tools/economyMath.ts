@@ -15,6 +15,8 @@
  */
 
 import { ParamValidationError } from '../config/validateParams';
+import { rewardDropTableIdFor } from '../contracts/faction';
+import type { FactionId } from '../contracts/faction';
 
 const UPGRADES_FILE = 'params/upgrades.json';
 const EQUIPMENT_FILE = 'params/equipment.json';
@@ -471,11 +473,63 @@ export interface SalvageSpawn {
   readonly rarePartId: string | null;
 }
 
+/* ── 스프린트 B 확장 (B3·B4·B6) ─────────────────────────────── */
+
+/**
+ * 세력별 보상 정책 [B3].
+ *
+ *  - `dropTable`: 계약 `FACTION_RULES`가 가리키는 공식 테이블로 보상한다.
+ *  - `none`: **확정된 무보상.** 0은 결정된 값이며 미정이 아니다.
+ *  - `pending`: **공식 결정 없음.** 수치 필드를 갖지 않는다 — 0으로 확정하는
+ *    것도 결정이므로 하지 않는다 (수치 발명 금지).
+ *
+ * `none`과 `pending`의 구분이 이 타입의 존재 이유다. 둘 다 런타임 보상은
+ * 발생하지 않지만, `none`은 '그렇게 정했다'이고 `pending`은 '아직 모른다'다.
+ */
+export type FactionRewardPolicy = 'dropTable' | 'none' | 'pending';
+
+export interface FactionRewardRule {
+  readonly faction: FactionId;
+  readonly policy: FactionRewardPolicy;
+  /** 계약이 가리키는 드롭 테이블 id — 정본은 contracts/faction.ts (여기서 복제하지 않음) */
+  readonly dropTableId: string | null;
+  /** `none`일 때만 존재하는 확정 0. `pending`은 null (= 값 없음) */
+  readonly credits: number | null;
+  readonly rareParts: number | null;
+}
+
+/** B6 고가치 수송선 — 배율 미확정 시 전 수치 null */
+export interface HighValueTransportParams {
+  readonly archetypeId: string;
+  /** 배율이 곱해지는 기준 테이블 (dropTables에 실재해야 함) */
+  readonly baseDropTableId: string;
+  /** 공식 배율. null = 튜닝표 미도착 */
+  readonly rewardMultiplier: number | null;
+  /** 확정 시 값이 들어가야 하는 범위 [최소, 최대]. null = 미도착 */
+  readonly rewardMultiplierRange: readonly [number, number] | null;
+  readonly escortMaximumDistanceMeters: number | null;
+}
+
+/** B4·B5 경비함 스폰 위치 파라미터 — 전 항목 미확정(null) 가능 */
+export interface GuardSpawnParams {
+  readonly minDistanceFromPlayerMeters: number | null;
+  readonly maxDistanceFromIncidentMeters: number | null;
+  readonly candidateCount: number | null;
+  readonly worldBoundsPaddingMeters: number | null;
+  readonly spawnRetryCount: number | null;
+}
+
 export interface EconomyParams {
   readonly creditLossOnDestroyedRatio: number;
   readonly pickupRadiusMeters: number;
   readonly dropTables: Readonly<Record<string, DropTableEntry>>;
   readonly salvageSpawns: readonly SalvageSpawn[];
+  /** [B3] 세력별 보상 정책 — 미도입 시 null (A 스택 호환) */
+  readonly factionRewards: Readonly<Record<FactionId, FactionRewardRule>> | null;
+  /** [B6] 미도입 시 null */
+  readonly highValueTransport: HighValueTransportParams | null;
+  /** [B4] 미도입 시 null */
+  readonly guardSpawn: GuardSpawnParams | null;
   readonly sortieIncomeReference: {
     readonly cargoCredits: number;
     readonly salvageCredits: number;
@@ -504,6 +558,287 @@ function requireNonNegativeInteger(file: string, path: string, value: unknown): 
     throw new ParamValidationError(file, path, `정수가 필요합니다 (받은 값: ${n})`);
   }
   return n;
+}
+
+/** null 허용 숫자 — 값이 있으면 유한·비음수여야 한다 */
+function optionalNonNegative(file: string, path: string, value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  return requireNonNegative(file, path, value);
+}
+
+function optionalNonNegativeInteger(file: string, path: string, value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  return requireNonNegativeInteger(file, path, value);
+}
+
+const FACTION_ORDER: readonly FactionId[] = ['hostile', 'neutral', 'patrol'];
+const REWARD_POLICIES: readonly FactionRewardPolicy[] = ['dropTable', 'none', 'pending'];
+
+/**
+ * [B3] 세력별 보상 정책 검증.
+ *
+ * 핵심은 **계약과의 대조**다. 세력→드롭 테이블 매핑의 정본은
+ * `contracts/faction.ts`의 `FACTION_RULES`이고, 이 JSON은 정책 상태만 갖는다.
+ * 둘이 어긋나면(예: patrol을 pending으로 적어 두고 계약에는 테이블을 달아 둠)
+ * 로드를 거부한다 — 수치가 두 곳에서 서로 다른 말을 하는 상태를 만들지 않는다.
+ */
+function validateFactionRewards(
+  raw: unknown,
+  dropTables: Readonly<Record<string, DropTableEntry>>,
+): Readonly<Record<FactionId, FactionRewardRule>> | null {
+  if (raw === undefined || raw === null) return null;
+  if (!isRecord(raw)) {
+    throw new ParamValidationError(ECONOMY_FILE, 'factionRewards', '객체가 필요합니다');
+  }
+
+  const rules: Partial<Record<FactionId, FactionRewardRule>> = {};
+  for (const faction of FACTION_ORDER) {
+    const path = `factionRewards.${faction}`;
+    const entry = raw[faction];
+    if (!isRecord(entry)) {
+      throw new ParamValidationError(ECONOMY_FILE, path, '세력 3종 전부 정책이 필요합니다 (누락 거부)');
+    }
+    const policy = entry['policy'];
+    if (typeof policy !== 'string' || !(REWARD_POLICIES as readonly string[]).includes(policy)) {
+      throw new ParamValidationError(
+        ECONOMY_FILE,
+        `${path}.policy`,
+        `${REWARD_POLICIES.join(' | ')} 중 하나여야 합니다 (받은 값: ${JSON.stringify(policy)})`,
+      );
+    }
+
+    // 계약 정본과 대조 — 매핑을 복제하지 않고 참조해서 확인한다.
+    const contractTableId = rewardDropTableIdFor(faction);
+    let credits: number | null = null;
+    let rareParts: number | null = null;
+
+    if (policy === 'dropTable') {
+      if (contractTableId === null) {
+        throw new ParamValidationError(
+          ECONOMY_FILE,
+          `${path}.policy`,
+          `계약(FACTION_RULES.${faction}.dropTableId)이 null인데 policy가 dropTable입니다 — 계약과 정책이 어긋납니다`,
+        );
+      }
+      if (!(contractTableId in dropTables)) {
+        throw new ParamValidationError(
+          ECONOMY_FILE,
+          `${path}.policy`,
+          `계약이 가리키는 드롭 테이블이 dropTables에 없습니다: ${contractTableId}`,
+        );
+      }
+      if ('credits' in entry || 'rareParts' in entry) {
+        throw new ParamValidationError(
+          ECONOMY_FILE,
+          path,
+          'dropTable 정책은 수치를 직접 갖지 않습니다 — 값은 dropTables가 소유합니다 (중복 정의 금지)',
+        );
+      }
+    } else {
+      if (contractTableId !== null) {
+        throw new ParamValidationError(
+          ECONOMY_FILE,
+          `${path}.policy`,
+          `계약(FACTION_RULES.${faction}.dropTableId)이 ${contractTableId}인데 policy가 ${policy}입니다 — 계약과 정책이 어긋납니다`,
+        );
+      }
+      if (policy === 'none') {
+        // 확정된 무보상 — 0을 명시적으로 실어 '결정했다'를 표현한다.
+        credits = requireNonNegative(ECONOMY_FILE, `${path}.credits`, entry['credits']);
+        rareParts = requireNonNegativeInteger(ECONOMY_FILE, `${path}.rareParts`, entry['rareParts']);
+        if (credits !== 0 || rareParts !== 0) {
+          throw new ParamValidationError(
+            ECONOMY_FILE,
+            path,
+            `none 정책은 확정 0만 허용합니다 (받은 값: credits ${credits}, rareParts ${rareParts}) — 0이 아닌 보상은 dropTable 정책으로 표현하세요`,
+          );
+        }
+      } else if ('credits' in entry || 'rareParts' in entry) {
+        // pending에 0을 적으면 '미정'이 '무보상 확정'으로 위장된다.
+        throw new ParamValidationError(
+          ECONOMY_FILE,
+          path,
+          'pending 정책은 수치 필드를 가질 수 없습니다 — 0을 적는 것도 결정입니다. 결정됐다면 policy를 none으로 바꾸세요',
+        );
+      }
+    }
+
+    rules[faction] = {
+      faction,
+      policy: policy as FactionRewardPolicy,
+      dropTableId: contractTableId,
+      credits,
+      rareParts,
+    };
+  }
+
+  // 계약에 없는 세력 키가 섞이면 거부 — 오타로 규칙이 조용히 무시되는 것을 막는다.
+  for (const key of Object.keys(raw)) {
+    if (key.startsWith('$')) continue;
+    if (!(FACTION_ORDER as readonly string[]).includes(key)) {
+      throw new ParamValidationError(
+        ECONOMY_FILE,
+        `factionRewards.${key}`,
+        `계약(meta.ts FactionId)에 없는 세력입니다: ${FACTION_ORDER.join(', ')} 만 허용`,
+      );
+    }
+  }
+
+  return rules as Record<FactionId, FactionRewardRule>;
+}
+
+/**
+ * [B6] 고가치 수송선 검증.
+ *
+ * `rewardMultiplier`의 하한 1은 발명한 수치가 아니라 **B6의 종료 조건에서
+ * 파생된 구조 조건**이다 (12차 B6: '고가치 수송선 격침 보상 > 일반 수송선').
+ * 상한은 튜닝표 항목이므로 `rewardMultiplierRange`가 함께 도착할 때만
+ * 검사한다 — 여기서 상한을 지어내지 않는다.
+ */
+function validateHighValueTransport(
+  raw: unknown,
+  dropTables: Readonly<Record<string, DropTableEntry>>,
+): HighValueTransportParams | null {
+  if (raw === undefined || raw === null) return null;
+  if (!isRecord(raw)) {
+    throw new ParamValidationError(ECONOMY_FILE, 'highValueTransport', '객체가 필요합니다');
+  }
+  const archetypeId = raw['archetypeId'];
+  if (typeof archetypeId !== 'string' || archetypeId.length === 0) {
+    throw new ParamValidationError(ECONOMY_FILE, 'highValueTransport.archetypeId', '문자열이 필요합니다');
+  }
+  const baseDropTableId = raw['baseDropTableId'];
+  if (typeof baseDropTableId !== 'string' || !(baseDropTableId in dropTables)) {
+    throw new ParamValidationError(
+      ECONOMY_FILE,
+      'highValueTransport.baseDropTableId',
+      `dropTables에 없는 참조입니다: ${JSON.stringify(baseDropTableId)}`,
+    );
+  }
+
+  const rangeRaw = raw['rewardMultiplierRange'];
+  let range: readonly [number, number] | null = null;
+  if (rangeRaw !== null && rangeRaw !== undefined) {
+    if (!Array.isArray(rangeRaw) || rangeRaw.length !== 2) {
+      throw new ParamValidationError(
+        ECONOMY_FILE,
+        'highValueTransport.rewardMultiplierRange',
+        '[최소, 최대] 배열 또는 null이 필요합니다',
+      );
+    }
+    const min = requireNonNegative(ECONOMY_FILE, 'highValueTransport.rewardMultiplierRange[0]', rangeRaw[0]);
+    const max = requireNonNegative(ECONOMY_FILE, 'highValueTransport.rewardMultiplierRange[1]', rangeRaw[1]);
+    if (min > max) {
+      throw new ParamValidationError(
+        ECONOMY_FILE,
+        'highValueTransport.rewardMultiplierRange',
+        `최소가 최대보다 큽니다 (${min} > ${max})`,
+      );
+    }
+    range = [min, max];
+  }
+
+  const multiplierRaw = raw['rewardMultiplier'];
+  let multiplier: number | null = null;
+  if (multiplierRaw !== null && multiplierRaw !== undefined) {
+    multiplier = requireNonNegative(ECONOMY_FILE, 'highValueTransport.rewardMultiplier', multiplierRaw);
+    if (multiplier <= 1) {
+      throw new ParamValidationError(
+        ECONOMY_FILE,
+        'highValueTransport.rewardMultiplier',
+        `1보다 커야 합니다 (받은 값: ${multiplier}) — B6 종료 조건 '고가치 수송선 보상 > 일반 수송선'`,
+      );
+    }
+    if (range && (multiplier < range[0] || multiplier > range[1])) {
+      throw new ParamValidationError(
+        ECONOMY_FILE,
+        'highValueTransport.rewardMultiplier',
+        `조정 범위 [${range[0]}, ${range[1]}]를 벗어났습니다 (받은 값: ${multiplier})`,
+      );
+    }
+  }
+
+  return {
+    archetypeId,
+    baseDropTableId,
+    rewardMultiplier: multiplier,
+    rewardMultiplierRange: range,
+    escortMaximumDistanceMeters: optionalNonNegative(
+      ECONOMY_FILE,
+      'highValueTransport.escortMaximumDistanceMeters',
+      raw['escortMaximumDistanceMeters'],
+    ),
+  };
+}
+
+/** [B4] 경비함 스폰 params — 전 항목 null 가능, 값이 있으면 형식만 검사한다 */
+function validateGuardSpawn(raw: unknown): GuardSpawnParams | null {
+  if (raw === undefined || raw === null) return null;
+  if (!isRecord(raw)) {
+    throw new ParamValidationError(ECONOMY_FILE, 'guardSpawn', '객체가 필요합니다');
+  }
+  const params: GuardSpawnParams = {
+    minDistanceFromPlayerMeters: optionalNonNegative(
+      ECONOMY_FILE,
+      'guardSpawn.minDistanceFromPlayerMeters',
+      raw['minDistanceFromPlayerMeters'],
+    ),
+    maxDistanceFromIncidentMeters: optionalNonNegative(
+      ECONOMY_FILE,
+      'guardSpawn.maxDistanceFromIncidentMeters',
+      raw['maxDistanceFromIncidentMeters'],
+    ),
+    candidateCount: optionalNonNegativeInteger(ECONOMY_FILE, 'guardSpawn.candidateCount', raw['candidateCount']),
+    worldBoundsPaddingMeters: optionalNonNegative(
+      ECONOMY_FILE,
+      'guardSpawn.worldBoundsPaddingMeters',
+      raw['worldBoundsPaddingMeters'],
+    ),
+    spawnRetryCount: optionalNonNegativeInteger(ECONOMY_FILE, 'guardSpawn.spawnRetryCount', raw['spawnRetryCount']),
+  };
+  if (
+    params.minDistanceFromPlayerMeters !== null &&
+    params.maxDistanceFromIncidentMeters !== null &&
+    params.minDistanceFromPlayerMeters > params.maxDistanceFromIncidentMeters
+  ) {
+    throw new ParamValidationError(
+      ECONOMY_FILE,
+      'guardSpawn',
+      `최소 이격(${params.minDistanceFromPlayerMeters}m)이 사건 최대 거리(${params.maxDistanceFromIncidentMeters}m)보다 큽니다 — 스폰 가능 영역이 비어 있습니다`,
+    );
+  }
+  return params;
+}
+
+/** B 확장 블록 중 아직 공식값이 없는 필드 목록 — '미확정'을 정직하게 보고한다 */
+export function pendingSprintBFields(economy: EconomyParams): string[] {
+  const pending: string[] = [];
+  const rewards = economy.factionRewards;
+  if (rewards) {
+    for (const faction of FACTION_ORDER) {
+      if (rewards[faction].policy === 'pending') pending.push(`factionRewards.${faction} (정책 미결정)`);
+    }
+  }
+  const hv = economy.highValueTransport;
+  if (hv) {
+    if (hv.rewardMultiplier === null) pending.push('highValueTransport.rewardMultiplier');
+    if (hv.rewardMultiplierRange === null) pending.push('highValueTransport.rewardMultiplierRange');
+    if (hv.escortMaximumDistanceMeters === null) pending.push('highValueTransport.escortMaximumDistanceMeters');
+  }
+  const guard = economy.guardSpawn;
+  if (guard) {
+    for (const [key, value] of Object.entries(guard)) {
+      if (value === null) pending.push(`guardSpawn.${key}`);
+    }
+  }
+  return pending;
+}
+
+/** 경비함 스폰 위치 전략을 params만으로 구성할 수 있는가 (전 항목 확정 시에만 true) */
+export function guardSpawnParamsUsable(economy: EconomyParams): boolean {
+  const guard = economy.guardSpawn;
+  if (!guard) return false;
+  return Object.values(guard).every((value) => value !== null);
 }
 
 export function validateEconomyParams(raw: unknown): EconomyParams {
@@ -607,6 +942,9 @@ export function validateEconomyParams(raw: unknown): EconomyParams {
     pickupRadiusMeters: pickup,
     dropTables,
     salvageSpawns,
+    factionRewards: validateFactionRewards(raw['factionRewards'], dropTables),
+    highValueTransport: validateHighValueTransport(raw['highValueTransport'], dropTables),
+    guardSpawn: validateGuardSpawn(raw['guardSpawn']),
     sortieIncomeReference: income,
     bossReadinessReference: {
       upgradeIds: upgradeIds as string[],
