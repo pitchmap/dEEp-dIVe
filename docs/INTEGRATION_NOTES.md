@@ -104,6 +104,84 @@
 | 개발 리드 결정 | (대기) |
 | 적용 커밋 | feat/render — 수심 확장·암벽 셸·탐조등·wake 커밋 |
 
+### INT-CORE-016 — C 통합 blocker 마감: AI 공격 요청 생성 · DEBRIEF confirm 정책 개정 · 통합 patch 확정
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (역할 보고 4건 수신 후 — 게임플레이 `844d0c7`·그래픽스 `97e7dd3`·툴링 `2814dd0`. 역할 브랜치 병합 없음, 보고·계약 기준으로만 리드 소유 영역 수정) |
+| 대상 시스템 | `src/core/DestroyerAIController.ts`·`destroyerAiFactory.ts`(공격 요청 생성), `src/contracts/survival.ts`(canConfirm·DebriefConfirmOutcome), `src/core/SortieFailureCoordinator.ts`(자동 전환 제거), `src/core/PveIntegration.ts`(DebriefConfirmCommand·EnemyAttackPortBinding), `src/core/GuardShipAdapter.ts`(TrackingStateSource), `src/core/Game.ts`(조립) |
+| Blocker 1 해소 | `DestroyerAIController`가 **attack 상태에서만** `EnemyAttackRequest` 생성 → 주입된 `EnemyAttackPort`(게임플레이 `EnemyAttackCoordinator`)로 전달. AI는 요청만 — 피해량·반경·사거리·쿨다운·신관 비소유, DamageReceiverPort·DepthChargeRunSystem 직접 접근 0. destroyed·위치 미확인·lost·포트 미연결에서 요청 0건. 탐지 게이트는 게임플레이 motion 포트(getTargetPosition = detected일 때만) 소유 — stage 재판정 없음(이중 판정 금지), 기존 patrol/alert/attack/lost 전이 무변경. `EnemyAttackPortBinding`: 미연결 = unwired(투하·피해 0), 병합 시 `enemyAttackBinding.attach(gameplay.enemyAttackPort)` 1줄 |
+| Blocker 2 해소 | **DEBRIEF 종료 정책 공식 개정** (그래픽스 INT-RENDER-012 '자동 completeDebrief 제거' 요청 승인·확장): 저장 성공 → `saveStatus='saved'`·DEBRIEF 유지·`canConfirm=true` → 사용자 확인(`DebriefConfirmCommand.confirm()`) → BASE. 저장 실패 → DEBRIEF 유지·canRetrySave일 때만 retrySave(재정산 0) → 성공 시 confirm 활성. 정상 귀환·실패 **양쪽 동일 정책**. 보장: 정산 출항당 1회·최초 saveRequested 1회·retry 재정산 0·저장 성공만으로 completeDebrief 자동 호출 0·중복 confirm 시 BASE 전환 1회·저장 미완료 confirm 거부(saveIncomplete)·화면 분기는 kind만 |
+| Blocker 3 | 통합 composition patch 확정 — `docs/SPRINT_C_HANDOFF.md` §'통합 composition patch' (게임플레이 4+1줄·그래픽스 2줄+confirm 교체·조립 순서·Game.ts 충돌 표) |
+| Blocker 4 | B5 테스트 변경 검토 acceptance 5항목 — SPRINT_C_HANDOFF §⑤ (통합 관리자 검사) |
+| Blocker 5 | `consumeDamageFlash` 계약 판정 **허용** — SPRINT_C_HANDOFF §⑥ (플래시 플래그만 해제, 코어 상태·lastDamage 불변, snapshot 계약 유지) |
+| 하위 호환 여부 | `DebriefReadModel.canConfirm` 필드 추가(소비자는 그래픽스 신규 화면뿐 — 병합 시 3-인자 tracker 채택 필요), `SortieFailureReport.nextState`는 이제 항상 'DEBRIEF'(자동 BASE 폐기), factory 2번째 인자 추가(기본 null — 기존 호출 무영향) |
+| 개발 리드 결정 | 승인 — **C_INTEGRATION_HANDOFF_READY=true.** 그래픽스 Game.ts의 `completeDebrief` 직접 호출은 병합 시 `debriefConfirm.confirm()`으로 교체할 것(저장 미완료 가드 우회 방지) |
+| 적용 커밋 | 2dacea4(AI 공격 요청)·fd5574b(confirm 정책·바인딩)·223bfd8(검증 119) + 문서 커밋 |
+
+### INT-CORE-017 — C 런타임 마감 준비: combat params 정규화 단일 소유 · 실패 화면 confirm 경유 (구조 blocker 2건 해소)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (통합 실행 결과 보고의 blocker §5·§11-3 해소 — 브랜치 `claude/sprint-c-runtime-closeout`, 기준 `bd87828`) |
+| 대상 시스템 | `src/systems/combat/officialCombatParams.ts`(평면 리더 제거·`NormalizedCombatParams` 단면), `src/systems/GameplaySystems.ts`(`attachCombatParams` 타입화), `src/ui/SortieFailureScreen.ts`(attach 3-인자·confirm 경유), `src/core/Game.ts`(배선 2곳), 검증(`verifyGameplay`·`verifyMeta`·`run.mjs`) |
+| 해소 1 — 전송 형태 충돌 | **정규화 소유자는 공인 로더 한 곳**(`tools/combatParams.validateCombatParams` → `combatParamsLoader.loadCombatParams`)이다. 게임플레이 구 평면 리더 2종(root 평면 키 해석 — 중첩 스키마와 불일치해 값이 도착해도 읽히지 않던 이중 정규화) 제거. `attachCombatParams(params: NormalizedCombatParams)` — 조립부가 로더 결과의 게임플레이 단면(`detectionTuning`·`depthCharge`)을 슬라이스 전달. raw combat.json import 0건(공인 로더 2곳 외 금지 — 정적 검사), null 블록·null 필드는 그대로 전달(unwired 유지, null→0·fallback·부분 wired 금지). 선체·침수 블록은 기존대로 리드 코어 생성자 직접 주입(무변경) |
+| 해소 2 — 실패 화면 confirm | `SortieFailureScreen.attach(model, retryCommand, confirmCommand)` 3-인자화. '확인 (기지로)' = `debriefConfirm.confirm()` guarded command 호출, 성공(`'confirmed'`)일 때만 화면 닫힘 — DOM 숨김 전용 경로 제거. 버튼 노출 근거는 `DebriefReadModel.canConfirm` 하나. 정상 귀환 화면과 동일 정책(INT-CORE-016 §⑦의 실패 화면 측 완결). fixture(`?cdemo=1`)도 동일 정책 표본으로 갱신 |
+| 검증 | `verify:meta` +5(정규화 필드 교환 0·null 보존·NaN/음수 거부 3건 + 정적 검사 ③-2 정규화 단일 소유·③-3 confirm 경유 2건) → 124/124. `verify:gameplay` 주입 경로를 실경로(validateCombatParams 경유)로 교체 → 238/238 |
+| 하위 호환 여부 | `attachCombatParams` 시그니처 변경(unknown → `NormalizedCombatParams`) — production 호출자는 조립부 1곳뿐. `SortieFailureScreen.attach` 3-인자화 — 호출자는 조립부·fixture 2곳뿐. 15필드 전량 null 유지라 **런타임 동작 변화 0**(탐지 safe 고정·공격 unwired·폭뢰 피해 0) |
+| 개발 리드 결정 | 승인 — 구조 blocker 2건 해소. **C9 수치는 별도 트랙**: 결정표는 PROPOSED(기획 승인 대기)로만 보고하며 production·params에 숫자 미입력. `C_COMBAT_PARAMS_DEFINED=false`·`C_RUNTIME_WIRED=false`·`C_BROWSER_EMPIRICAL_COMPLETE=false`·`C_FINAL_COMPLETE=false` 유지 |
+| 적용 커밋 | 400373a(정규화)·c7c36f4(confirm)·da683c4(검증) + 문서 커밋 |
+
+### INT-CORE-018 — C9 v0.1 승인값 입력 · 탐지 기준 배선 2줄 · production 브라우저 실측 완주
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (C9 v0.1 승인 접수 — 브랜치 `claude/sprint-c-runtime-closeout`) |
+| 승인값 입력 | `params/combat.json` 15필드 전량 확정(C-13). 공인 스키마 유지·지정 필드 외 무변경·pressure 미추가. 공인 로더 결과: **pendingFields 0건·전 블록 non-null·fullyDefined=true**. `C_COMBAT_PARAMS_DEFINED=true` |
+| 배선 2줄 (C-14) | ① `torpedoFired`→`reportTorpedoLaunch`(§5.10 확정 규칙 — production 호출자 0건이던 계약 구현의 조립부 이벤트 브리지) ② 출항 시작 `reportNoise(1)`(공식 만충 시간 정의의 기준 조건 — 미공급 시 소음 0으로 충전식 퇴화, 탐지·attack·폭뢰 사슬 전체 도달 불가였음을 실측으로 확인) |
+| 실측 (production, fixture 아님) | 탐지 상승 0→만충 9.65s(잠망경 진입 ~2s 포함, 공칭 8.0s)·재상승 17.0s(원거리 접근 램프 포함) / 감쇠 1→0 **8.000s**(=1/0.125) / 신관 게임 시계 **정확 3.000s ×10발**(하한 3.0 준수) / 공격 간격 단일 공격자 **6.05s**(5.99~6.17), 공격자 2척 교차 시 3.03s / direct **45**(cruise y −3.62, 기폭 y=0 일치) · near **12**(잠망경 y≈9 — 수직 offset로 3D 11m) · miss **0 피해**(이탈 39.5m) / 파괴: near 연타 30.5s(10타)·direct 9.1s(3타, 마지막 30 클램프) / 파괴 후 10s 신규 투하 0(PlayerAliveSource 게이트) / `sortieFailed`·정산 1회·`saveRequested(settlement)` 1회·saved·실패 화면 canConfirm → confirm → BASE / 재출항 reset(선체 120/120·침수 0·어뢰 3·게이지 0·경비함 0·debrief none). 콘솔 오류 **0** (전 세션) |
+| 실측 발견 blocker | ① **침수 미발생** — production의 어떤 DamageRequest도 `causesFlooding=true`를 보내지 않는다(폭뢰 시스템 주석: '침수 기여량은 공식 params 소유'). 피격→침수 기여량 공식 param이 C9 15필드에 없어 침수 루프(단계·침수 파괴)는 브라우저에서 도달 불가 — 수치 발명 없이는 해소 불가, 기획 결정 필요 ② **잠망경 심도에서 direct 불가** — 폭뢰가 관측 y=0에 기폭돼 잠망경(y≈9)에서는 수직 offset만으로 near가 상한(심도별 피해 기하는 관측 y 규약의 결과 — 밸런스 위험 항목) ③ 근접 폭발 밀려남(8m)이 폭발 반대 방향(상향 성분)이라 폭격 중 잠항이 상쇄될 수 있음(y 7.94 평형 관측) |
+| 개발 리드 결정 | `C_COMBAT_PARAMS_DEFINED=true` · `C_RUNTIME_WIRED=true` · `C_BROWSER_EMPIRICAL_COMPLETE=true`(**침수 스테이지 제외 명시** — 기능 부재이지 실측 누락이 아님) · **`C_FINAL_COMPLETE=false` 유지**(침수 유발 경로 부재가 생존 루프의 공식 구성요소 미완이므로 최종 완료 선언 불가) |
+| 적용 커밋 | c943d35(승인값)·885839f(배선) + 문서 커밋 |
+
+### INT-CORE-019 — C 최종 런타임 blocker 3건 마감: 침수 기여(v0.1.1)·소음 정책·목표 심도 기폭 — **C_FINAL_COMPLETE=true**
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (C9 v0.1.1 승인 접수 — 브랜치 `claude/sprint-c-runtime-closeout`, 기준 `12dabde`) |
+| Blocker 1 해소 | 침수 기여 2필드(C-15): direct 0.35·near 0.10 — 공인 스키마·로더 단일 해석(17필드)·관계 검증(0<near<direct≤1)·`NormalizedCombatParams` 경유·outcome별 결정·단일 창구·중복 1회·clamp 1.0·tick 경로 유지·pressure 미추가 |
+| Blocker 2 해소 | 소음 정책(C-16): 속도 비례(`\|speed\|/유효 maxSpeed`) — 고정 reportNoise(1) 폐기, 하드코딩 0, 정지 0·전속 1, 침묵 미구현 = 소스 미연결 false 중립(**C_SILENT_RUNNING_INTERACTIVE=false**) |
+| Blocker 3 해소 | 목표 심도 기폭(C-17): 관측 3D 고정 → 낙하(파생 보간) → 목표 심도 기폭 — y=0 고정 폐기, 재추적·유도 없음, 3D 거리 판정 |
+| 실측 (production 재실측 — fixture 아님) | 정지: 소음 0·게이지 0(관측자 20~40m) / 전속: 소음 1·만충 10.2s(가속 램프 ~3s 포함 — 공칭 8s 정합)·상승률 speed4→0.048/s·speed8→0.085/s(비례) / 정지 회피: 감쇠 9.49s→safe / 발사 노출: 정지(소음 0) 발사 → 게이지 즉시 ≈1 / 기폭 심도 3층: periscope 목표 11·cruise −1.2·deep −3.28 — 전부 관측 y에서 기폭(낙하 시작 = 공격자 수면 y≈12) / direct 45+침수 +0.35(×4) / near 12+침수 +0.10 / miss 0+0 / 단계: minor 0.151(자연 확산 도달)→major→catastrophic 0.803 — 실제 피격+확산 경유 / 지속 피해 2.4×level 정확(dt 무관) / 침수 잠식 파괴(침수 1.0 상태 60+ hull 잠식) / 파괴 후 10s 신규 투하 0 / 정산·저장 1회·실패 화면 canConfirm→confirm→BASE / 재출항 reset(120/120·침수 0·어뢰 3·게이지 0 safe·경비함 0) / 콘솔 오류 0 |
+| 잔여 관찰 | 기폭 심도 수정 후 밀려남의 지속적 잠항 상쇄 **재관측 없음**(전투 중 y −1.2 유지 — 구 y=0 기폭 시절의 상향 밀림 평형은 해소). 밀려남 수치는 무변경(8m 확정값) |
+| 개발 리드 결정 | 전체 자동 검증 + production 실측 통과 — **C_BROWSER_EMPIRICAL_COMPLETE=true · C_FINAL_COMPLETE=true** 선언. C_SILENT_RUNNING_INTERACTIVE=false는 후속(대화형 침묵 조작 + 속도 소음과의 상호작용 실측) |
+| 적용 커밋 | c2ee51d(침수 기여·기폭 심도)·45257d8(소음 정책)·74e13c3(검증) + 문서 커밋 |
+
+### INT-GAME-014 — C1~C4 게임플레이 구현 완료 + production 배선 4줄 요청 (조립부)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 (창 2 — C1~C4 source·adapter·composition. B는 여전히 미발효 선행개발) |
+| 대상 시스템 | `src/core/Game.ts`(조립 배선 **4줄**) — 계약·리드 구현 변경 요청 **없음** |
+| 필요한 변경 | `Game.composeSystems`에서 네 줄: ① `gameplay.attachPlayerAliveSource(playerHull);` — 리드가 남긴 대기 주석(Game.ts) 자리. 파괴 후 추적·공격 요청이 멈춘다 ② `gameplay.attachDamageReceiver(playerHull);` — 폭뢰 피해의 **단일 창구** 연결. 미연결이면 폭발해도 피해 경로가 없다(게임플레이는 자체 체력을 만들지 않는다) ③ `gameplay.attachCombatParams(combatJson);` — `params/combat.json` 원본 주입. 현재 C9 필드가 없어 탐지·폭뢰 판정이 **unwired**로 남고, 툴링이 필드를 추가하면 같은 줄로 자동 구동된다 ④ (렌더) `gameplay.detectionHudView()`·`gameplay.detectionStageSource` 소비 — HUD 눈 아이콘·게이지. 추가로 리드 `GuardShipAdapter`가 만든 AI가 공격하려면 `gameplay.enemyAttackPort`를 AI 공격 요청 소비자로 연결해야 한다(현재 `DestroyerAIController`는 이동만 하고 공격 요청을 만들지 않는다 — 아래 blocker) |
+| 변경 이유 | C1~C4의 게임플레이 측 구현·adapter는 끝났고, 값이 실제로 흐르려면 조립 배선이 필요하다. 임의 수치·자체 체력·병행 정산을 만들지 않았으므로 배선이 유일한 해소 경로다 |
+| 관련 게이트 | C1·C2·C3·C4 (+ C 공통 이중 정산 방지) |
+| 하위 호환 여부 | 계약 파일 **무수정**. 검증 238/238·meta 110/110·tooling 26/26·sprint-a 30/30·sprint-b 23/23 통과 |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
+
+**게임플레이 적용 완료 (C1~C4):**
+- **C1 탐지 게이지 정본** `systems/detection/SubmarineDetectionSystem` — 계약 `DetectionSystem`+`DetectionStageSource`+`SortieResettable` 구현. HUD는 `DetectionHudView` 값 복사본, AI는 **stage와 마지막 노출 위치만** 받는다(게이지 비노출·내부 mutable state 접근 불가). 거리 감쇠·감소율이 null이면 **게이지 0·safe 고정·전이 0**. 출항 시작·종료 reset. 관측자는 세력 무관 동일 계약(적대·patrol·향후 호위 공용)
+- **C2 환경 입력** `systems/detection/DetectionEnvironmentAdapter` — 기존 3층 심도 정본 소비. 보정식·계수를 만들지 않는다(공식 `depthModifiers`·`silentRunningNoiseMultiplier`를 탐지 시스템이 적용). 소음·침묵 항행 소스는 공식 규칙이 없어 **미연결 = 중립 입력**(0 / false)이며 `wired`로 드러난다. 심도 이동 물리 무변경
+- **C3 추적 연결** — `PatrolShipFleet.getTargetPosition(PLAYER)`가 stage `detected`일 때만 위치를 준다. 전이는 전적으로 리드 `DestroyerAIController`가 수행하며 상태 어휘·전이 로직을 복제하지 않았다. 새 이벤트 없음(`detectionChanged` 단일)
+- **C4 공격 경계** `systems/combat/EnemyAttackCoordinator`(계약 `EnemyAttackPort`) — 사거리·쿨다운 판정 소유. params null이면 `unwired`, 표적 파괴 시 거부, 같은 `attackId` `duplicate`. **요청 즉시 피해 없음**(투하만)
+- **C4 폭뢰** `systems/combat/DepthChargeRunSystem`(계약 `DepthChargeSystem`) — 투하→낙하→신관(**3.0초 하한 준수**)→폭발→direct/near **택일**→`DamageRequest`→`DamageReceiverPort.applyDamage` 단일 창구. 반경·피해 null이면 폭발 상태는 진행하되 피해 `damageUnwired`. `damageEventId`·`correlationId` 부여, 같은 상관 id 중복 피해 차단
+- **PlayerAliveSource 실제 배선** — `gameplay.attachPlayerAliveSource()`가 `PatrolShipFleet`·`EnemyAttackCoordinator` 양쪽에 연결된다. `isTargetAlive(PLAYER_ENTITY_ID)`의 **항상 true 경로 제거**(미연결일 때만 생존 가정). 파괴 후 관측·공격 요청 0, 다음 출항 reset 후 정상 복구
+- **병행 정산 제거** — `EconomySystem.settleDefeat`·`settleReturn`·`RunEconomy.settleSortie` **삭제**(production 호출자 0건이었음). 검증 코드도 정리했고 게임플레이는 지갑을 확정하지 않는다. `verify:meta`의 이중 정산 정적 검사 통과 유지
+
+**수치 출처 (임의 전투 수치 0):** 탐지 확정 3종 = `params/detection.json` / 신관 = `combat.json depthChargeFuseSeconds`(하한 3.0 고정) / 동시 폭뢰 = `simultaneousDepthCharges` / 공격 사거리 = 폭뢰 `nearRadiusMeters`(피해 가능 거리 밖 투하 금지라는 구조 규칙, 새 수치 아님). **미확정 전량 null 유지**: 거리 감쇠·게이지 감소율·direct/near 반경·피해·투하 쿨다운·선체 기준값. 검증 픽스처(`DETECTION_TUNING_FIXTURE`·`DEPTH_CHARGE_FIXTURE`)는 검증 파일 안에만 있고 production import 0건
+
+**남은 blocker:** ① 위 4줄 배선 ② `params/combat.json` C9 필드(툴링) — 도착 전까지 탐지·폭뢰 피해는 unwired ③ **AI가 공격 요청을 만들지 않는다** — 리드 `DestroyerAIController`는 이동만 하고 `EnemyAttackRequest`를 생성하지 않는다. `attack` 상태에서 요청을 만들어 `EnemyAttackPort`로 넘기는 지점이 리드 소유 파일에 필요하다(게임플레이는 포트를 제공했다)
 ### INT-RENDER-012 — [DETECT][SURVIVAL][LOOP] 스프린트 C 그래픽스: 탐지·생존 HUD·피격 피드백·실패/귀환 화면 분리
 
 | 필드 | 내용 |

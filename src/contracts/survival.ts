@@ -314,6 +314,14 @@ export interface DepthChargeDamageParams {
   readonly nearDamage: number | null;
   /** 투하 쿨다운(초) — 미확정이면 null */
   readonly dropCooldownSeconds: number | null;
+  /**
+   * 직격 침수 기여량 (정규화 flooding level ratio) — 미확정이면 null.
+   * C9 v0.1.1 확장: 범위 0 < near < direct ≤ 1. null이면 침수만 unwired
+   * (선체 피해와 독립 — boolean으로 양을 추측하지 않는다).
+   */
+  readonly directFloodingContribution: number | null;
+  /** 근접 침수 기여량 (정규화 flooding level ratio) — 미확정이면 null */
+  readonly nearFloodingContribution: number | null;
 }
 
 /* ── 4-8. 생존 HUD 읽기 모델 ──────────────────────────────── */
@@ -398,10 +406,13 @@ export interface SortieFailurePort {
 /* ── 4-10. 파괴 후 상태 전환 [결정 확정] ──────────────────── */
 
 /**
- * 정본 흐름:
+ * 정본 흐름 [INT-CORE-016 개정]:
  * `SORTIE` → (PlayerHullState.isDestroyed = true) → `MetaLoop.settleSortie
  * ({outcome:'destroyed'})` → `DEBRIEF` → `saveRequested('settlement')` →
- * 저장 성공 → `completeDebrief()` → `BASE`.
+ * 저장 성공 → `DebriefReadModel.saveStatus='saved'`·확인 command 활성 →
+ * **사용자 확인** → `completeDebrief()` → `BASE`.
+ * 저장 성공이 BASE 전환을 자동으로 일으키지 않으며, 정상 귀환·실패 양쪽
+ * 동일 정책이다.
  *
  * **`MetaState`를 확장하지 않는다.** 파괴 여부는 `PlayerHullState.isDestroyed`
  * 하나가 소유하고, 메타 상태는 기존 `DEBRIEF`를 쓴다 — 같은 사실을 두 상태에
@@ -410,7 +421,8 @@ export interface SortieFailurePort {
  * **저장 실패 정책** [기존 저장 책임 표 A-12 우선]:
  *  - 정산은 이미 지갑에 반영됐으므로 **재정산하지 않는다**(중복 정산 금지).
  *  - 상태는 `DEBRIEF`에 머문다 — 기지로 넘어가지 않는다.
- *  - 저장만 재시도할 수 있고, 재시도 성공 시 `BASE`로 전환한다.
+ *  - 저장만 재시도할 수 있고, 재시도 성공 시 확인 command가 활성화된다
+ *    (사용자 확인 전 BASE 전환 금지).
  *  - 저장 실패를 성공으로 보고하지 않는다(`saveStatus: 'saveFailed'`).
  */
 
@@ -444,7 +456,17 @@ export interface DebriefReadModel {
   readonly saveStatus: FailureSaveStatus;
   /** 저장 실패 상태라 재시도가 가능한가 */
   readonly canRetrySave: boolean;
+  /**
+   * 확인 command가 활성인가 [INT-CORE-016 개정 — DEBRIEF 종료 정책]:
+   * 저장 성공(saved) + DEBRIEF 상태일 때만 true. **저장 성공이 BASE 전환을
+   * 자동으로 일으키지 않는다** — 기지 복귀는 항상 사용자 확인(confirm)
+   * 경유이며, 정상 귀환(sortieEnded)과 실패(sortieFailed) 양쪽 동일 정책이다.
+   */
+  readonly canConfirm: boolean;
 }
+
+/** 확인 command 결과 — 저장 미완료·상태 밖 확인은 거부된다 */
+export type DebriefConfirmOutcome = 'confirmed' | 'saveIncomplete' | 'invalidState';
 
 /* ── 4-11. 출항 초기화 ────────────────────────────────────── */
 

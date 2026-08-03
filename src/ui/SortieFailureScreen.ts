@@ -40,6 +40,8 @@ export class SortieFailureScreen {
 
   private model: DebriefModelSource | null = null;
   private retryCommand: (() => void) | null = null;
+  /** 확인 command — 리드 guarded command 래퍼. true = confirm 성공(BASE 전환) */
+  private confirmCommand: (() => boolean) | null = null;
   /** 표시 전용 로컬 닫힘 플래그 — 저장 성공 후 사용자가 화면을 닫은 상태.
    *  (생존·정산 상태 정본이 아니다 — read model이 초기화되면 함께 풀린다) */
   private dismissed = false;
@@ -103,6 +105,11 @@ export class SortieFailureScreen {
     this.dismissButton.style.cssText =
       'font:0.85rem system-ui;padding:0.45rem 0.9rem;border-radius:4px;border:1px solid rgba(150,190,205,0.5);background:rgba(28,52,64,0.9);color:#dcecf2;cursor:pointer';
     this.dismissButton.addEventListener('click', () => {
+      // [INT-CORE-017] 확인 = 공식 DEBRIEF confirm command 호출 — DOM 숨김이
+      // 아니다. confirm이 성공(BASE 전환)했을 때만 화면을 닫는다. 저장
+      // 미완료·상태 밖이면 command가 거부하고 화면은 유지된다.
+      const confirmed = this.confirmCommand?.() ?? false;
+      if (!confirmed) return;
       this.dismissed = true;
       this.root.style.display = 'none';
     });
@@ -112,10 +119,19 @@ export class SortieFailureScreen {
     host.appendChild(this.root);
   }
 
-  /** read model + 저장 재시도 command 주입 (command는 조립부 소유 래퍼) */
-  attach(model: DebriefModelSource, retryCommand: () => void): void {
+  /**
+   * read model + command 2종 주입 (command는 조립부 소유 래퍼).
+   * confirmCommand는 리드 `DebriefConfirmCommand.confirm()` 경유 — UI가
+   * `completeDebrief()`를 직접 호출하지 않는다. 정상 귀환 화면과 동일 정책.
+   */
+  attach(
+    model: DebriefModelSource,
+    retryCommand: () => void,
+    confirmCommand: () => boolean,
+  ): void {
     this.model = model;
     this.retryCommand = retryCommand;
+    this.confirmCommand = confirmCommand;
   }
 
   update(): void {
@@ -132,7 +148,7 @@ export class SortieFailureScreen {
 
     this.root.style.display = 'flex';
     const failure = view.failure;
-    const signature = `${failure.failureId}#${view.saveStatus}#${view.canRetrySave}`;
+    const signature = `${failure.failureId}#${view.saveStatus}#${view.canRetrySave}#${view.canConfirm}`;
     if (signature === this.lastSignature) return;
     this.lastSignature = signature;
 
@@ -158,7 +174,8 @@ export class SortieFailureScreen {
       this.saveLine.textContent = '✓ 정산이 저장되었습니다.';
       this.saveLine.style.color = '#9fd6c0';
       this.retryButton.style.display = 'none';
-      this.dismissButton.style.display = 'inline-block';
+      // 확인 버튼 노출 근거는 read model의 canConfirm 하나다 (saved + DEBRIEF).
+      this.dismissButton.style.display = view.canConfirm ? 'inline-block' : 'none';
     } else {
       this.saveLine.textContent = '저장 대기 중…';
       this.saveLine.style.color = '#ffd9a0';

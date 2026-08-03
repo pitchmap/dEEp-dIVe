@@ -269,6 +269,80 @@ try {
     });
   }
 
+  // ③-1 AI 소유 경계 (INT-CORE-016): AI는 공격 **요청만** 생성한다 —
+  //     피해량·반경·사거리·쿨다운·신관·직접 피해 호출을 소유하지 않는다.
+  {
+    const ai = read('src/core/DestroyerAIController.ts');
+    const forbidden = [
+      'applyDamage',
+      'DamageReceiverPort',
+      'DepthChargeRunSystem',
+      'directDamage',
+      'nearDamage',
+      'RadiusMeters',
+      'cooldown',
+      'Cooldown',
+      'fuse',
+    ];
+    const leaked = forbidden.filter((marker) => ai.includes(marker));
+    results.push({
+      name: 'C4 AI 소유 경계: DestroyerAIController에 피해·반경·쿨다운·신관·직접 피해 호출 0건',
+      passed: leaked.length === 0,
+      detail: leaked.length === 0 ? '통과 (요청 생성만)' : `발견: ${leaked.join(', ')}`,
+    });
+  }
+
+  // ③-2 combat params 정규화 단일 소유 (INT-CORE-017): 구 평면 리더
+  //     (이중 정규화) 0건 + combat.json import는 공인 로더 안에서만 +
+  //     Game.ts의 raw combat import 0건.
+  {
+    // 호출·선언 형태(`이름(`)만 잡는다 — 제거 사유를 남긴 주석 속 이름은 위반이 아니다.
+    const duplicateReaders = sourceFiles.filter((file) =>
+      /read(?:DetectionTuning|DepthChargeDamage)Params\s*\(/.test(read(file)),
+    );
+    // 공인 로더 2곳만 허용: combatParamsLoader(C9 중첩 스키마 정본),
+    // ParamLoader(A 시절 확정 5필드 combat 로더 — validateGameParams 경유 정규화 소유).
+    const combatJsonAllowlist = new Set([
+      'src/tools/combatParamsLoader.ts',
+      'src/config/ParamLoader.ts',
+    ]);
+    const combatJsonImporters = sourceFiles.filter(
+      (file) =>
+        /from\s+['"][^'"]*params\/combat\.json['"]/.test(read(file)) &&
+        !combatJsonAllowlist.has(file),
+    );
+    const passed = duplicateReaders.length === 0 && combatJsonImporters.length === 0;
+    results.push({
+      name: 'C9 정규화 단일 소유: 평면 리더(이중 정규화) 0건 · combat.json import는 공인 로더뿐',
+      passed,
+      detail: passed
+        ? '통과'
+        : `평면 리더: ${duplicateReaders.join(', ') || '없음'} / raw import: ${combatJsonImporters.join(', ') || '없음'}`,
+    });
+  }
+
+  // ③-3 실패 화면 confirm 구조 (INT-CORE-017): 확인 버튼이 guarded confirm
+  //     command를 경유해야 하며, UI가 completeDebrief를 직접 호출하지 않는다.
+  {
+    const screen = read('src/ui/SortieFailureScreen.ts');
+    const returnScreen = read('src/ui/SortieReturnScreen.ts');
+    const game = read('src/core/Game.ts');
+    const usesConfirm = screen.includes('confirmCommand');
+    // 직접 호출 형태(`.completeDebrief(`)만 금지 — 정책을 설명하는 주석 속
+    // 이름과 조립부 command 래퍼 경유(주입받은 콜백 호출)는 위반이 아니다.
+    const directCall = /\.completeDebrief\s*\(/;
+    const noDirectComplete = !directCall.test(screen) && !directCall.test(returnScreen);
+    const gameWiresGuarded = /debriefConfirm\?\.confirm\(\)/.test(game);
+    const passed = usesConfirm && noDirectComplete && gameWiresGuarded;
+    results.push({
+      name: 'C 실패 화면 confirm: guarded command 경유 · UI의 completeDebrief 직접 호출 0건',
+      passed,
+      detail: passed
+        ? '통과'
+        : `confirmCommand=${usesConfirm}, directComplete=${!noDirectComplete}, gameGuarded=${gameWiresGuarded}`,
+    });
+  }
+
   // ③ C 수치 발명 금지 — 생존 코어에 밸런스 상수 리터럴이 없어야 한다.
   //    (선체 기준값·피해량·침수 속도·압력은 C9 [COMBAT] params 이관 대상)
   {

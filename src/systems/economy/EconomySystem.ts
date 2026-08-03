@@ -17,6 +17,11 @@
  * 중립 사건(경비함 요청)은 이 시스템의 책임이 아니다 — 유효 피해 지점에서
  * 발행되는 `neutralShipHit`가 정본이다 (B4). 레거시 큐는 비어 있다.
  *
+ * **정산은 이 시스템의 책임이 아니다** [스프린트 C]: 출항 정산 정본은
+ * `MetaLoop.settleSortie` 하나이며, 병행 경로였던 `settleDefeat`·
+ * `settleReturn`(그리고 `RunEconomy.settleSortie`)은 **삭제**됐다.
+ * 이 시스템은 드롭 생성·회수까지만 하고 지갑 확정에 관여하지 않는다.
+ *
  * 통지 계약: guardSpawnRequested·creditsChanged·rarePartAcquired 정식 이벤트는
  * INT-GAME-008 제안 중 — 그 전까지 읽기 전용 상태·consume API·콜백이 연결점.
  *
@@ -34,7 +39,7 @@ import type { SalvageSpawnPlanEntry } from '../../contracts/officialParams';
 import type { Updatable } from '../../contracts/systems';
 import { CreditDropField } from './CreditDropField';
 import type { EconomyRuntimeParams } from './officialEconomyCatalog';
-import { RunEconomy, type SortieSettlement } from './RunEconomy';
+import { RunEconomy } from './RunEconomy';
 import { SalvageObject, type SalvageKind } from './SalvageObject';
 import type { FactionId, TargetRegistry } from '../TargetRegistry';
 
@@ -245,16 +250,6 @@ export class EconomySystem implements Updatable {
       this.params.pickupRadiusMeters,
       this.wallet,
     );
-  }
-
-  /** 플레이어 파괴 정산 — 손실률은 공식 경제 params (미주입 = 손실 0) */
-  settleDefeat(): SortieSettlement {
-    return this.wallet.settleSortie('defeat', this.creditLossOnDestroyedRatio);
-  }
-
-  /** 기지 귀환 정산 — 전액 확정 (저장은 툴링이 이 데이터를 받아 수행) */
-  settleReturn(): SortieSettlement {
-    return this.wallet.settleSortie('return', 0);
   }
 
   /**

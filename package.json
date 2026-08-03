@@ -20,7 +20,8 @@
     "verify:hud": "node scripts/verify-hud.mjs",
     "verify:meta": "node src/meta/__verification__/run.mjs",
     "verify:sprint-a": "node scripts/verify-sprint-a.mjs",
-    "verify:sprint-b": "node scripts/verify-sprint-b.mjs"
+    "verify:sprint-b": "node scripts/verify-sprint-b.mjs",
+    "verify:sprint-c": "node scripts/verify-sprint-c.mjs"
   },
   "dependencies": {
     "three": "^0.185.1"

@@ -51,6 +51,8 @@ export class SprintCUiFixture {
     failure: null,
     saveStatus: 'notAttempted',
     canRetrySave: false,
+    // canConfirm = 저장 성공 + DEBRIEF일 때만 true (리드 계약 survival.ts)
+    canConfirm: false,
   };
   private metaState: 'SORTIE' | 'DEBRIEF' | 'BASE' = 'SORTIE';
 
@@ -89,8 +91,20 @@ export class SprintCUiFixture {
         // 재시도 표본 — 성공으로 전환 (재정산 없음을 화면 규칙으로 검수)
         if (fixture.debrief.failure) {
           const saved: SortieFailureReport = { ...fixture.debrief.failure, saveStatus: 'saved' };
-          fixture.debrief = { ...fixture.debrief, failure: saved, saveStatus: 'saved', canRetrySave: false };
+          fixture.debrief = {
+            ...fixture.debrief,
+            failure: saved,
+            saveStatus: 'saved',
+            canRetrySave: false,
+            canConfirm: true,
+          };
         }
+      },
+      () => {
+        // 확인 표본 — 공식 정책 그대로: canConfirm(saved+DEBRIEF)일 때만 성공
+        if (!fixture.debrief.canConfirm) return false;
+        fixture.debrief = { ...fixture.debrief, canConfirm: false };
+        return true;
       },
     );
     this.returnScreen = new SortieReturnScreen(host);
@@ -103,7 +117,7 @@ export class SprintCUiFixture {
       },
       () => {
         fixture.metaState = 'BASE';
-        fixture.debrief = { kind: 'none', settlement: null, failure: null, saveStatus: 'notAttempted', canRetrySave: false };
+        fixture.debrief = { kind: 'none', settlement: null, failure: null, saveStatus: 'notAttempted', canRetrySave: false, canConfirm: false };
       },
     );
 
@@ -210,6 +224,7 @@ export class SprintCUiFixture {
         },
         saveStatus: 'saveFailed',
         canRetrySave: true,
+        canConfirm: false, // 저장 미완료 — 확인 거부(saveIncomplete)
       };
     });
     add('귀환 화면', () => {
@@ -226,6 +241,7 @@ export class SprintCUiFixture {
         failure: null,
         saveStatus: 'saved',
         canRetrySave: false,
+        canConfirm: true, // 저장 성공 — 확인 활성(자동 전환은 없음)
       };
     });
 
