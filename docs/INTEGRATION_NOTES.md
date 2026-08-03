@@ -90,6 +90,77 @@
 
 ## 제안 목록
 
+### INT-GAME-016 — M2 2~5단계 구현 + 공식 params 행 요청 (16·17차 결의 수치)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 창 (17차 결의 3 **창 2**) |
+| 대상 시스템 | `params/economy.json`(파밍 상한 2행) · `params/detection.json` 또는 신설 `params/sonar.json`(스코프 5행) · 신설 `params/boss.json`(약점 3행) · 신설 `params/interaction.json`(회수 3행) · `src/contracts/params.ts` · `src/config/validateParams.ts` · `src/core/Game.ts` 조립 |
+| 변경 이유 | 16차 회의록(대회의)과 17차 회의록(소회의)이 저장소에 도착하면서 M1·M2 창 범위와 **튜닝표 초기값이 확정**됐다. 게임플레이는 2~5단계 판정 로직을 전부 구현했고, 남은 것은 그 수치를 담을 공식 params 행과 조립 1줄씩이다. `params/`는 기획 소유, `contracts`·`config`·`core`는 공통 보호이므로 게임플레이가 직접 쓰지 않았다 |
+| 관련 게이트 | G4(성장 루프) · G5(은신·탐지) · G7(보스) |
+| 하위 호환 | 유지 — 전부 신규 주입점이고, 미주입 시 각 시스템이 `unwired`로 남아 기존 동작이 변하지 않는다 |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | (대기) |
+
+**이번에 구현한 것 (게임플레이 소유 영역 `src/systems/**`만)**
+
+| 단계 | 파일 | 내용 |
+|---|---|---|
+| 2 — 단서 획득 | `progress/CluePickupProgress.ts` (신규) | 회수 완료 소비 → 단서 진행. 고유 id·중복 획득 불가·출항 간 누적·복원. **보스 구역 개방 게이트는 넣지 않았다**(17차 창 1 = 리드 소유) — `clueProgressSource`로 읽어 가면 된다 |
+| 3 — 약점 판정 | `BossWeakPointTarget.ts` (수정) | 임시 배율(`provisionalBossWeakPointConfig`: 반경 6·배율 2.0/0.25)을 **삭제**하고 `BossWeakPointParams` 주입으로 전환. 개방/닫힘 **구분은 params 없이도 성립**하고 배율만 미확정이므로, unwired면 반경 0·피해 0으로 남는다 |
+| 4 — 파밍 보상 | `economy/SectorFarmingRewards.ts` (신규) | 기존 단일 재화(`RunEconomy`)에만 적립, 해역당 상한 강제. 상한 미주입이면 **지급하지 않는다** — 무제한 지급은 16차 결의 2-3이 명시적으로 거부한 방향이라 '미확정 = 무제한'으로 해석하지 않았다 |
+| 5 — 소나 스코프 | `sonar/SonarScopeSystem.ts` (신규) | 패시브(소음원만·방위만·거리 null) + 액티브 핑(전체 정확 표시). 핑의 대가는 기존 탐지 게이지 정본에 적용(`SubmarineDetectionSystem.raiseGauge`) |
+| 접합 | `detection/SubmarineDetectionSystem.ts` (수정) | `effectiveNoiseFactor` getter + `raiseGauge()` 추가. 게이지 정본은 그대로 하나다 |
+
+**17차 결의 4 준수 확인** — `SonarScopeSystem`은 `silentRunning` 불리언을
+**입력으로 받지 않는다.** 유일한 입력은 탐지 시스템이 이미 계산한
+`effectiveNoiseFactor`(침묵 배율이 이미 곱해진 값)다. 6단계에서 침묵 항행을
+연결하면 스코프는 **코드 변경 0**으로 선명해진다. 검증기가 스코프 표면에
+`silent` 계열 API가 없음을 기계적으로 확인한다.
+
+**요청 1 — 공식 params 행.** 값은 전부 16·17차 결의문·튜닝표에 있는 것이며
+게임플레이가 만든 수치가 아니다. 게임플레이가 `params/`를 직접 쓰지 않은 것은
+소유권(FILE_OWNERSHIP: `params/` = 기획) 때문이다.
+
+| 항목 | 결의 근거 | 초기값 | 조정 범위 | 주입 경로 |
+|---|---|---|---|---|
+| 회수 홀드 시간 | 16차 튜닝표 | 2.0초 | 1.0~4.0 | `attachInteractionParams.holdSeconds` |
+| 회수 근접 반경 | **없음 — 기획 결정 필요** | ⏳ | — | `attachInteractionParams.interactRadiusMeters` |
+| 회수 중 소음 기여 | **없음 — 기획 결정 필요** | ⏳ | — | `attachInteractionParams.noiseContribution` |
+| 해역당 파밍 상한 비율 | 16차 결의 2-3·튜닝표 | 0.40 | 0.20~0.60 | `attachFarmingRewardParams.sectorCapRatioOfCombatAverage` |
+| 전투 보상 평균 크레딧 | 상한의 기준선 — 파생 규칙 기획 결정 필요 | ⏳ | — | `attachFarmingRewardParams.combatRewardAverageCredits` |
+| 액티브 핑 표시 시간 | 16차 결의 2-5 | 3.0초 | — | `attachSonarScopeParams.activePingDisplaySeconds` |
+| 액티브 핑 게이지 상승 | 16차 튜닝표 | 0.30 | 0.15~0.50 | `attachSonarScopeParams.activePingDetectionGaugeRise` |
+| 액티브 핑 쿨다운 | 16차 튜닝표 | 25초 | 15~45 | `attachSonarScopeParams.activePingCooldownSeconds` |
+| 패시브 번짐 최대 반폭 | **없음 — 기획 결정 필요** | ⏳ | — | `attachSonarScopeParams.passiveBearingSpreadRadiansAtMaxNoise` |
+| `depthChargeOnPassiveScope` | 17차 결의 4 | **false** | — | `attachSonarScopeParams.depthChargeOnPassiveScope` |
+| 약점 판정 반경·배율 3종 | **없음 — `params/boss.json` 미존재** | ⏳ | — | `BossWeakPointTarget.attachParams` |
+
+⏳ 표시 항목은 저장소·회의록 어디에도 공식 수치가 없다. **추정값을 넣지
+않았고**, 미주입 상태에서 해당 시스템은 `unwired`로 남는다.
+
+**요청 2 — 조립 배선** (`src/core/Game.ts`, 리드 소유). 각 1줄:
+`attachClueDefinitions` · `restoreCollectedClues` · `attachFarmingRewards` ·
+`attachFarmingRewardParams` · `attachSonarContacts` · `attachSonarScopeParams`.
+접점·단서 정의·보상 금액은 월드·기획 데이터이므로 게임플레이가 만들지 않았다.
+
+**요청 3 — 입력 바인딩 결정 (INT-GAME-015에서 이월, 미해결).**
+회수 홀드가 `KeyE`를 읽는데 `KeyE`는 이미 상승(ascend) 병행 키다. 액티브 핑
+키는 아직 배정되지 않았다(17차 결의 2로 `F`가 미배정 반환됐다 —
+후보). 키맵 결정은 게임플레이 단독 결정 사항이 아니라 보고만 한다.
+
+**보고 — 창 4(빌드·툴) 소관이라 손대지 않은 것.** 17차 결의 4의 폭뢰
+lifecycle 이벤트 발행자(`depthChargeEnteredWater`·`depthChargeExploded`)는
+`DepthChargeRunSystem`에 넣을 수 있었지만 **17차 범위표가 창 4에 배정**했으므로
+구현하지 않았다. 스코프 쪽은 발행자가 생기면 접점 공급만 연결하면 된다.
+
+**보고 — 6단계(침묵 항행)는 착수하지 않았다.** 17차 결의 3·5가 "회색 상자
+보스전 **완주 판정(D10) 직후**"로 순서를 못 박았고, 완주 판정은 dev 통합
+빌드에서 수행된다. 현재 `dev`에 보스 AI가 **0건**이므로(상태 보고서 §4)
+완주 판정 자체가 성립하지 않는다. 순서를 앞당기지 않았다.
+
+---
+
 ### INT-GAME-015 — M2 1단계 InteractionSystem 구현 + 기준 문서·리드 계약 부재 보고
 
 | 필드 | 내용 |
