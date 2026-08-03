@@ -130,6 +130,10 @@
 | `DebriefReadModel` (+`DebriefStateTracker`·`DebriefConfirmCommand`) | C6·C7 — kind(returned/aborted/destroyed)·settlement·failure·saveStatus·canRetrySave·**canConfirm**. 그래픽스는 isDestroyed 추측 없이 이 모델로만 화면 분기, 읽기 전용(스냅샷). **BASE 복귀는 confirm command가 유일한 진입점**(저장 성공 자동 전환 0 — INT-CORE-016, 정상 귀환·실패 동일 정책. 저장 미완료 saveIncomplete·중복 invalidState). 실패 화면도 3-인자 attach(confirmCommand)로 동일 경유 — DOM 숨김 전용 종료 금지, 버튼 노출 근거는 canConfirm 하나 (INT-CORE-017) | 리드 |
 | `NormalizedCombatParams` (`systems/combat/officialCombatParams`) | 조립부 → 게임플레이 전투 params 정규화 입력 단면 — `detectionTuning`·`depthCharge` (각 null 허용 = unwired). **정규화 소유자는 공인 로더 한 곳**(`tools/combatParams.validateCombatParams`) — 게임플레이 평면 리더(이중 정규화) 금지, 공인 로더 밖 combat.json import 금지, null→0·fallback·부분 wired 금지(정적 검사 강제). 선체·침수 블록은 리드 코어 생성자 직접 주입 (INT-CORE-017) | 리드(계약·전송 규약) / 툴링(정규화) / 게임플레이(소비) |
 | 침수 피해 경로 | FloodingCore → 지속 피해 DamageRequest(tick별 `flood:<n>` id) → applyDamage — 선체 직접 수정 없음, dt 분할 무관 총 피해 동일(닫힌 적분) | 리드 |
+| `BOSS_PATTERN_KINDS`·`BossTelegraphKind` (`contracts/boss.ts`) | M1 패턴 등록부 **정확히 4종**(돌진·투사체·약점 개방·최종 가속 — 16차 봉인, 로더가 미지 키 거부). 모든 공격·개방·단계 전환보다 예고 선행. D10 비상 컷 = `boss.json patterns.flags` 오프(약점 판정 코드 유지) | 리드 |
+| `BossAttackRequest/Port` · `BossMotionPort` · `BossDamageSink` | 보스 AI는 요청만(관측 3D 고정·수치 비탑재 — C4 원칙), 판정·비행·접촉·플레이어 피해는 게임플레이 포트 구현(기존 `applyDamage` 단일 창구 경유). 이동은 기존 SurfaceShipMotionPort + `setMoveSpeed` 노브 1개. 보스 체력 원장은 `BossDamageSink`(중복 id 1회·격파 1회) | 리드(계약·코어) / 게임플레이(판정) |
+| `BossPhasePort` · `BossCoreView` | 단계(1→2→3 순차)·약점 개방 단면 — 게임플레이 `BossWeakPointTarget`·렌더가 소비(INT-GAME-008 정본 승격). 보스 전용 HUD 정본 신설 금지 | 리드 |
+| `interactionCollected` · `BossZoneGatePort` · `BossProgressStore` | E 키 회수 확정 이벤트(발행: 게임플레이 InteractionSystem — 16차 결의 2-4) → 리드 진행 정본이 kind 'clue'만 소비. 동일 단서 중복 반영 금지(id 원장 — 저장 v2 영속), 미지 id 거부, 3개 미만 진입 거부 → 3/3 해금(단조). 격파 보상·기록은 기존 lootDropped('boss')·rarePart 저장 경로 각 1회 | 게임플레이(획득) / 리드(진행·게이트) / 툴링(저장 스키마 v2) |
 | `SortieResettable` | 출항 한정 상태 초기화: 선체·침수·마지막 피해·파괴 플래그·중복 원장·적 공격·실패 코디네이터·경비 사건·salvage. **영구**: 지갑·업그레이드·loadout. 선체 영구 손상은 근거 없음 → 결정 요청 | 리드 |
 
 ## 2f. 스프린트 B 세력·식별·경비 계약 (INT-CORE-012 — 선행개발, B 미발효)

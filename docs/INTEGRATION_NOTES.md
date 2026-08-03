@@ -145,6 +145,21 @@
 | 개발 리드 결정 | `C_COMBAT_PARAMS_DEFINED=true` · `C_RUNTIME_WIRED=true` · `C_BROWSER_EMPIRICAL_COMPLETE=true`(**침수 스테이지 제외 명시** — 기능 부재이지 실측 누락이 아님) · **`C_FINAL_COMPLETE=false` 유지**(침수 유발 경로 부재가 생존 루프의 공식 구성요소 미완이므로 최종 완료 선언 불가) |
 | 적용 커밋 | c943d35(승인값)·885839f(배선) + 문서 커밋 |
 
+### INT-CORE-020 — M1 보스 코어 · M2 단서/해금 계약 (리드 창 — 17차 결의 3 창 1)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (base = M0 병합 후 dev tip `d968514`, 브랜치 `claude/deep-dive-core-lead-uyg77p` 재시작) |
+| 신설 계약 | `contracts/boss.ts` — 패턴 등록부 4종 봉인·예고·`BossAttackRequest/Port`(요청만, 관측 3D 고정, 수치 비탑재)·`BossMotionPort`(기존 이동 포트 + 속도 노브 1)·`BossPhasePort`(게임플레이 약점 판정 소비 단면 정본 승격 — INT-GAME-008 해소)·`BossDamageSink`(보스 체력 원장 — 플레이어 단일 창구와 별개)·`BossCoreView`·`BossZoneGatePort` |
+| **보호 파일 변경 4건 (사유 명시)** | ① `contracts/events.ts` — `interactionCollected`(16차 결의 2-4 단일 InteractionSystem 배관)·`bossCluesChanged`·`bossDefeated` 신설: 기존 이벤트로 표현 불가(동일 의미 이벤트 없음 확인) ② `contracts/meta.ts` — `InteractionTargetKind` 4종: 상호작용 대상 공용 계약 ③ `contracts/params.ts` — `BossParams`·`BossPatternFlags`: 작업 2 규격의 params 계약 정본 위치 ④ `src/meta/save/` (툴링 소유) — **스키마 v2**: 개수만으로는 '동일 단서 중복 반영 금지'를 재접속 후 보장할 수 없어 id 목록이 필수. 소회의 11 결의 7(마이그레이션 동반) 이행 — v1→v2 함수·검증기·verifyTooling 사슬 테스트 동반. 기존 저장·기본값 안전(테스트 확인) |
+| 구현 (리드 소유) | `core/BossController`(DestroyerAIController **합성** — B5 단일 구현 보존, 예고 선행·1→2→3 순차·격파/플레이어 파괴 후 요청 0·피해 원장), `meta/BossProgressStore`(단서 id 원장·단조 해금·진입 게이트), `PveIntegration`(SaveSnapshotSource.progress·`BossVictoryBridge`), `config/bossParams(+Loader)`, `params/boss.json`(스코프 가드 1/1) |
+| Game 조립(적용 완료) | boss params 로드 1회 · 진행 복원(부팅 1회) · `interactionCollected` clue 구독 · 승리 브리지 등록 · SaveBridge 스냅샷에 progress · 디버그 핸들 `bossProgress` |
+| **창 2(게임플레이) 소비 지침** | ① `InteractionSystem`이 회수 확정 시 `interactionCollected {kind, targetId, x, z}` 발행(단서 id는 `params/boss.json unlock.clueIds` 3종) ② `BossAttackPort` 구현 — ram 접촉·projectile 비행(기존 어뢰 경로 역방향) 판정, 피해는 반드시 기존 `DamageReceiverPort.applyDamage` 경유, 수치는 boss params(`patterns.projectile.damage` 등) 직접 주입 ③ `BossMotionPort` 팩토리(기존 이동 코드 + `setMoveSpeed` 노브) ④ `BossWeakPointTarget`의 임시 배율 2.0/0.25를 params(`patterns.weakPointOpen.*`)로 교체, 명중 결과를 `BossDamageSink.applyBossDamage`(배율 적용 후 최종값)로 전달 ⑤ phase·weakPointOpen은 리드 코어 `phasePort` 소비 |
+| **창 3(그래픽스) 소비 지침** | `BossCoreView`(값 복사본)·`bossPhaseChanged`·`bossDefeated`·`bossCluesChanged` 구독 — 예고(telegraph) 연출이 회피 신호의 정본. 보스 전용 HUD 정본 신설 금지(기존 HUD 계층) |
+| 통합 잔여 patch (창 5) | 보스 개체 스폰(배치·진입 연출 도착 후): `new BossController({motion: gameplay.bossMotionPort, params: loadBossParams(), attackPort: gameplay.bossAttackPort, playerAlive: playerHull, bus, ...})` + 약점 판정 브리지(`BossWeakPointTarget.onHit → boss.applyBossDamage`) + 어뢰 발사 노출 연결(`torpedoFired → boss.notifyLastKnownPosition`) + 진입 게이트 소비(`bossProgress.requestEntry()`) |
+| 검증 | verify:meta **150/150**(M1·M2 26건 신설 — 작업 4 단언 전부) · verify:tooling **26/26**(마이그레이션 사슬 v0→v1→v2 승격) · gameplay 242/242 · scope 가드 보스 1/1 · 전 스위트 통과 |
+| 개발 리드 결정 | 승인 — 계약·코어·해금·보상 경로 확정. 보스 스폰·판정 배선은 창 2 산출물 도착 후 통합 창 순서(17차 결의 3: InteractionSystem → 보스 코어 → 병렬 2건) |
+
 ### INT-CORE-019 — C 최종 런타임 blocker 3건 마감: 침수 기여(v0.1.1)·소음 정책·목표 심도 기폭 — **C_FINAL_COMPLETE=true**
 
 | 필드 | 내용 |
