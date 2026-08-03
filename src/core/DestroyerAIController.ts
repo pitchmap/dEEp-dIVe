@@ -141,7 +141,7 @@ export class DestroyerAIController implements DestroyerAI {
     // 소유한다 — 컨트롤러가 stage를 재판정하지 않는다(이중 판정 금지).
     // 실제 투하·피해 여부는 포트(사거리·쿨다운·params)가 결정하며,
     // params null이면 결과는 unwired이고 폭뢰는 떨어지지 않는다.
-    if (this.currentState === 'attack' && this.attackPort) {
+    if (this.currentState === 'attack' && this.attackPort && goal.kind === 'observed') {
       this.attackSequence += 1;
       const attackId = `attack:${this.entityId}:${this.attackSequence}`;
       const attackerPosition = this.motion.getPosition();
@@ -150,8 +150,10 @@ export class DestroyerAIController implements DestroyerAI {
         attackerEntityId: this.entityId,
         targetEntityId: this.targetEntityId,
         attackerPosition,
-        // 수평면 좌표만 관측한다 — 표적 심도·명중 판정은 게임플레이 소유.
-        targetPosition: { x: goal.x, y: 0, z: goal.z },
+        // 관측된 3D 위치를 그대로 고정한다 (INT-CORE-019 — 임의 y 채움 금지).
+        // attack 상태는 resolveGoal에서 3D 관측 성공일 때만 성립한다.
+        // 명중 판정은 계속 게임플레이 소유.
+        targetPosition: { x: goal.x, y: goal.observedY, z: goal.z },
         correlationId: attackId,
         requestedAt: this.elapsedSeconds,
       });
@@ -170,12 +172,17 @@ export class DestroyerAIController implements DestroyerAI {
 
   /**
    * 이번 프레임의 목표 지점.
-   *  - 표적이 살아 있고 위치를 읽을 수 있으면 그 위치(= 'attack'),
-   *    동시에 마지막 확인 위치를 갱신한다.
-   *  - 아니면 마지막 확인 위치로 접근(= 'alert').
+   *  - 표적이 살아 있고 3D 위치를 관측할 수 있으면 그 위치(= 'attack') —
+   *    observedY는 관측 순간의 실제 심도이며 공격 요청에 그대로 고정된다
+   *    (INT-CORE-019: 임의 y 채움·투하 후 재추적 금지). 동시에 마지막 확인
+   *    수평 위치를 갱신한다.
+   *  - 아니면 마지막 확인 위치로 접근(= 'alert' — 관측이 아니므로 y 없음).
    *  - 둘 다 없으면 null(= 'lost' → 정지).
    */
-  private resolveGoal(): { x: number; z: number } | null {
+  private resolveGoal():
+    | { x: number; z: number; observedY: number; kind: 'observed' }
+    | { x: number; z: number; kind: 'lastKnown' }
+    | null {
     if (this.motion.isTargetAlive(this.targetEntityId)) {
       const targetPosition = this.motion.getTargetPosition(this.targetEntityId);
       if (targetPosition) {
@@ -183,12 +190,17 @@ export class DestroyerAIController implements DestroyerAI {
         this.lastKnownZ = targetPosition.z;
         this.hasLastKnown = true;
         this.currentState = 'attack';
-        return { x: targetPosition.x, z: targetPosition.z };
+        return {
+          x: targetPosition.x,
+          z: targetPosition.z,
+          observedY: targetPosition.y,
+          kind: 'observed',
+        };
       }
     }
     if (this.hasLastKnown) {
       this.currentState = 'alert';
-      return { x: this.lastKnownX, z: this.lastKnownZ };
+      return { x: this.lastKnownX, z: this.lastKnownZ, kind: 'lastKnown' };
     }
     return null;
   }

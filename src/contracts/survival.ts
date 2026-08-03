@@ -314,6 +314,14 @@ export interface DepthChargeDamageParams {
   readonly nearDamage: number | null;
   /** 투하 쿨다운(초) — 미확정이면 null */
   readonly dropCooldownSeconds: number | null;
+  /**
+   * 직격 침수 기여량 (정규화 flooding level ratio) — 미확정이면 null.
+   * C9 v0.1.1 확장: 범위 0 < near < direct ≤ 1. null이면 침수만 unwired
+   * (선체 피해와 독립 — boolean으로 양을 추측하지 않는다).
+   */
+  readonly directFloodingContribution: number | null;
+  /** 근접 침수 기여량 (정규화 flooding level ratio) — 미확정이면 null */
+  readonly nearFloodingContribution: number | null;
 }
 
 /* ── 4-8. 생존 HUD 읽기 모델 ──────────────────────────────── */

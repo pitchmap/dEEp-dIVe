@@ -58,8 +58,14 @@ export interface DepthChargeDropRequest {
   readonly attackerEntityId: number;
   readonly targetEntityId: number;
   readonly worldX: number;
+  /**
+   * **목표 기폭 심도** — 공격 요청에 고정된 관측 표적의 y (INT-CORE-019).
+   * 투하 후 표적을 재추적하지 않으며, 신관 만료 시 이 심도에서 기폭한다.
+   */
   readonly worldY: number;
   readonly worldZ: number;
+  /** 투하 시작 y (공격자 수면 고도) — 낙하 보간의 시작점. 판정에 쓰지 않는다 */
+  readonly dropFromY: number;
   /** 이 폭뢰를 낳은 공격 요청의 상관 id */
   readonly correlationId: string;
 }
@@ -89,8 +95,13 @@ interface ActiveCharge {
   readonly attackerEntityId: number;
   readonly targetEntityId: number;
   readonly worldX: number;
-  readonly worldY: number;
+  /** 현재 y — 낙하 보간 값 (뷰 소비). 기폭 순간에는 targetDepthY와 같다 */
+  worldY: number;
   readonly worldZ: number;
+  /** 목표 기폭 심도 — 투하 요청에 고정된 관측 y (재추적 없음) */
+  readonly targetDepthY: number;
+  /** 투하 시작 y (공격자 수면 고도) */
+  readonly dropFromY: number;
   readonly correlationId: string;
   fuseRemaining: number;
   phase: DepthChargePhase;
@@ -174,7 +185,14 @@ export class DepthChargeRunSystem implements DepthChargeSystem, SortieResettable
    * 동시 상한을 넘으면 투하하지 않는다(공식 `simultaneousDepthCharges`).
    */
   drop(request: DepthChargeDropRequest): DepthChargeView | null {
-    if (!Number.isFinite(request.worldX) || !Number.isFinite(request.worldZ)) return null;
+    if (
+      !Number.isFinite(request.worldX) ||
+      !Number.isFinite(request.worldZ) ||
+      !Number.isFinite(request.worldY) ||
+      !Number.isFinite(request.dropFromY)
+    ) {
+      return null;
+    }
     if (this.simultaneousLimit !== null && this.activeCount >= this.simultaneousLimit) return null;
 
     const charge: ActiveCharge = {
@@ -182,8 +200,10 @@ export class DepthChargeRunSystem implements DepthChargeSystem, SortieResettable
       attackerEntityId: request.attackerEntityId,
       targetEntityId: request.targetEntityId,
       worldX: request.worldX,
-      worldY: request.worldY,
+      worldY: request.dropFromY, // 낙하 시작점 — 신관 만료 시 targetDepthY 도달
       worldZ: request.worldZ,
+      targetDepthY: request.worldY,
+      dropFromY: request.dropFromY,
       correlationId: request.correlationId,
       fuseRemaining: this.fuseSeconds,
       phase: 'falling',
@@ -204,9 +224,17 @@ export class DepthChargeRunSystem implements DepthChargeSystem, SortieResettable
       charge.fuseRemaining -= deltaSeconds;
       // 신관 이전에는 어떤 피해도 없다 — 상태만 진행한다.
       if (charge.fuseRemaining > 0) {
+        // 낙하 — 투하 요청에 고정된 목표 심도까지 신관 시간 동안 선형 강하
+        // (INT-CORE-019). 별도 낙하 속도 상수를 만들지 않는다: 시작·목표
+        // 심도와 공식 신관 시간에서 파생된 보간이며, 현재 플레이어 위치를
+        // 추적·유도하지 않는다.
+        const progress = 1 - charge.fuseRemaining / this.fuseSeconds;
+        charge.worldY = charge.dropFromY + (charge.targetDepthY - charge.dropFromY) * progress;
         survivors.push(charge);
         continue;
       }
+      // 기폭은 정확히 목표 심도에서 — 판정 위치의 정본이다.
+      charge.worldY = charge.targetDepthY;
       charge.phase = 'detonated';
       this.detonate(charge);
       charge.phase = 'removed';
@@ -248,6 +276,13 @@ export class DepthChargeRunSystem implements DepthChargeSystem, SortieResettable
       proximity === 'direct'
         ? (params?.directDamage as number)
         : (params?.nearDamage as number);
+    // 침수 기여량 — 공식 params 소유 (C9 v0.1.1). null = 침수만 unwired:
+    // 피해는 정상 적용하되 기여 0·causesFlooding false (boolean으로 양을
+    // 추측하지 않는다). miss는 여기 도달하지 않으므로 기여 자체가 없다.
+    const floodingContribution =
+      proximity === 'direct'
+        ? (params?.directFloodingContribution ?? null)
+        : (params?.nearFloodingContribution ?? null);
     const request: DamageRequest = {
       damageEventId: `${charge.chargeId}:damage`,
       targetEntityId: charge.targetEntityId,
@@ -257,9 +292,8 @@ export class DepthChargeRunSystem implements DepthChargeSystem, SortieResettable
       worldPosition: { x: charge.worldX, y: charge.worldY, z: charge.worldZ },
       occurredAt: this.elapsedSeconds,
       correlationId: charge.correlationId,
-      causesFlooding: false,
-      // 침수 기여량은 공식 params 소유다 — 여기서 만들지 않는다.
-      floodingContribution: 0,
+      causesFlooding: floodingContribution !== null && floodingContribution > 0,
+      floodingContribution: floodingContribution ?? 0,
       proximity,
     };
     this.receiver.applyDamage(request);

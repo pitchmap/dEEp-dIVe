@@ -122,12 +122,15 @@ export class EnemyAttackCoordinator implements EnemyAttackPort, SortieResettable
     }
 
     // 투하만 한다 — 피해는 신관 이후 폭발 판정에서만 발생한다.
+    // worldY = 요청에 고정된 관측 표적 심도(목표 기폭 심도), dropFromY =
+    // 공격자 수면 고도(낙하 시작점) — 둘 다 요청 사실값이며 임의 y가 없다.
     const dropped = this.depthCharges.drop({
       attackerEntityId: request.attackerEntityId,
       targetEntityId: request.targetEntityId,
       worldX: request.targetPosition.x,
       worldY: request.targetPosition.y,
       worldZ: request.targetPosition.z,
+      dropFromY: request.attackerPosition.y,
       correlationId: request.correlationId,
     });
     if (!dropped) return this.record('onCooldown'); // 동시 상한 — 지금은 투하 불가

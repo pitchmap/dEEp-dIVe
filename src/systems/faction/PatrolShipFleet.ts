@@ -41,9 +41,10 @@ import {
   type PatrolShipSpawnState,
 } from './PatrolShipEntity';
 
-/** 표적 위치 조회 단면 — 플레이어(잠수함)가 충족 */
+/** 표적 위치 조회 단면 — 플레이어(잠수함)가 충족. y = 실제 심도(월드 Y) */
 export interface PatrolTargetPositionView {
   readonly positionX: number;
+  readonly positionY: number;
   readonly positionZ: number;
 }
 
@@ -231,15 +232,18 @@ export class PatrolShipFleet implements SurfaceShipMotionPortFactory {
    * 접근(alert)하거나 상실(lost)로 간다 — 전이 로직은 복제하지 않는다.
    * 파괴된 플레이어는 관측 불가다.
    */
-  private getTargetPosition(targetEntityId: number): { readonly x: number; readonly z: number } | null {
+  private getTargetPosition(
+    targetEntityId: number,
+  ): { readonly x: number; readonly y: number; readonly z: number } | null {
     if (targetEntityId === PLAYER_ENTITY_ID) {
       if (!this.isTargetAlive(targetEntityId)) return null;
       if (this.detectionStage !== null && this.detectionStage.stage !== 'detected') return null;
-      return { x: this.player.positionX, z: this.player.positionZ };
+      // y = 관측 순간의 실제 심도 — 폭뢰 목표 심도의 원천 (INT-CORE-019).
+      return { x: this.player.positionX, y: this.player.positionY, z: this.player.positionZ };
     }
     const target = this.targets.list.find((candidate) => candidate.id === targetEntityId);
     if (!target) return null;
-    return { x: target.positionX, z: target.positionZ };
+    return { x: target.positionX, y: target.positionY, z: target.positionZ };
   }
 
   /** 파괴된 경비함 정리 — 표적 등록 해제 (렌더 소스에서도 사라진다) */

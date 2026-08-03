@@ -74,6 +74,16 @@
       "value": 6,
       "unit": "seconds",
       "note": "투하 쿨다운 — C9 v0.1 승인. 신관 하한 3.0초는 별도 확정값(depthChargeFuseSeconds)"
+    },
+    "directFloodingContribution": {
+      "value": 0.35,
+      "unit": "ratio",
+      "note": "직격 1회의 침수 기여량 (정규화 flooding level) — C9 v0.1.1 승인. 범위 0 < near < direct ≤ 1"
+    },
+    "nearFloodingContribution": {
+      "value": 0.1,
+      "unit": "ratio",
+      "note": "근접 1회의 침수 기여량 (정규화 flooding level) — C9 v0.1.1 승인. miss는 기여 0"
     }
   },
   "flooding": {
