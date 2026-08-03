@@ -61,6 +61,7 @@ import type {
 import { PlayerHullSystem } from '../../core/PlayerHullSystem';
 import { FloodingCore } from '../../core/FloodingCore';
 import { SortieFailureCoordinator } from '../../core/SortieFailureCoordinator';
+import { DebriefStateTracker } from '../../core/PveIntegration';
 import type {
   DamageRequest,
   FloodingParams,
@@ -1792,6 +1793,125 @@ export function runMetaVerification(): VerificationResult[] {
         'C 다음 출항: reset 후 정상 상태로 재시작 · 두 번째 실패도 1회 정산',
         endedCount === 2 && ctx.failures.length === 2 && ctx.loop.metaState === 'BASE',
         `ended=${endedCount}, failures=${ctx.failures.length}, state=${ctx.loop.metaState}`,
+      );
+    }
+    {
+      // 침수 지속 피해도 단일 창구(applyDamage)를 통과한다 — 후속 tick이
+      // 중복 원장에 막히지 않고, 지속 피해는 플래시를 만들지 않는다.
+      const { hull } = buildHull();
+      hull.applyDamage(damage({ rawDamage: 10, causesFlooding: true, floodingContribution: 0.5 }));
+      hull.consumeDamageFlash();
+      const afterFirstHit = hull.snapshot().currentHull;
+      hull.update(0.5);
+      const afterTick1 = hull.snapshot().currentHull;
+      hull.update(0.5);
+      const afterTick2 = hull.snapshot().currentHull;
+      const model = hull.survivalReadModel();
+      check(
+        'C 침수 경로: tick별 고유 id로 단일 창구 통과 — 후속 tick 미차단·플래시 없음',
+        afterTick1 < afterFirstHit &&
+          afterTick2 < afterTick1 &&
+          hull.snapshot().lastDamageSource === 'environment' &&
+          !model.damageFlashRequested,
+        `hull=${afterFirstHit}→${afterTick1}→${afterTick2}, flash=${model.damageFlashRequested}`,
+      );
+    }
+    {
+      // dt 분할과 단일 실행의 **총 피해** 동일 (수위 적분식 결정성)
+      const single = buildHull().hull;
+      const split = buildHull().hull;
+      single.applyDamage(damage({ rawDamage: 10, causesFlooding: true, floodingContribution: 0.3 }));
+      split.applyDamage(damage({ rawDamage: 10, causesFlooding: true, floodingContribution: 0.3 }));
+      single.update(1);
+      split.update(0.25);
+      split.update(0.25);
+      split.update(0.5);
+      check(
+        'C 침수 결정성(피해): dt 분할 총 피해 = 단일 실행 총 피해',
+        Math.abs(single.snapshot().currentHull - split.snapshot().currentHull) < 1e-9 &&
+          Math.abs(single.snapshot().floodingLevel - split.snapshot().floodingLevel) < 1e-9,
+        `single=${single.snapshot().currentHull}, split=${split.snapshot().currentHull}`,
+      );
+    }
+    {
+      // 침수만으로 파괴 — 파괴 경로도 단일 창구를 지나 playerDestroyed 1회
+      const { hull, destroyedCount } = buildHull();
+      hull.applyDamage(damage({ rawDamage: 95, causesFlooding: true, floodingContribution: 1 }));
+      for (let i = 0; i < 20 && !hull.snapshot().isDestroyed; i += 1) hull.update(1);
+      check(
+        'C 침수 파괴: 지속 피해 누적 → destroyed 1회 (environment 출처)',
+        hull.snapshot().isDestroyed && destroyedCount() === 1,
+        `destroyed=${hull.snapshot().isDestroyed}, events=${destroyedCount()}`,
+      );
+    }
+    {
+      // DEBRIEF 읽기 모델 — 정상 귀환
+      const ctx = buildFailure();
+      const tracker = new DebriefStateTracker(ctx.coordinator, {
+        get lastSaveSucceeded() {
+          return ctx.saveOk.value;
+        },
+      });
+      tracker.initialize(verificationContext(ctx.bus));
+      const beforeEnd = tracker.readModel();
+      ctx.loop.settleSortie({ outcome: 'returned' });
+      const returned = tracker.readModel();
+      check(
+        'C DEBRIEF 모델: 정산 전 none → 정상 귀환 returned + settlement (실패 화면 데이터 없음)',
+        beforeEnd.kind === 'none' &&
+          returned.kind === 'returned' &&
+          returned.settlement !== null &&
+          returned.failure === null &&
+          returned.saveStatus === 'saved' &&
+          !returned.canRetrySave,
+        `before=${beforeEnd.kind}, after=${returned.kind}/${returned.saveStatus}`,
+      );
+    }
+    {
+      // DEBRIEF 읽기 모델 — 파괴 + 저장 실패 → 재시도 → BASE (중복 정산·중복 전환 없음)
+      const ctx = buildFailure({ saveOk: false });
+      const tracker = new DebriefStateTracker(ctx.coordinator, {
+        get lastSaveSucceeded() {
+          return ctx.saveOk.value;
+        },
+      });
+      tracker.initialize(verificationContext(ctx.bus));
+      ctx.hull.applyDamage(damage({ rawDamage: 200 }));
+      const failed = tracker.readModel();
+      ctx.saveOk.value = true;
+      ctx.coordinator.retrySave(() => true);
+      const retried = tracker.readModel();
+      // 같은 성공 이후 중복 재시도 — 정산·전환이 다시 일어나지 않는다
+      const duplicate = ctx.coordinator.retrySave(() => true);
+      const settlementSaves = ctx.events.filter((e) => e === 'save:settlement').length;
+      const endedCount = ctx.events.filter((e) => e.startsWith('ended:')).length;
+      check(
+        'C DEBRIEF 모델: 파괴+저장 실패 = destroyed·canRetrySave → 재시도 후 saved·BASE 1회 (중복 수신 무시)',
+        failed.kind === 'destroyed' &&
+          failed.failure?.reason === 'hullDestroyed' &&
+          failed.saveStatus === 'saveFailed' &&
+          failed.canRetrySave &&
+          retried.saveStatus === 'saved' &&
+          !retried.canRetrySave &&
+          duplicate === null &&
+          ctx.loop.metaState === 'BASE' &&
+          settlementSaves === 1 &&
+          endedCount === 1,
+        `failed=${failed.kind}/${failed.saveStatus}, retried=${retried.saveStatus}, dup=${duplicate === null ? 'null' : 'report'}, saves=${settlementSaves}`,
+      );
+    }
+    {
+      // DEBRIEF 모델은 읽기 전용 — 필드를 바꿔도 다음 조회에 영향 없음
+      const ctx = buildFailure();
+      const tracker = new DebriefStateTracker(ctx.coordinator, null);
+      tracker.initialize(verificationContext(ctx.bus));
+      ctx.loop.settleSortie({ outcome: 'aborted' });
+      const model = tracker.readModel();
+      (model as { kind: string }).kind = 'destroyed';
+      check(
+        'C DEBRIEF 모델: 그래픽스가 값을 바꿀 수 없음 (스냅샷 — 다음 조회 불변)',
+        tracker.readModel().kind === 'aborted',
+        `after-write=${tracker.readModel().kind}`,
       );
     }
     {
