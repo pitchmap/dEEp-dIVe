@@ -24,6 +24,7 @@
  * 내부 참조를 교체한다. update()마다 loadParams()를 호출하지 않는다.
  */
 
+import type { NormalizedCombatParams } from './combat/officialCombatParams';
 import type { CanyonLayout } from '../contracts/layout';
 import type { EquipmentChangeJudgePort } from '../contracts/meta';
 import type { SalvageSpawnPlanEntry } from '../contracts/officialParams';
@@ -50,10 +51,6 @@ import { PLAYER_ENTITY_ID } from '../contracts/guard';
 import { CargoShipSystem, cargoShipConfigFromOfficial } from './CargoShipSystem';
 import { DepthChargeRunSystem } from './combat/DepthChargeRunSystem';
 import { EnemyAttackCoordinator } from './combat/EnemyAttackCoordinator';
-import {
-  readDepthChargeDamageParams,
-  readDetectionTuningParams,
-} from './combat/officialCombatParams';
 import { DetectionEnvironmentAdapter } from './detection/DetectionEnvironmentAdapter';
 import { SubmarineDetectionSystem } from './detection/SubmarineDetectionSystem';
 import { CanyonPatrolSpawnLocation } from './faction/CanyonPatrolSpawnLocation';
@@ -551,16 +548,16 @@ export class GameplaySystems implements GameSystem {
   }
 
   /**
-   * [C1·C4] 공식 전투 params 주입 (조립부) — `params/combat.json` 원본을
-   * 그대로 넘기면 미확정 항목은 null로 남아 해당 판정이 unwired가 된다.
-   * 임의 기본값을 만들지 않는다.
+   * [C1·C4] 공식 전투 params 주입 (조립부) — **정규화된 계약 타입**을 받는다
+   * [INT-CORE-017 개정]. 중첩 스키마의 해석·검증은 공인 로더
+   * (`tools/combatParams.validateCombatParams`) **한 곳**의 책임이며,
+   * 게임플레이는 툴링 스키마를 해석하지 않는다. null 블록은 null 그대로
+   * 전달돼 해당 판정이 unwired로 남는다 — 임의 기본값·0 변환 금지.
    */
-  attachCombatParams(rawCombat: unknown): void {
-    const tuning = readDetectionTuningParams(rawCombat);
-    const damage = readDepthChargeDamageParams(rawCombat);
-    this.detection.attachTuningParams(tuning);
-    this.depthCharges.attachCombatParams({ damageParams: damage });
-    this.enemyAttack.attachDamageParams(damage);
+  attachCombatParams(params: NormalizedCombatParams): void {
+    this.detection.attachTuningParams(params.detectionTuning);
+    this.depthCharges.attachCombatParams({ damageParams: params.depthCharge });
+    this.enemyAttack.attachDamageParams(params.depthCharge);
   }
 
   /** [C1] 탐지가 실제로 구동 중인가 — false면 게이지 0·safe 고정 */

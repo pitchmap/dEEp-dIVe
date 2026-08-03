@@ -555,20 +555,16 @@ export class Game {
     //        통과한다. 게임플레이는 자체 체력 상태를 두지 않는다.
     gameplay.attachPlayerAliveSource(playerHull);
     gameplay.attachDamageReceiver(playerHull);
-    //     ③ C9 전투 params → 게임플레이 주입은 **미배선**이다 (blocker).
-    //        인계표(INT-CORE-016 §① 3번)는 `params/combat.json` 원본을 그대로
-    //        넘기라고 지정했지만, 병합 후 실제 코드가 두 가지로 어긋난다:
-    //          ⓐ 툴링 검증기(`verify:sprint-c` C9-loaderSingleSource)는 공인
-    //            로더(`combatParams`/`combatParamsLoader`) 밖에서 combat.json을
-    //            직접 import하는 것을 **금지**한다 — 원본을 받을 통로가 없다.
-    //          ⓑ 게임플레이 리더(`systems/combat/officialCombatParams.ts`)는
-    //            `root['directRadiusMeters']`처럼 **평면 root**를 읽는데, 툴링
-    //            스키마는 `depthCharge.*`·`detection.*` **블록 중첩**이다.
-    //            원본을 넘겨도 값이 도착한 뒤 읽히지 않는다.
-    //        통합 창은 전송 형태를 임의로 정하지 않는다(계약 충돌 = blocker).
-    //        현재 15필드가 전부 null이라 런타임 동작은 동일하다 — 탐지 safe
-    //        고정·공격 unwired·폭뢰 피해 0. 선체·침수는 아래에서 툴링 로더
-    //        결과를 리드 코어에 직접 주입하므로 이 충돌의 영향을 받지 않는다.
+    //     ③ C9 전투 params → 게임플레이 주입 (INT-CORE-017 — blocker 해소).
+    //        정규화 소유자는 공인 로더 하나다: loadCombatParams()가 중첩
+    //        스키마를 계약 타입 블록으로 검증·변환했고, 여기서는 그 결과의
+    //        게임플레이 단면(NormalizedCombatParams)만 넘긴다. raw JSON
+    //        import·수작업 펼치기 없음, null 블록은 null 그대로(unwired 유지).
+    //        선체·침수 블록은 위에서 리드 코어에 직접 주입했다.
+    gameplay.attachCombatParams({
+      detectionTuning: combat.detectionTuning,
+      depthCharge: combat.depthCharge,
+    });
 
     // ①-c 업그레이드 구매 판정 시스템 (게임플레이 소유 — 조립부가 공식
     //     카탈로그와 실지갑 읽기 단면을 주입한다). **단계의 단일 저장소** —

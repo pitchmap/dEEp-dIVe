@@ -15,6 +15,7 @@
  * 이 모듈은 Vite 번들 그래프에 포함되지 않는다 (main.ts에서 도달 불가).
  */
 
+import { validateCombatParams } from '../../tools/combatParams';
 import { validateGameParams } from '../../config/validateParams';
 import { EventBus } from '../../core/EventBus';
 import type { DepthLayerId } from '../../contracts/events';
@@ -3685,8 +3686,14 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
   {
     const bus = new EventBus();
     const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
-    // 공식 combat.json에는 거리 감쇠·감소율이 아직 없다 → unwired
-    systems.attachCombatParams(rawParams.combat);
+    // 공식 combat.json에는 거리 감쇠·감소율이 아직 null이다 → unwired.
+    // 정규화 경로 그대로 검증: 공인 로더(validateCombatParams — 중첩 스키마
+    // 단일 해석 지점) 결과의 게임플레이 단면을 넘긴다 [INT-CORE-017].
+    const combatResult = validateCombatParams(rawParams.combat);
+    systems.attachCombatParams({
+      detectionTuning: combatResult.detectionTuning,
+      depthCharge: combatResult.depthCharge,
+    });
     const changes: Array<{ gauge: number; stage: string }> = [];
     bus.on('detectionChanged', (payload) => changes.push(payload));
 
