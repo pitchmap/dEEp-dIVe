@@ -118,6 +118,18 @@
 | 개발 리드 결정 | 승인 — 구조 blocker 2건 해소. **C9 수치는 별도 트랙**: 결정표는 PROPOSED(기획 승인 대기)로만 보고하며 production·params에 숫자 미입력. `C_COMBAT_PARAMS_DEFINED=false`·`C_RUNTIME_WIRED=false`·`C_BROWSER_EMPIRICAL_COMPLETE=false`·`C_FINAL_COMPLETE=false` 유지 |
 | 적용 커밋 | 400373a(정규화)·c7c36f4(confirm)·da683c4(검증) + 문서 커밋 |
 
+### INT-CORE-018 — C9 v0.1 승인값 입력 · 탐지 기준 배선 2줄 · production 브라우저 실측 완주
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (C9 v0.1 승인 접수 — 브랜치 `claude/sprint-c-runtime-closeout`) |
+| 승인값 입력 | `params/combat.json` 15필드 전량 확정(C-13). 공인 스키마 유지·지정 필드 외 무변경·pressure 미추가. 공인 로더 결과: **pendingFields 0건·전 블록 non-null·fullyDefined=true**. `C_COMBAT_PARAMS_DEFINED=true` |
+| 배선 2줄 (C-14) | ① `torpedoFired`→`reportTorpedoLaunch`(§5.10 확정 규칙 — production 호출자 0건이던 계약 구현의 조립부 이벤트 브리지) ② 출항 시작 `reportNoise(1)`(공식 만충 시간 정의의 기준 조건 — 미공급 시 소음 0으로 충전식 퇴화, 탐지·attack·폭뢰 사슬 전체 도달 불가였음을 실측으로 확인) |
+| 실측 (production, fixture 아님) | 탐지 상승 0→만충 9.65s(잠망경 진입 ~2s 포함, 공칭 8.0s)·재상승 17.0s(원거리 접근 램프 포함) / 감쇠 1→0 **8.000s**(=1/0.125) / 신관 게임 시계 **정확 3.000s ×10발**(하한 3.0 준수) / 공격 간격 단일 공격자 **6.05s**(5.99~6.17), 공격자 2척 교차 시 3.03s / direct **45**(cruise y −3.62, 기폭 y=0 일치) · near **12**(잠망경 y≈9 — 수직 offset로 3D 11m) · miss **0 피해**(이탈 39.5m) / 파괴: near 연타 30.5s(10타)·direct 9.1s(3타, 마지막 30 클램프) / 파괴 후 10s 신규 투하 0(PlayerAliveSource 게이트) / `sortieFailed`·정산 1회·`saveRequested(settlement)` 1회·saved·실패 화면 canConfirm → confirm → BASE / 재출항 reset(선체 120/120·침수 0·어뢰 3·게이지 0·경비함 0·debrief none). 콘솔 오류 **0** (전 세션) |
+| 실측 발견 blocker | ① **침수 미발생** — production의 어떤 DamageRequest도 `causesFlooding=true`를 보내지 않는다(폭뢰 시스템 주석: '침수 기여량은 공식 params 소유'). 피격→침수 기여량 공식 param이 C9 15필드에 없어 침수 루프(단계·침수 파괴)는 브라우저에서 도달 불가 — 수치 발명 없이는 해소 불가, 기획 결정 필요 ② **잠망경 심도에서 direct 불가** — 폭뢰가 관측 y=0에 기폭돼 잠망경(y≈9)에서는 수직 offset만으로 near가 상한(심도별 피해 기하는 관측 y 규약의 결과 — 밸런스 위험 항목) ③ 근접 폭발 밀려남(8m)이 폭발 반대 방향(상향 성분)이라 폭격 중 잠항이 상쇄될 수 있음(y 7.94 평형 관측) |
+| 개발 리드 결정 | `C_COMBAT_PARAMS_DEFINED=true` · `C_RUNTIME_WIRED=true` · `C_BROWSER_EMPIRICAL_COMPLETE=true`(**침수 스테이지 제외 명시** — 기능 부재이지 실측 누락이 아님) · **`C_FINAL_COMPLETE=false` 유지**(침수 유발 경로 부재가 생존 루프의 공식 구성요소 미완이므로 최종 완료 선언 불가) |
+| 적용 커밋 | c943d35(승인값)·885839f(배선) + 문서 커밋 |
+
 ### INT-GAME-014 — C1~C4 게임플레이 구현 완료 + production 배선 4줄 요청 (조립부)
 
 | 필드 | 내용 |

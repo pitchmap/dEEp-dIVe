@@ -477,8 +477,15 @@ C_BROWSER_EMPIRICAL_COMPLETE = false
 
 ## 11. 남은 blocker
 
-1. **C9 공식 수치 미도착** — 15/15 미확정. 발명 금지 원칙에 따라 null 유지.
-   해소 입력은 기획 전투 수치표 하나뿐이다.
+1. ~~**C9 공식 수치 미도착** — 15/15 미확정~~ → **해소 (INT-CORE-018)** —
+   C9 초기 공식 밸런스 v0.1 승인·입력 완료(DECISIONS C-13, 커밋 `c943d35`).
+   공인 로더 pending 0건. production 브라우저 실측 완주 기록은
+   INTEGRATION_NOTES INT-CORE-018 참조 — 탐지 상승·attack 전이·폭뢰
+   신관 3.000s·direct 45/near 12/miss 0·파괴·실패 정산·confirm·재출항
+   reset 전부 실작동, 콘솔 오류 0. **신규 blocker(실측 발견)**: 피격→침수
+   기여 공식 param 부재로 **침수 루프만 도달 불가**(production
+   `causesFlooding=true` 발신자 0 — 수치 발명 없이는 해소 불가, 기획 결정
+   필요). 따라서 C_FINAL_COMPLETE=false 유지.
 2. ~~**`attachCombatParams` 전송 형태 충돌** (§5)~~ → **해소 (INT-CORE-017)** —
    정규화 소유 단일화(공인 로더) + `NormalizedCombatParams` 단면 전달로 배선
    완료. 값이 도착하면 같은 경로로 자동 구동된다(코드 변경 불필요).

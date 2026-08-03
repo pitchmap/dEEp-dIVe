@@ -99,7 +99,7 @@
 | 계약 | 내용 | 소유 |
 |---|---|---|
 | `DetectionEnvironmentSource` | 은신·심도 입력 — noiseLevel·depthLayer·silentRunning | 게임플레이 (공급) |
-| `DetectionTuningParams` | 거리 감쇠·게이지 감소율 — **공식 문서에 없음** → null 계약. 미확정이면 unwired(게이지 0·safe 고정, 전이 없음) | 기획·툴링 (수치) |
+| `DetectionTuningParams` | 거리 감쇠·게이지 감소율 — null 계약(미확정이면 unwired: 게이지 0·safe 고정, 전이 없음). **C9 v0.1 승인으로 확정**: falloff {60, 240}m·decay 0.125/s (C-13). 소음 기준 입력 1(정상 항행)은 조립부 공급 — C-14 | 기획·툴링 (수치) |
 | `DetectionHudView` | gauge·stage·unwired — HUD 표시 전용(작동 위장 금지) | 게임플레이 (모델) / 그래픽스 (표시) |
 | `DetectionStageSource` | AI 소비 — stage + lastExposedPosition뿐(게이지 수치·계산식 접근 금지). 전역 단일 게이지(결의 4) | 게임플레이 (공급) / 리드 AI (소비) |
 | `TrackingState`·`TrackingStateSource` | 전이 규칙 5종 명시(patrol→alert→attack→alert→lost→alert), 시간 임계값 필요 시 params 소유. 어뢰 캠 alert 발화 지점 = 기존 `detectionChanged` 전이(새 이벤트 없음) | 리드 (전이) |

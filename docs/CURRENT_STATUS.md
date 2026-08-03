@@ -336,7 +336,13 @@ B 선행개발          = 가능 (선행개발 상태로만)
     - **combat params 전달 계약 정상화** (통합 blocker §5 해소): 정규화 소유자 = 공인 로더(`tools/combatParams.validateCombatParams`) **한 곳**. 게임플레이 구 평면 리더 2종 제거(중첩 스키마와 불일치하던 이중 정규화), `attachCombatParams(params: NormalizedCombatParams)` 타입화, 조립부가 `loadCombatParams()` 결과의 게임플레이 단면(`detectionTuning`·`depthCharge`)을 슬라이스 전달. raw combat.json import 0건(정적 검사 — 허용 2곳: combatParamsLoader·A 시절 ParamLoader), null 블록은 null 그대로(unwired 유지·부분 wired 금지). DECISIONS C-10
     - **실패 화면 confirm 경유** (통합 blocker §11-3 해소): `SortieFailureScreen.attach` 3-인자화 — '확인 (기지로)' = `debriefConfirm.confirm()` guarded command, 성공 시에만 화면 닫힘(DOM 숨김 전용 경로 제거), 버튼 노출 근거는 `canConfirm` 하나. 정상 귀환·실패 동일 정책 완결. DECISIONS C-11
     - **검증**: `verify:meta` +5(정규화 필드 교환 0·null 보존·NaN/음수 거부 + 정적 검사 2) → **124/124**, `verify:gameplay` 실경로 주입으로 교체 → **238/238**
-    - **상태 구분 (DECISIONS C-12)**: 구조 배선 완료(wired 경로 존재) ✅ / C9 수치 확정 ❌(15필드 전량 null — 결정표는 **PROPOSED**로 보고서 제출, 기획 승인 대기, production·params 숫자 미입력) / 브라우저 실측 ❌ / C 최종 완료 ❌. 플래그: C_COMBAT_PARAMS_DEFINED=false · C_RUNTIME_WIRED=false · C_BROWSER_EMPIRICAL_COMPLETE=false · C_FINAL_COMPLETE=false 유지
+    - **상태 구분 (DECISIONS C-12)**: 구조 배선 완료(wired 경로 존재) ✅ / C9 수치 확정 ❌(15필드 전량 null — 결정표는 **PROPOSED**로 보고서 제출, 기획 승인 대기, production·params 숫자 미입력) / 브라우저 실측 ❌ / C 최종 완료 ❌ → **아래 INT-CORE-018로 갱신됨**
+  - **C9 v0.1 승인값 입력·production 실측 (INT-CORE-018 — 커밋 `c943d35`·`885839f`):**
+    - **승인값 입력 (DECISIONS C-13)**: 15필드 전량 확정 — hull 120/0.7/0.3 · depthCharge 4m/18m/45/12/6s · flooding 0.15/0.45/0.8/2.4/0.02 · detection {60,240}/0.125. 공인 로더 pending 0건·관계 검사 통과. 지정 필드 외 무변경·pressure 미추가·fallback 0
+    - **탐지 기준 배선 2줄 (DECISIONS C-14)**: `torpedoFired`→`reportTorpedoLaunch`(§5.10 확정 규칙 배선) + 출항 시 `reportNoise(1)`(공식 만충 시간 정의의 기준 조건 — 수치 발명 아님)
+    - **브라우저 실측 완주** (production, fixture 아님 — 상세: INTEGRATION_NOTES INT-CORE-018): 탐지 상승 9.65s(공칭 8s)·감쇠 8.000s·신관 정확 3.000s×10·공격 간격 6.05s(단일)·direct 45/near 12/miss 0 재현·파괴(near 30.5s/direct 9.1s)·파괴 후 공격 중단·실패 정산 1회·saved·실패 화면 confirm→BASE·재출항 reset. **콘솔 오류 0**
+    - **실측 발견 blocker**: ① 침수 미발생 — 피격→침수 기여 공식 param 부재(production `causesFlooding=true` 발신자 0) → 침수 루프 도달 불가, 기획 결정 필요 ② 잠망경 심도 direct 불가(기폭 y=0 규약) ③ 밀려남 상향 성분이 폭격 중 잠항 상쇄
+    - **플래그**: C_COMBAT_PARAMS_DEFINED=**true** · C_RUNTIME_WIRED=**true** · C_BROWSER_EMPIRICAL_COMPLETE=**true**(침수 스테이지 제외 명시) · C_FINAL_COMPLETE=**false**(침수 유발 경로 부재 blocker)
   - **C 선행 계약 마감 (INT-CORE-015 — C_ROLE_HANDOFF_READY=true):**
     - C1~C3: `contracts/detection.ts` — 게이지 정본=게임플레이 DetectionSystem(기존 계약), 은신·심도 입력 포트, 거리 감쇠·감소율 null 계약(unwired), HUD·AI 읽기 모델 2종(AI는 stage만), 추적 전이 정본=리드(기존 상태 어휘·경비함/호위함/적대함 공유), alert 발화=기존 detectionChanged, 출항 reset 경계
     - C4: 폭뢰 정본 경로(탐지→AI 요청→EnemyAttackPort→DepthChargeSystem→direct/near→applyDamage) + `DepthChargeDamageParams`(전부 null 허용)
@@ -381,7 +387,7 @@ B 선행개발          = 가능 (선행개발 상태로만)
   - **[INT-CORE-014 적용 요청 — 그래픽스]** `SurvivalReadModel`만 소비(내부 객체 비노출·값 변경 불가). **실패 화면=`sortieFailed` / 귀환 화면=`sortieEnded`** 로 데이터·화면 완전 분리(C7). 침수량·피해량을 결정하지 않으며 경고는 `warningIds` 키로만 온다
   - **[INT-CORE-014 적용 요청 — 빌드·툴]** `params/combat.json` C9 [COMBAT] 확장: 선체 기준값·survivalState 경계 2종·폭뢰 direct/near 피해·침수 3단계 경계/확산율/피해율·(도입 시)압력 4종. **전부 미확정이며 임의 수치 금지.** `verify:sprint-c` 신설은 툴링 몫 — 리드는 없는 script를 실행하지 않았다
   - **계층 경계 [확정]:** 상위(src/meta)가 하위 세션 내부 상태를 읽는 코드, 하위가 메타 상태를 참조하는 코드는 리뷰 반려 대상 — 통신은 SortieSessionPort + 이벤트 3종뿐
-- **마지막 업데이트:** C 런타임 마감 준비 (INT-CORE-017 — combat params 정규화 단일 소유·실패 화면 confirm 경유·C9 결정표 PROPOSED. **C_RUNTIME_CLOSEOUT_STRUCTURE_READY=true · C9_PROPOSAL_READY=true**, 수치·실측·최종 완료 플래그는 전부 false 유지)
+- **마지막 업데이트:** C9 v0.1 승인값 입력 + production 브라우저 실측 완주 (INT-CORE-018 — **C_COMBAT_PARAMS_DEFINED=true · C_RUNTIME_WIRED=true · C_BROWSER_EMPIRICAL_COMPLETE=true**(침수 제외 명시) · C_FINAL_COMPLETE=false — 침수 유발 경로 부재 blocker)
 - **담당 브랜치:** `claude/sprint-c-runtime-closeout` (통합 tip `bd87828` 정확 기준 — 이전 리드 세션: `claude/deep-dive-core-lead-uyg77p`)
 
 ## 게임플레이
