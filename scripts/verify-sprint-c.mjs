@@ -269,6 +269,8 @@ const C9_FIELD_NAMES = [
   'directDamage',
   'nearDamage',
   'dropCooldownSeconds',
+  'directFloodingContribution',
+  'nearFloodingContribution',
   'minorThreshold',
   'majorThreshold',
   'catastrophicThreshold',

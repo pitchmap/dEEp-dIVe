@@ -1294,7 +1294,7 @@ export function runMetaVerification(): VerificationResult[] {
       const buildMotion = (
         options: {
           targetAlive?: boolean;
-          targetPosition?: { x: number; z: number } | null;
+          targetPosition?: { x: number; y: number; z: number } | null;
           withinBounds?: boolean;
         } = {},
       ): { port: SurfaceShipMotionPort; log: MotionLog } => {
@@ -1312,7 +1312,7 @@ export function runMetaVerification(): VerificationResult[] {
           isWithinWorldBounds: () => options.withinBounds !== false,
           isTargetAlive: () => options.targetAlive !== false,
           getTargetPosition: () =>
-            options.targetPosition === undefined ? { x: 50, z: 60 } : options.targetPosition,
+            options.targetPosition === undefined ? { x: 50, y: -2, z: 60 } : options.targetPosition,
         };
         return { port, log };
       };
@@ -1876,6 +1876,54 @@ export function runMetaVerification(): VerificationResult[] {
       );
     }
     {
+      // C9 v0.1.1 — 피격 근접도별 침수 기여 누적: direct 1회 + near 1회가
+      // 각자의 기여만큼 정확히 더해진다 (값은 요청이 싣고 온 params 파생분).
+      const { hull } = buildHull();
+      hull.applyDamage(
+        damage({ damageEventId: 'fd', correlationId: 'fd', rawDamage: 10, causesFlooding: true, floodingContribution: 0.35 }),
+      );
+      const afterDirect = hull.snapshot().floodingLevel;
+      hull.applyDamage(
+        damage({ damageEventId: 'fn', correlationId: 'fn', rawDamage: 5, causesFlooding: true, floodingContribution: 0.1 }),
+      );
+      const afterNear = hull.snapshot().floodingLevel;
+      check(
+        'C9 v0.1.1 침수 기여 누적: direct(0.35) + near(0.10) = 0.45 (정확 가산)',
+        Math.abs(afterDirect - 0.35) < 1e-9 && Math.abs(afterNear - 0.45) < 1e-9,
+        `direct후=${afterDirect}, near후=${afterNear}`,
+      );
+    }
+    {
+      // C9 v0.1.1 — 중복 DamageEvent는 선체 피해와 침수 기여 **모두** 1회만
+      const { hull } = buildHull();
+      const request = damage({ damageEventId: 'dup', correlationId: 'dup', rawDamage: 10, causesFlooding: true, floodingContribution: 0.35 });
+      hull.applyDamage(request);
+      const first = hull.snapshot();
+      const second = hull.applyDamage(request);
+      const after = hull.snapshot();
+      check(
+        'C9 v0.1.1 중복 event: 선체·침수 기여 둘 다 1회 (ignoredDuplicate)',
+        second.outcome === 'ignoredDuplicate' &&
+          after.currentHull === first.currentHull &&
+          Math.abs(after.floodingLevel - 0.35) < 1e-9,
+        `outcome=${second.outcome}, flood=${after.floodingLevel}`,
+      );
+    }
+    {
+      // C9 v0.1.1 — 누적 침수는 1에서 clamp (기여 합이 1을 넘어도)
+      const { hull } = buildHull();
+      for (let i = 0; i < 4; i += 1) {
+        hull.applyDamage(
+          damage({ damageEventId: `cl-${i}`, correlationId: `cl-${i}`, rawDamage: 1, causesFlooding: true, floodingContribution: 0.35 }),
+        );
+      }
+      check(
+        'C9 v0.1.1 침수 상한: 기여 합 1.4 → level 1.0 clamp',
+        hull.snapshot().floodingLevel === 1,
+        `level=${hull.snapshot().floodingLevel}`,
+      );
+    }
+    {
       // DEBRIEF 읽기 모델 — 정상 귀환
       const ctx = buildFailure();
       const tracker = new DebriefStateTracker(
@@ -1967,7 +2015,7 @@ export function runMetaVerification(): VerificationResult[] {
       const buildAttackAi = (
         options: {
           targetAlive?: boolean;
-          targetPosition?: { x: number; z: number } | null;
+          targetPosition?: { x: number; y: number; z: number } | null;
           port?: EnemyAttackPort | null;
         } = {},
       ): { ai: DestroyerAIController; requests: EnemyAttackRequest[] } => {
@@ -1987,7 +2035,7 @@ export function runMetaVerification(): VerificationResult[] {
           isWithinWorldBounds: () => true,
           isTargetAlive: () => options.targetAlive !== false,
           getTargetPosition: () =>
-            options.targetPosition === undefined ? { x: 50, z: 60 } : options.targetPosition,
+            options.targetPosition === undefined ? { x: 50, y: -2, z: 60 } : options.targetPosition,
         };
         const ai = new DestroyerAIController({
           entityId: 8000,
@@ -2135,6 +2183,8 @@ export function runMetaVerification(): VerificationResult[] {
           directDamage: wrap(40),
           nearDamage: wrap(15),
           dropCooldownSeconds: wrap(6),
+          directFloodingContribution: wrap(0.5),
+          nearFloodingContribution: wrap(0.2),
         },
         flooding: {
           minorThreshold: wrap(0.2),
@@ -2160,6 +2210,8 @@ export function runMetaVerification(): VerificationResult[] {
           result.depthCharge.directDamage === 40 &&
           result.depthCharge.nearDamage === 15 &&
           result.depthCharge.dropCooldownSeconds === 6 &&
+          result.depthCharge.directFloodingContribution === 0.5 &&
+          result.depthCharge.nearFloodingContribution === 0.2 &&
           result.flooding?.spreadPerSecond === 0.02 &&
           result.flooding.hullDamagePerSecondAtFull === 4 &&
           result.detectionTuning?.distanceFalloff?.fullEffectMeters === 30 &&
@@ -2205,6 +2257,28 @@ export function runMetaVerification(): VerificationResult[] {
         'C9 정규화: NaN·음수 = 필드명 포함 명시적 검증 실패 (조용한 보정 없음)',
         nanMessage.includes('directDamage') && negativeMessage.includes('spreadPerSecond'),
         `nan=${nanMessage.slice(0, 60)} / neg=${negativeMessage.slice(0, 60)}`,
+      );
+      // C9 v0.1.1 침수 기여 관계: 0 < near < direct ≤ 1 — 위반 3형 거부
+      const rejects = (block: Record<string, unknown>): string => {
+        try {
+          validateCombatParams({ ...nested, depthCharge: { ...nested.depthCharge, ...block } });
+          return '';
+        } catch (error) {
+          return error instanceof Error ? error.message : '';
+        }
+      };
+      const overOne = rejects({ directFloodingContribution: wrap(1.5) });
+      const zeroNear = rejects({ nearFloodingContribution: wrap(0) });
+      const inverted = rejects({
+        directFloodingContribution: wrap(0.2),
+        nearFloodingContribution: wrap(0.5),
+      });
+      check(
+        'C9 v0.1.1 침수 기여 관계 검증: 1 초과·0·near≥direct 전부 필드명 포함 거부',
+        overOne.includes('directFloodingContribution') &&
+          zeroNear.includes('nearFloodingContribution') &&
+          inverted.includes('nearFloodingContribution'),
+        `over=${overOne.slice(0, 50)} / zero=${zeroNear.slice(0, 50)} / inv=${inverted.slice(0, 60)}`,
       );
     }
     {

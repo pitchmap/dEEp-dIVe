@@ -16,6 +16,7 @@
  */
 
 import { validateCombatParams } from '../../tools/combatParams';
+import { DepthChargeRunSystem } from '../combat/DepthChargeRunSystem';
 import { validateGameParams } from '../../config/validateParams';
 import { EventBus } from '../../core/EventBus';
 import type { DepthLayerId } from '../../contracts/events';
@@ -38,6 +39,7 @@ import { rewardDropTableIdFor } from '../../contracts/faction';
 import type { DetectionStage } from '../../contracts/events';
 import type {
   DamageRequest,
+  DepthChargeDamageParams,
   EnemyAttackRequest,
   PlayerHullState,
 } from '../../contracts/survival';
@@ -3700,6 +3702,8 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
         'directDamage',
         'nearDamage',
         'dropCooldownSeconds',
+        'directFloodingContribution',
+        'nearFloodingContribution',
       ]),
       flooding: nullValueBlock([
         'minorThreshold',
@@ -4044,6 +4048,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       worldX: 1000,
       worldY: 0,
       worldZ: 1000,
+      dropFromY: 10,
       correlationId: 'miss',
     });
     for (let i = 0; i < 60 * 4; i += 1) missRig.systems.update(1 / 60);
@@ -4062,6 +4067,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       worldX: 0,
       worldY: 0,
       worldZ: 0,
+      dropFromY: 10,
       correlationId: 'unwired',
     });
     for (let i = 0; i < 60 * 4; i += 1) unwiredRig.systems.update(1 / 60);
@@ -4086,6 +4092,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
         worldX: chargeIndex * 0.1,
         worldY: 0,
         worldZ: 0,
+        dropFromY: 10,
         correlationId: 'same-attack',
       });
     }
@@ -4120,6 +4127,113 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     );
   }
 
+  // 69. [COMBAT] C9 v0.1.1 — 침수 기여 outcome 결합 + 목표 심도 기폭
+  {
+    const makeStandalone = (
+      targetView: { entityId: number; positionX: number; positionY: number; positionZ: number },
+      damageParams: DepthChargeDamageParams | null,
+    ): { system: DepthChargeRunSystem; calls: DamageRequest[] } => {
+      const calls: DamageRequest[] = [];
+      const system = new DepthChargeRunSystem(
+        {
+          applyDamage: (request) => {
+            calls.push(request);
+            return {
+              outcome: 'applied',
+              appliedDamage: request.rawDamage,
+              hull: {
+                currentHull: 1,
+                maxHull: 1,
+                isDestroyed: false,
+                unwired: false,
+              } as never,
+            };
+          },
+        },
+        () => [targetView],
+        3.0,
+        damageParams,
+        null,
+      );
+      return { system, calls };
+    };
+    const player = { entityId: PLAYER_ENTITY_ID, positionX: 0, positionY: -5, positionZ: 0 };
+
+    // 목표 심도 기폭 + direct 기여: 표적이 deep(y −5)에 있고 목표 심도도 −5 —
+    // 구 y=0 고정이었다면 수직 5m 오차로 direct(반경 5) 경계가 무너진다.
+    const direct = makeStandalone(player, DEPTH_CHARGE_FIXTURE);
+    direct.system.drop({
+      attackerEntityId: 1300,
+      targetEntityId: PLAYER_ENTITY_ID,
+      worldX: 0,
+      worldY: -5,
+      worldZ: 0,
+      dropFromY: 10,
+      correlationId: 'flood-direct',
+    });
+    const fallingView = direct.system.charges_[0];
+    for (let i = 0; i < 60 * 4; i += 1) direct.system.update(1 / 60);
+    check(
+      '[COMBAT] C9 v0.1.1 폭뢰는 요청에 고정된 목표 심도에서 기폭 — direct + 침수 기여 전달',
+      fallingView !== undefined &&
+        fallingView.worldY === 10 && // 낙하 시작점 = 공격자 수면 고도
+        direct.system.lastDetonationOutcome === 'directDamage' &&
+        direct.calls.length === 1 &&
+        direct.calls[0]?.worldPosition.y === -5 && // 기폭 위치 = 목표 심도 (y=0 아님)
+        direct.calls[0]?.causesFlooding === true &&
+        direct.calls[0]?.floodingContribution === DEPTH_CHARGE_FIXTURE.directFloodingContribution,
+      `outcome=${String(direct.system.lastDetonationOutcome)}, y=${String(direct.calls[0]?.worldPosition.y)}, flood=${String(direct.calls[0]?.floodingContribution)}`,
+    );
+
+    // near 기여: 기폭 심도 −5, 표적 수평 10m (direct 5 밖·near 15 안)
+    const near = makeStandalone({ ...player, positionX: 10 }, DEPTH_CHARGE_FIXTURE);
+    near.system.drop({
+      attackerEntityId: 1300,
+      targetEntityId: PLAYER_ENTITY_ID,
+      worldX: 0,
+      worldY: -5,
+      worldZ: 0,
+      dropFromY: 10,
+      correlationId: 'flood-near',
+    });
+    for (let i = 0; i < 60 * 4; i += 1) near.system.update(1 / 60);
+    check(
+      '[COMBAT] C9 v0.1.1 near 폭발 = near 피해 + near 침수 기여 (miss는 요청 자체 없음)',
+      near.system.lastDetonationOutcome === 'nearDamage' &&
+        near.calls.length === 1 &&
+        near.calls[0]?.causesFlooding === true &&
+        near.calls[0]?.floodingContribution === DEPTH_CHARGE_FIXTURE.nearFloodingContribution,
+      `outcome=${String(near.system.lastDetonationOutcome)}, flood=${String(near.calls[0]?.floodingContribution)}`,
+    );
+
+    // 기여 null(피해만 확정) → 피해는 정상, 침수만 unwired — boolean으로 양을
+    // 추측하지 않는다 (causesFlooding=false·기여 0).
+    const partialParams: DepthChargeDamageParams = {
+      ...DEPTH_CHARGE_FIXTURE,
+      directFloodingContribution: null,
+      nearFloodingContribution: null,
+    };
+    const partial = makeStandalone(player, partialParams);
+    partial.system.drop({
+      attackerEntityId: 1300,
+      targetEntityId: PLAYER_ENTITY_ID,
+      worldX: 0,
+      worldY: -5,
+      worldZ: 0,
+      dropFromY: 10,
+      correlationId: 'flood-null',
+    });
+    for (let i = 0; i < 60 * 4; i += 1) partial.system.update(1 / 60);
+    check(
+      '[COMBAT] C9 v0.1.1 침수 기여 null → 피해는 적용·침수만 unwired (양 추측 금지)',
+      partial.system.lastDetonationOutcome === 'directDamage' &&
+        partial.calls.length === 1 &&
+        partial.calls[0]?.causesFlooding === false &&
+        partial.calls[0]?.floodingContribution === 0,
+      `outcome=${String(partial.system.lastDetonationOutcome)}, causes=${String(partial.calls[0]?.causesFlooding)}`,
+    );
+  }
+
   return results;
 }
 
@@ -4143,6 +4257,8 @@ const DEPTH_CHARGE_FIXTURE = Object.freeze({
   directDamage: 30,
   nearDamage: 10,
   dropCooldownSeconds: 10,
+  directFloodingContribution: 0.5,
+  nearFloodingContribution: 0.2,
 });
 
 /** 검증용 공격 요청 — 계약 형태 그대로 (수치는 픽스처) */
