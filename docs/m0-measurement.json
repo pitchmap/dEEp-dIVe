@@ -1,0 +1,107 @@
+{
+  "measuredIn": "headless-linux-container-chromium (SwiftShader)",
+  "disclaimer": "내장그래픽 노트북 2대 실측의 대체가 아니다. 절대 FPS를 하드웨어 기준으로 읽지 말 것 — 상대 비교·회귀 감지용.",
+  "sampleMs": 4000,
+  "rows": [
+    {
+      "tier": "low",
+      "scenario": "idle-base",
+      "label": "기지 대기 (부팅 직후 화면)",
+      "loadMs": 1424,
+      "frames": 45,
+      "avgFps": 11.2,
+      "p95FrameMs": 100,
+      "worstFrameMs": 100.1,
+      "errors": 0
+    },
+    {
+      "tier": "low",
+      "scenario": "sortie-cruise",
+      "label": "출항 항행 (Pointer Lock + 전진)",
+      "loadMs": 1113,
+      "frames": 43,
+      "avgFps": 10.5,
+      "p95FrameMs": 116.7,
+      "worstFrameMs": 116.8,
+      "errors": 0
+    },
+    {
+      "tier": "low",
+      "scenario": "sortie-aim",
+      "label": "조준 유지 (조준경 + 전진)",
+      "loadMs": 1180,
+      "frames": 44,
+      "avgFps": 10.9,
+      "p95FrameMs": 100,
+      "worstFrameMs": 116.7,
+      "errors": 0
+    },
+    {
+      "tier": "medium",
+      "scenario": "idle-base",
+      "label": "기지 대기 (부팅 직후 화면)",
+      "loadMs": 1195,
+      "frames": 46,
+      "avgFps": 11.3,
+      "p95FrameMs": 100,
+      "worstFrameMs": 100.1,
+      "errors": 0
+    },
+    {
+      "tier": "medium",
+      "scenario": "sortie-cruise",
+      "label": "출항 항행 (Pointer Lock + 전진)",
+      "loadMs": 1075,
+      "frames": 49,
+      "avgFps": 12,
+      "p95FrameMs": 100,
+      "worstFrameMs": 100,
+      "errors": 0
+    },
+    {
+      "tier": "medium",
+      "scenario": "sortie-aim",
+      "label": "조준 유지 (조준경 + 전진)",
+      "loadMs": 1003,
+      "frames": 49,
+      "avgFps": 12.1,
+      "p95FrameMs": 83.4,
+      "worstFrameMs": 100,
+      "errors": 0
+    },
+    {
+      "tier": "high",
+      "scenario": "idle-base",
+      "label": "기지 대기 (부팅 직후 화면)",
+      "loadMs": 1139,
+      "frames": 51,
+      "avgFps": 12.5,
+      "p95FrameMs": 83.4,
+      "worstFrameMs": 100,
+      "errors": 0
+    },
+    {
+      "tier": "high",
+      "scenario": "sortie-cruise",
+      "label": "출항 항행 (Pointer Lock + 전진)",
+      "loadMs": 1008,
+      "frames": 49,
+      "avgFps": 12,
+      "p95FrameMs": 100,
+      "worstFrameMs": 100.1,
+      "errors": 0
+    },
+    {
+      "tier": "high",
+      "scenario": "sortie-aim",
+      "label": "조준 유지 (조준경 + 전진)",
+      "loadMs": 1036,
+      "frames": 48,
+      "avgFps": 11.8,
+      "p95FrameMs": 100,
+      "worstFrameMs": 100.1,
+      "errors": 0
+    }
+  ],
+  "consoleErrors": []
+}

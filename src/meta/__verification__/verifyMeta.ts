@@ -2197,6 +2197,7 @@ export function runMetaVerification(): VerificationResult[] {
           distanceFalloff: { value: { fullEffectMeters: 30, zeroEffectMeters: 120 } },
           gaugeDecayPerSecond: wrap(0.08),
         },
+        depthChargeOnPassiveScope: { value: false },
       };
       const result = validateCombatParams(nested);
       // 필드 교환·단위 변환 오류 검사 — 서로 다른 값이 정확한 자리에 도착한다

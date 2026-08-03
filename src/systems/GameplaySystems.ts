@@ -413,6 +413,9 @@ export class GameplaySystems implements GameSystem {
       null,
       params.combat.simultaneousDepthCharges.value,
     );
+    // 폭뢰 lifecycle 이벤트(입수·폭발) — 사운드·연출 전용 통지.
+    // 판정은 이 버스에 의존하지 않는다(구독 0건이어도 동작 동일).
+    this.depthCharges.attachEventBus(bus);
     this.enemyAttack = new EnemyAttackCoordinator(this.depthCharges, null, null);
     // [C3] 추적 입력 — AI는 stage만 읽는다. 전이 로직은 리드
     //      DestroyerAIController 소유이며 여기서 복제하지 않는다.
