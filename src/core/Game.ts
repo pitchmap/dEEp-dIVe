@@ -324,6 +324,13 @@ export class Game {
         // 잔탄·드롭이 이월되지 않게). 초회 출항에서는 갓 생성된 상태라 무해.
         const gameplay = this.gameplay;
         if (gameplay) gameplay.resetSortieSession(this.effectiveParams ?? params);
+        // 탐지 소음 **기준 입력** 공급 (INT-CORE-018). 공식 만충 시간
+        // (`gaugeFillSecondsAtPeriscope` — '잠망경 심도 기준 만충 8s')의 정의
+        // 자체가 정상 항행을 기준 조건으로 한다 — 기준 입력 1은 그 정의의
+        // 항등원이지 새 밸런스 수치가 아니다. 속도 의존 소음 곡선·침묵 항행
+        // 토글은 공식 규칙 도착 시 이 호출을 대체한다 (게임플레이 소유).
+        // reset이 reportedNoise를 비우므로 출항 시작마다 다시 공급한다.
+        gameplay?.detection.reportNoise(1);
         // 출항 월드 초기화 — salvage 확정 배치 (INT-CORE-011 production spawn
         // 규칙: 출항당 1회, 보상=economy params·좌표=SalvagePlacementSource.
         // 배치 미연결이면 임시 좌표를 만들지 않고 unwired로 기록만 한다).
@@ -565,6 +572,16 @@ export class Game {
       detectionTuning: combat.detectionTuning,
       depthCharge: combat.depthCharge,
     });
+    //     ④ 어뢰 발사 지점 무조건 노출 (§5.10 확정 규칙 — C1 계약
+    //        DetectionSystem.reportTorpedoLaunch의 조립 배선). 발사 위치는
+    //        게임플레이가 발행하는 torpedoFired payload 그대로다 — 조립부는
+    //        수치·판정을 만들지 않고 이벤트를 계약 API에 잇기만 한다.
+    //        (소음 소스는 공식 규칙 부재로 미연결 유지 — 중립 입력 0)
+    this.registerUnsubscribe(
+      this.bus.on('torpedoFired', ({ originX, originZ }) => {
+        gameplay.detection.reportTorpedoLaunch(originX, originZ);
+      }),
+    );
 
     // ①-c 업그레이드 구매 판정 시스템 (게임플레이 소유 — 조립부가 공식
     //     카탈로그와 실지갑 읽기 단면을 주입한다). **단계의 단일 저장소** —
