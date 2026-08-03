@@ -17,7 +17,14 @@
  *  - setWeakpointActive(bool): 배 아래 약점 플레이트 발광·점멸 + 턱 개방.
  *  - setPhase(1|3): 단계별 색·발광 전환. 파티클·카메라 연출은
  *    onPhaseTransition 콜백 시임(seam)으로 연결 지점만 노출 — 본구현 D17~20.
+ *  - notifyWeakpointHit()/notifyNormalHit(): 게임플레이 명중 판정 결과의
+ *    **통지만** 받아 표현한다 — 약점 명중(강한 백-주황 플래시 + 약점 스케일
+ *    펄스)과 일반 부위 명중(짧은 회청 플래시)이 서로 다르게 읽힌다.
+ *  - 단계 전환은 색 외에 **전신 진폭 서지 + 백색 플래시** 병행 — low 품질
+ *    (림·글로우 없음)에서도 5개 상태(약점 비활성/활성/약점 명중/일반 명중/
+ *    단계 전환)가 밝기·모션으로 구분된다 (색 단독 의존 금지 §10).
  *  - 스파이크 단독 실행 시 autoDemo가 약점·단계를 주기 순환(QA 시연 값).
+ *    ?bossSpike=1 검수 키: [6] 약점 명중 · [7] 일반 명중 (CanyonScene).
  */
 
 import * as THREE from 'three';
@@ -34,6 +41,11 @@ const PHASE_TINTS: ReadonlyArray<{ color: number; emissive: number }> = [
 ];
 
 export type BossPhase = 1 | 2 | 3;
+
+/** 단계 기본 emissive 사전 계산 — 프레임당 Color 할당 방지 */
+const PHASE_EMISSIVE_COLORS: readonly THREE.Color[] = PHASE_TINTS.map(
+  (tint) => new THREE.Color(tint.emissive),
+);
 
 export class BossSegmentSpike {
   readonly root = new THREE.Group();
@@ -57,6 +69,12 @@ export class BossSegmentSpike {
   private elapsed = 0;
   private weakpointActive = false;
   private phase: BossPhase = 1;
+  /** 명중·단계 전환 표현 타이머 (초, 0 이하 = 비활성) — 판정 아님, 잔여 연출 시간 */
+  private weakpointHitRemaining = 0;
+  private normalHitRemaining = 0;
+  private phaseSurgeRemaining = 0;
+  /** 약점 플레이트 참조 — 명중 스케일 펄스용 */
+  private weakpointMesh: THREE.Mesh | null = null;
 
   constructor(motion: BossMotionStyle, autoDemo: boolean) {
     this.motion = motion;
@@ -148,6 +166,7 @@ export class BossSegmentSpike {
     const weakpoint = new THREE.Mesh(weakpointGeometry, this.weakpointMaterial);
     weakpoint.position.set(0, -2.5, -1.0);
     this.body.add(weakpoint);
+    this.weakpointMesh = weakpoint;
 
     this.root.add(this.body);
   }
@@ -166,7 +185,19 @@ export class BossSegmentSpike {
       this.bodyMaterial.color.set(tint.color);
       this.bodyMaterial.emissive.set(tint.emissive);
     }
+    // 색 외 채널 병행 — 전신 진폭 서지 + 백색 플래시 (low 품질 가독)
+    this.phaseSurgeRemaining = PARAMS.phaseSurgeSeconds;
     this.onPhaseTransition?.(phase);
+  }
+
+  /** 약점 명중 통지 — 게임플레이 판정 결과의 표현만 (강한 플래시 + 펄스) */
+  notifyWeakpointHit(): void {
+    this.weakpointHitRemaining = PARAMS.weakpointHitFlashSeconds;
+  }
+
+  /** 일반 부위 명중 통지 — 약점 명중과 구분되는 짧은 회청 플래시 */
+  notifyNormalHit(): void {
+    this.normalHitRemaining = PARAMS.normalHitFlashSeconds;
   }
 
   update(deltaSeconds: number): void {
@@ -177,10 +208,14 @@ export class BossSegmentSpike {
     // 이동은 모션 스타일(A: 유영 순찰 / B: 대시 곡선)이 root를 움직인다
     this.motion.update(deltaSeconds, this.root);
 
+    // 단계 전환 서지 — 남은 시간 비율만큼 전신 진폭을 키운다 (모션 채널)
+    const surgeT = Math.max(this.phaseSurgeRemaining, 0) / PARAMS.phaseSurgeSeconds;
+    const surge = 1 + surgeT * 0.9;
+
     // ── 분절 사인파 — 위상차로 파도가 몸을 타고 흐르게 한다 ──
-    const swing = Math.sin(t * omega);
-    const lagged = Math.sin(t * omega - PARAMS.tailLagRadians);
-    const lagged2 = Math.sin(t * omega - PARAMS.tailLagRadians * 1.8);
+    const swing = Math.sin(t * omega) * surge;
+    const lagged = Math.sin(t * omega - PARAMS.tailLagRadians) * surge;
+    const lagged2 = Math.sin(t * omega - PARAMS.tailLagRadians * 1.8) * surge;
 
     this.body.rotation.y = swing * 0.06;
     this.body.rotation.z = Math.sin(t * omega * 0.5) * PARAMS.bodyRollRadians;
@@ -207,6 +242,32 @@ export class BossSegmentSpike {
     } else {
       this.weakpointMaterial.emissive.setRGB(0, 0, 0);
     }
+
+    // ── 명중·단계 전환 플래시 (통지 기반 잔여 타이머 — 판정 없음) ──
+    this.weakpointHitRemaining = Math.max(this.weakpointHitRemaining - deltaSeconds, 0);
+    this.normalHitRemaining = Math.max(this.normalHitRemaining - deltaSeconds, 0);
+    this.phaseSurgeRemaining = Math.max(this.phaseSurgeRemaining - deltaSeconds, 0);
+    const weakpointFlash = this.weakpointHitRemaining / PARAMS.weakpointHitFlashSeconds;
+    const normalFlash = this.normalHitRemaining / PARAMS.normalHitFlashSeconds;
+    const surgeFlash = surgeT;
+    if (weakpointFlash > 0) {
+      // 약점 명중 — 백-주황 강한 발광 + 약점 플레이트 스케일 펄스
+      this.weakpointMaterial.emissive.setRGB(
+        1.0 * weakpointFlash + this.weakpointMaterial.emissive.r * (1 - weakpointFlash),
+        0.75 * weakpointFlash,
+        0.45 * weakpointFlash,
+      );
+      this.weakpointMesh?.scale.setScalar(1 + weakpointFlash * 0.5);
+    } else {
+      this.weakpointMesh?.scale.setScalar(1);
+    }
+    // 몸통 발광 = 단계 기본 emissive + (일반 명중 회청) + (전환 백색) 중 최대
+    const baseEmissive = PHASE_EMISSIVE_COLORS[this.phase - 1] ?? PHASE_EMISSIVE_COLORS[0]!;
+    this.bodyMaterial.emissive.setRGB(
+      Math.max(baseEmissive.r, normalFlash * 0.32, surgeFlash * 0.55),
+      Math.max(baseEmissive.g, normalFlash * 0.38, surgeFlash * 0.55),
+      Math.max(baseEmissive.b, normalFlash * 0.42, surgeFlash * 0.55),
+    );
 
     // QA 자동 시연 — 스파이크 단독 실행에서만 약점·단계 순환
     if (this.autoDemo) {

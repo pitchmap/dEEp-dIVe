@@ -90,6 +90,19 @@
 
 ## 제안 목록
 
+### INT-RENDER-014 — [M1·M2] 보스 시각 read model·소나 액티브 핑 소스 계약 요청
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스 창 |
+| 대상 시스템 | (신규 계약 요청 — 게임플레이 M1 보스·M2 핑 도착 시) `src/contracts/*` |
+| 필요한 변경 | ① **보스 시각 read model**: 그래픽스 `BossSegmentSpike`는 표현 API를 이미 노출한다 — `setWeakpointActive(bool)`·`setPhase(1|2|3)`·`notifyWeakpointHit()`·`notifyNormalHit()`. 게임플레이 보스 회색 상자(M1)의 판정 결과(약점 활성 창·명중 부위 구분·단계)를 이 형태로 통지하는 계약(이벤트 또는 read model) 정본을 요청. 렌더는 약점 판정·체력 임계값을 계산하지 않는다 ② **`SonarPingSource`**: 렌더 로컬 인터페이스(`src/render/SonarScope.ts` — `{pings: readonly {x,z,ageSeconds}[]}`)로 선정의. 게임플레이 액티브 핑 메커니즘(M2) 도착 시 정식 계약 이관 + `scene.attachSonarPingSource()` 1줄 배선. **미주입 = 미표시**(기능 위장 없음) |
+| 변경 이유 | M1 약점·단계 전환 표현(5상태)·M2 소나 스코프의 게임플레이 정본 연결. 스코프의 탐지·추적·소음·소음원은 기존 정본(DetectionHudView·TrackingStateSource·noiseChanged·ShipWorldSource) 재사용으로 이미 배선됨 — 신규 요청은 위 2건뿐 |
+| 영향을 받는 파일 | render: `SonarScope.ts`(신규)·`boss/BossSegmentSpike.ts`·`CanyonScene.ts`. 조립: `Game.ts` +2줄(소나 탐지·추적 소스 — DetectionHud와 동일 정본·동일 형태, 기존 배선 관례) |
+| 하위 호환 여부 | 깨지지 않음 — 전부 추가·미주입 안전(계약 무수정, 렌더 로컬 인터페이스는 AimAngleSource 관례) |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | feat/render — M0 실측 준비·M1/M2 최소 시각 소비자 커밋 |
+
 ### INT-RENDER-013 — [ART][RENDER] 수심 확장: 시작 협곡 레이아웃 수직 데이터 변경 (리드 확인 요청)
 
 | 필드 | 내용 |

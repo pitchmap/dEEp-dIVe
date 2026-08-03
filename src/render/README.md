@@ -69,6 +69,11 @@
   충돌은 계약 blocks 그대로): 서브디비전 박스 + 위치 기반 결정적 변위
   (crack 없음), 기울어진 상단(아래 방향만)·잘린 모서리·층리 선반,
   변형 패밀리 4종, 시각 오차 ≤0.7m. 블록당 메시 1(드로우 불변)·재질 공유
+- `SonarScope.ts` — 좌하단 원형 다이제틱 소나 스코프 (2D 캔버스, 화면 높이
+  18% 이하, 리드로우 15Hz 상한): 기존 정본만 소비 — DetectionHudView(테두리
+  황·미연결 빗금)·TrackingStateSource(공격태세 적)·noiseChanged(자기 소음)·
+  ShipWorldSource(소음원 방위·번짐 — 세력 미표시). 액티브 핑은
+  `SonarPingSource` 미주입=미표시(INT-RENDER-014). 판정·탐지·거리 계산 없음
 - `PropellerWake.ts` — 프로펠러 기포·수류: InstancedMesh 풀 1드로우,
   발생률·후방 속도·수명(wake 길이) 전부 계약 속도 비례, 후진 시 사출 반전.
   풀 상한은 품질 단계 소유

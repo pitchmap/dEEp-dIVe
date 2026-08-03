@@ -67,6 +67,8 @@ import { PropellerWake } from './PropellerWake';
 import { buildRockShellGeometry, buildSeabedGeometry } from './RockShell';
 import { parseRenderQuality, type RenderQuality } from './renderQuality';
 import { initSceneTextures, onSceneTexture } from './sceneTextures';
+import { SonarScope, type SonarDetectionSource, type SonarPingSource } from './SonarScope';
+import type { TrackingStateSource } from '../contracts/detection';
 import { SubmarineVisual } from './SubmarineVisual';
 import type { TorpedoStateSource } from './TorpedoVisuals';
 import { TorpedoVisuals } from './TorpedoVisuals';
@@ -155,6 +157,8 @@ export class CanyonScene implements ManagedScene {
   private readonly salvageVisuals = new SalvageVisuals();
   private readonly environment: EnvironmentDressing;
   private periscope: PeriscopeView | null = null;
+  /** 소나 스코프 — 계기 층 다이제틱 HUD (판정 소비만, SonarScope 참조) */
+  private readonly sonarScope: SonarScope;
   // 스프린트 B 표현 — 전부 계약 read model 소비 (판정·스폰 실행 없음)
   private identificationTags: IdentificationTags | null = null;
   private convoyVisuals: ConvoyVisuals | null = null;
@@ -221,6 +225,8 @@ export class CanyonScene implements ManagedScene {
   private unsubscribeAimMode: Unsubscribe | null = null;
   // floodingChanged 구독 — X-ray 침수 표시 구동 (C5, severity 매핑만)
   private unsubscribeFlooding: Unsubscribe | null = null;
+  // noiseChanged 구독 — 소나 스코프 자기 소음 표시 (값 전달만)
+  private unsubscribeNoise: Unsubscribe | null = null;
   /** 침수 X-ray 인스턴스 — severity > 0 최초 수신 시 잠수함에 지연 장착 */
   private floodingXray: XrayFloodingSpike | null = null;
 
@@ -312,6 +318,10 @@ export class CanyonScene implements ManagedScene {
       this.rig.rotate(0, -0.62); // 잠수함 아래에서 올려다보는 앙각
     }
 
+    this.sonarScope = new SonarScope(
+      this.renderer.webgl.domElement.parentElement ?? document.body,
+    );
+
     this.shipDemoSnapshot = this.parseShipDemoSnapshot();
     this.mountXraySpikeIfRequested();
     this.mountBossSpikeIfRequested();
@@ -380,8 +390,16 @@ export class CanyonScene implements ManagedScene {
       }
       this.bossSpike = new BossSegmentSpike(motion, true);
       this.scene.add(this.bossSpike.root);
+      // 검수 키 [6]=약점 명중 · [7]=일반 명중 — QA 격리 경로 전용
+      // (게임플레이 판정 도착 시 read model 통지가 정본, INT-RENDER-014)
+      const onHitKey = (event: KeyboardEvent): void => {
+        if (event.code === 'Digit6') this.bossSpike?.notifyWeakpointHit();
+        if (event.code === 'Digit7') this.bossSpike?.notifyNormalHit();
+      };
+      window.addEventListener('keydown', onHitKey);
+      this.disposables.push({ dispose: () => window.removeEventListener('keydown', onHitKey) });
       console.info(
-        `[CanyonScene] 보스 분절 스파이크 장착 (?bossSpike=1${useFallback ? '&bossMotion=b' : ''}).`,
+        `[CanyonScene] 보스 분절 스파이크 장착 (?bossSpike=1${useFallback ? '&bossMotion=b' : ''} — 검수 키 6/7 = 약점/일반 명중).`,
       );
     } catch (error) {
       this.bossSpike = null;
@@ -469,6 +487,8 @@ export class CanyonScene implements ManagedScene {
    */
   attachShipWorldSource(source: ShipWorldSource): void {
     this.shipWorldSource = source;
+    // 소나 패시브 소음원 — 같은 read model을 방위 표시로만 소비
+    this.sonarScope.attachContactsSource(source);
   }
 
   /**
@@ -523,6 +543,21 @@ export class CanyonScene implements ManagedScene {
   attachSalvageSource(source: SalvageStateSource, pickupRadiusMeters: number): void {
     this.salvageVisuals.setPickupRadiusMeters(pickupRadiusMeters);
     this.salvageVisuals.attachSource(source);
+  }
+
+  /** 소나 스코프 탐지 뷰 — DetectionHud와 동일 소스 형태 (composition 1회) */
+  attachSonarDetectionSource(source: SonarDetectionSource): void {
+    this.sonarScope.attachDetectionSource(source);
+  }
+
+  /** 소나 스코프 공격태세(테두리 적색) — TrackingStateSource 재사용 */
+  attachSonarTrackingSource(source: TrackingStateSource): void {
+    this.sonarScope.attachTrackingSource(source);
+  }
+
+  /** 액티브 핑 소스 — 게임플레이 핑 메커니즘 도착 시 주입 (미주입=미표시) */
+  attachSonarPingSource(source: SonarPingSource): void {
+    this.sonarScope.attachPingSource(source);
   }
 
   /**
@@ -592,6 +627,11 @@ export class CanyonScene implements ManagedScene {
     this.unsubscribeFlooding?.();
     this.unsubscribeFlooding = bus.on('floodingChanged', (payload) => {
       this.applyFloodingSeverity(payload.severity);
+    });
+    // 소나 스코프 자기 소음 — noiseChanged 값(0~1)의 표시 전달만
+    this.unsubscribeNoise?.();
+    this.unsubscribeNoise = bus.on('noiseChanged', (payload) => {
+      this.sonarScope.setNoiseLevel(payload.level);
     });
     // 조준경: 게임플레이가 발행한 조준 상태만 소비 — 렌더 독자 전환 없음
     this.unsubscribeAimMode?.();
@@ -695,9 +735,11 @@ export class CanyonScene implements ManagedScene {
     this.cFixture?.update(deltaSeconds);
     // 기지 화면 미리보기(?base=1) — 협곡 장면 대신 기지 장면만 갱신 (QA 경로)
     if (this.baseView) {
+      this.sonarScope.setVisible(false); // 소나는 해역 전용 계기 (§10 관례)
       this.baseView.update(deltaSeconds);
       return;
     }
+    this.sonarScope.setVisible(true);
     this.elapsed += deltaSeconds;
 
     const spawn = this.layout.submarineSpawn;
@@ -756,6 +798,8 @@ export class CanyonScene implements ManagedScene {
     this.guardDirection?.update(deltaSeconds, this.renderer.camera);
     this.updateLeadIndicator();
     this.updateCargoShip(deltaSeconds);
+    // 소나 스코프 — 계약 포즈(선수 방위·수평 위치)와 read model만 전달
+    this.sonarScope.update(deltaSeconds, heading, x, z);
     this.updateFogByCameraDepth();
     // 부유물은 최종 카메라 위치 기준으로 되감는다 (조준 시점 포함)
     this.drift.update(
@@ -909,6 +953,9 @@ export class CanyonScene implements ManagedScene {
     this.unsubscribeAimMode = null;
     this.unsubscribeFlooding?.();
     this.unsubscribeFlooding = null;
+    this.unsubscribeNoise?.();
+    this.unsubscribeNoise = null;
+    this.sonarScope.dispose();
     this.floodingXray?.dispose();
     this.floodingXray = null;
     this.baseView?.dispose();

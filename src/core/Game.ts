@@ -765,6 +765,13 @@ export class Game {
       hudView: () => gameplay.detectionHudView(),
     });
     detectionHud.attachTrackingSource(guardAdapter);
+    //     소나 스코프(그래픽스 소유 계기) — 같은 정본을 같은 형태로 소비한다:
+    //     탐지 뷰(테두리 황색·미연결 표시)와 추적 상태(공격태세 적색)만.
+    //     액티브 핑 소스는 게임플레이 핑 메커니즘 도착 시 주입(INT-RENDER-014).
+    scene.attachSonarDetectionSource({
+      hudView: () => gameplay.detectionHudView(),
+    });
+    scene.attachSonarTrackingSource(guardAdapter);
     const survivalHud = new SurvivalHud(this.container);
     survivalHud.attachSource(playerHull, () => playerHull.consumeDamageFlash());
     const rendererCamera = this.renderer?.camera ?? null;

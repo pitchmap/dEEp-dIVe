@@ -38,8 +38,25 @@
     "fishPerSchool": 22,
     "fishSchoolCount": 2
   },
+  "sonarScope": {
+    "$comment": "좌상단 원형 다이제틱 소나 스코프 — 전부 순수 연출값. 판정(탐지·거리·소음)은 게임플레이 read model·이벤트 소비만. 테두리 상태색: 미탐지 청록 / 탐지 중 황 / 공격태세 적",
+    "sizeViewportHeightRatio": 0.18,
+    "rangeMeters": 140,
+    "redrawHz": 15,
+    "sweepSecondsPerRevolution": 4,
+    "contactBlurRadians": 0.22,
+    "pingDisplaySeconds": 3,
+    "colorSafe": "#3fc8bd",
+    "colorWary": "#e0b34a",
+    "colorAttack": "#e05545",
+    "contactColor": "#9fb4ba",
+    "noiseRingColor": "#7fd8cf"
+  },
   "bossSpike": {
-    "$comment": "보스 분절 애니 스파이크(11차 결의 5) — 사인파 진폭·주기 연출값",
+    "$comment": "보스 분절 애니 스파이크(11차 결의 5) — 사인파 진폭·주기 연출값. *HitFlash·phaseSurge는 약점/일반 명중·단계 전환 표현(저품질 가독: 색+밝기+모션 병행)",
+    "weakpointHitFlashSeconds": 0.35,
+    "normalHitFlashSeconds": 0.18,
+    "phaseSurgeSeconds": 1.2,
     "swimCycleSeconds": 3.4,
     "tailSwingRadians": 0.42,
     "tailLagRadians": 0.9,
