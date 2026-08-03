@@ -14,14 +14,21 @@
  * (재설계 아님 — 수식·상수는 렌더 구현과 1:1).
  *
  * 벽 높이 확정 (INT-CORE-004 리드 결정):
- *  - 좌안 11±2·sin / 우안 12∓2·sin — **그래픽 하향값을 최종 채택**한다.
- *    벽 상단 최대 = floorY(-6) + 13 = 7 로 해수면(12)보다 5m 낮다:
- *    수중에서 위를 볼 때 해수면·화물선 실루엣이 능선에 가리지 않는다 (§3.1
- *    '밝음→어둠' 문법·발견 연출). 충돌도 같은 blocks를 쓰므로 구 충돌 미러
- *    (15/16±3·sin)가 만들던 '보이지 않는 약 4m 벽'은 소멸한다.
+ *  - 좌안 25±2·sin / 우안 26∓2·sin — **벽 상단 절대 높이는 기존 확정값을
+ *    유지**한다 (상단 최대 = floorY(-20) + 27 = 7, 해수면(12)보다 5m 낮음:
+ *    수중에서 위를 볼 때 해수면·화물선 실루엣이 능선에 가리지 않는다 — §3.1
+ *    '밝음→어둠' 문법·발견 연출 불변).
  *  - 결과: 벽 상단(≤7)과 해수면(12) 사이에 개방 수역이 존재한다 — 회색
  *    박스 단계 허용. 상층 이탈 제약이 필요해지면 레벨 블록아웃 교체 시
  *    데이터로 해결한다 (코드 변경 없음).
+ *
+ * 수심 확장 (아트 디렉션 작업 지시 — 실수직 공간 확장, 스케일 눈속임 금지):
+ *  - 수면(12)은 유지하고 해저를 -6 → **-20**으로 내려 수직 수역을
+ *    18m → 32m(약 1.78배)로 확장했다. 벽·기둥 sizeY는 +14 보정해 **상단
+ *    절대 높이·수평 통로 폭·S자 수로·엄폐 관계를 그대로 보존**한다.
+ *  - 잠항 상·하한(provisionalWorld)·충돌(collision)·salvage 착저 높이·
+ *    환경 배치·블롭 섀도는 전부 이 레이아웃에서 파생되므로 자동 추종한다
+ *    (절대값 하드코딩 없음 확인 — 2026-08 조사).
  *
  * 이 파일은 공용 데이터 모듈로 공통 보호에 준한다 — 내용 교체는 리드 승인
  * (레벨 산출물 반영 커밋) 경유. 로직·시스템 코드를 추가하지 않는다.
@@ -29,7 +36,7 @@
 
 import type { CanyonBlockDescriptor, CanyonLayout } from '../contracts/layout';
 
-const FLOOR_Y = -6;
+const FLOOR_Y = -20;
 const SEA_SURFACE_Y = 12;
 const CANYON_HALF_WIDTH = 11;
 const WALL_SEGMENT_LENGTH = 11;
@@ -51,12 +58,12 @@ function buildBlocks(): readonly CanyonBlockDescriptor[] {
     const widthVariation = 1.5 * Math.sin(i * 1.9 + 1);
     const tilt = 0.12 * Math.sin(i * 3.3);
 
-    // 좌안 벽
+    // 좌안 벽 — sizeY +14 (수심 확장분): 상단 절대 높이 = 기존과 동일
     blocks.push({
       x: center - CANYON_HALF_WIDTH - 4 + widthVariation,
       z,
       sizeX: 9 + widthVariation,
-      sizeY: 11 + heightVariation,
+      sizeY: 25 + heightVariation,
       sizeZ: WALL_SEGMENT_LENGTH + 1.5,
       rotationY: tilt,
     });
@@ -65,17 +72,17 @@ function buildBlocks(): readonly CanyonBlockDescriptor[] {
       x: center + CANYON_HALF_WIDTH + 4 - widthVariation,
       z,
       sizeX: 9 - widthVariation,
-      sizeY: 12 - heightVariation,
+      sizeY: 26 - heightVariation,
       sizeZ: WALL_SEGMENT_LENGTH + 1.5,
       rotationY: -tilt,
     });
   }
 
   // 수로 안쪽 엄폐 기둥 3개 — 시각 차단 검증용 임시 배치 (정식 3곳+는
-  // 레벨 블록아웃 교체 시 데이터 갱신)
-  blocks.push({ x: centerAt(-18) + 4, z: -18, sizeX: 3.5, sizeY: 10, sizeZ: 3.5, rotationY: 0.4 });
-  blocks.push({ x: centerAt(2) - 5, z: 2, sizeX: 4, sizeY: 12, sizeZ: 4, rotationY: -0.25 });
-  blocks.push({ x: centerAt(24) + 6, z: 24, sizeX: 3, sizeY: 9, sizeZ: 5, rotationY: 0.7 });
+  // 레벨 블록아웃 교체 시 데이터 갱신). sizeY +14 — 상단 절대 높이 유지
+  blocks.push({ x: centerAt(-18) + 4, z: -18, sizeX: 3.5, sizeY: 24, sizeZ: 3.5, rotationY: 0.4 });
+  blocks.push({ x: centerAt(2) - 5, z: 2, sizeX: 4, sizeY: 26, sizeZ: 4, rotationY: -0.25 });
+  blocks.push({ x: centerAt(24) + 6, z: 24, sizeX: 3, sizeY: 23, sizeZ: 5, rotationY: 0.7 });
 
   return blocks;
 }

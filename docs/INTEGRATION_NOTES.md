@@ -90,6 +90,20 @@
 
 ## 제안 목록
 
+### INT-RENDER-013 — [ART][RENDER] 수심 확장: 시작 협곡 레이아웃 수직 데이터 변경 (리드 확인 요청)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스 창 |
+| 대상 시스템 | `src/world/startingCanyonLayout.ts` (공용 데이터 — 공통 보호에 준함) |
+| 필요한 변경 | **적용 완료(작업 지시 근거) — 사후 확인 요청.** `FLOOR_Y` -6 → **-20**(수직 수역 18m → 32m, 약 1.78배). 벽 sizeY 11/12±2 → 25/26±2, 엄폐 기둥 sizeY 10/12/9 → 24/26/23 — **벽·기둥 상단 절대 높이·수평 통로 폭·S자 수로·해수면(12)은 전부 불변** (INT-CORE-004 능선<해수면 결정 유지) |
+| 변경 이유 | 아트 디렉션 작업 지시: 실수직 잠항 공간 확장(스케일 눈속임 금지). 잠항 상·하한(provisionalWorld 파생), 충돌(collision 파생), salvage 착저 높이(파생), 환경 배치(파생)가 전부 레이아웃 파생이라 코드 변경 없이 자동 추종함을 조사로 확인 |
+| 관련 게이트 | — (밸런스 수치 아님 — 월드 데이터. 탐지 심도 층 3층 계약·게임플레이 판정 무변경) |
+| 영향을 받는 파일 | `src/world/startingCanyonLayout.ts`만 수정. 파생 확인: `systems/provisionalWorld.ts`(min/max Y 자동), `systems/collision/*`(자동), `world/salvagePlacements.ts`(자동), 렌더 심도 그레이딩(`renderVisualParams.json artDirection.depthGrading`) |
+| 하위 호환 여부 | 깨지지 않음 — verify:gameplay 213/213(레이아웃 파생 검증 포함)·verify:hud 34/34·verify:sprint-a/b 통과. 실측: 잠항 하한 -19.0(해저 이탈 없음)·상한 11.0(수면 돌출 없음) |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | feat/render — 수심 확장·암벽 셸·탐조등·wake 커밋 |
+
 ### INT-RENDER-012 — [DETECT][SURVIVAL][LOOP] 스프린트 C 그래픽스: 탐지·생존 HUD·피격 피드백·실패/귀환 화면 분리
 
 | 필드 | 내용 |

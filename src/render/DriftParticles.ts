@@ -113,6 +113,11 @@ export class DriftParticles {
     (this.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
   }
 
+  /** 심도 그레이딩용 불투명 배율 — 기본 opacity × scale (판정 무관 연출) */
+  setOpacityScale(scale: number): void {
+    this.material.opacity = ART.drift.opacity * scale;
+  }
+
   dispose(): void {
     this.geometry.dispose();
     this.material.dispose();

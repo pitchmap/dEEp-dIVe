@@ -64,7 +64,20 @@
   (상점·구매·저장 판정 없음, INT-RENDER-007 배선 대기)
 - `DriftParticles.ts` — 부유물(마린 스노우) — `THREE.Points` 1드로우, 결정적
   분포·카메라 상자 되감기(생성·소멸 0)·코드 생성 도트 텍스처. 수중 전용
-  (수면 위 숨김), 판정 무관 순수 연출
+  (수면 위 숨김), 판정 무관 순수 연출. 심도 그레이딩이 불투명 배율 조정
+- `RockShell.ts` — 협곡 암벽 시각 셸 + 해저 굴곡 지면 (렌더 전용 —
+  충돌은 계약 blocks 그대로): 서브디비전 박스 + 위치 기반 결정적 변위
+  (crack 없음), 기울어진 상단(아래 방향만)·잘린 모서리·층리 선반,
+  변형 패밀리 4종, 시각 오차 ≤0.7m. 블록당 메시 1(드로우 불변)·재질 공유
+- `PropellerWake.ts` — 프로펠러 기포·수류: InstancedMesh 풀 1드로우,
+  발생률·후방 속도·수명(wake 길이) 전부 계약 속도 비례, 후진 시 사출 반전.
+  풀 상한은 품질 단계 소유
+- 선수 탐조등(SubmarineVisual.mountHeadlight): 실광원 SpotLight 1개(§12.2
+  예약 슬롯, 그림자 없음) + 렌즈 Points + 가산 빔 콘 2개(꼭짓점 색 페이드).
+  기본 opt-in — 협곡 장면만 켠다. QA `?headlight=0`
+- 심도 그레이딩(`artDirection.depthGrading`): 정규화 심도(수면 0→해저 1)
+  stops 선형 보간 — 안개 색·거리, 방향광·반구광 감광, 부유물 불투명.
+  구간(수면/중간/심해/최심부)은 렌더 전용 — 게임플레이 심도 층 3층 계약 무관
 - `renderQuality.ts` — 저사양 fallback 사다리(`?quality=low`): 부유물 개수
   축소·림라이트 off·항법등 글로우 off·텍스처 512 상한. 값은
   `renderVisualParams.json` `artDirection.lowSpec` 소유 — 안개·재질

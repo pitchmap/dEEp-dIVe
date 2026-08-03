@@ -119,10 +119,18 @@ function applyHullShaderMods(
   };
 }
 
-/** 저사양 fallback용 연출 스위치 — 기본은 전체 연출 (renderQuality가 결정) */
+/** 품질 단계용 연출 스위치 — 기본은 전체 연출 (renderQuality가 결정) */
 export interface SubmarineVisualOptions {
   readonly rimEnabled?: boolean;
   readonly navGlowEnabled?: boolean;
+  /**
+   * 선수 탐조등 — 실제 SpotLight 1개(그림자 없음, §12.2 '서치라이트 예약'
+   * 슬롯 사용) + 시각용 쌍발 렌즈·빔 콘. **기본 꺼짐(opt-in)** — 협곡
+   * 장면만 켠다 (기지 독 장면은 기존 2등 구성 유지).
+   */
+  readonly headlightEnabled?: boolean;
+  /** 반투명 빔 콘 표시 (저사양 끔 — 실제 광원은 유지) */
+  readonly headlightBeamsEnabled?: boolean;
 }
 
 /**
@@ -163,6 +171,12 @@ export class SubmarineVisual {
    * 월드 위치·방향을 그대로 사용해야 하며 독자 오프셋 계산 금지.
    */
   readonly aimCameraSocket = new THREE.Object3D();
+  /**
+   * 선수 탐조등 실광원 — 소비 측(CanyonScene)이 레이어 전체 활성화를
+   * 담당한다 (자기 선체 layer 1 traverse 후에도 조준 카메라에서 조명이
+   * 꺼지지 않게). null = 탐조등 미장착 (기지 독 등).
+   */
+  headlight: THREE.SpotLight | null = null;
 
   private readonly disposables: Array<{ dispose(): void }> = [];
   /** 단계별 부품 그룹 — [0]=2단계 추가분, [1]=3단계 추가분 (1단계 = 기본형) */
@@ -264,6 +278,9 @@ export class SubmarineVisual {
     if (options.navGlowEnabled ?? true) {
       this.mountNavGlow();
     }
+    if (options.headlightEnabled ?? false) {
+      this.mountHeadlight(options.headlightBeamsEnabled ?? true);
+    }
 
     this.buildHullTierParts(material, accentMaterial);
     this.buildWeaponTierParts(accentMaterial);
@@ -283,6 +300,98 @@ export class SubmarineVisual {
     this.weaponTierParts.forEach((part, index) => {
       part.visible = weapon >= index + 2;
     });
+  }
+
+  /**
+   * 선수 탐조등 — 자동차 전조등 문법: 두 빔이 전방 바닥·좌우 암벽을 비춘다.
+   *  - 실제 광원: SpotLight **1개**(중앙, 그림자 없음) — §12.2 예산의 예약
+   *    슬롯. 시각적 쌍발감은 렌즈 2점 + 반투명 콘 2개가 만든다 (fallback
+   *    조합 방식 — spotlight 2개 금지).
+   *  - 빔 콘: 가산·depthWrite=false·꼭짓점 색 페이드(선수 밝음 → 원단 소멸),
+   *    선수 로컬 -Z 고정 (카메라 빌보드 아님). 수치는 params 소유.
+   */
+  private mountHeadlight(beamsEnabled: boolean): void {
+    const HEAD = ART.headlight;
+    const spot = new THREE.SpotLight(
+      HEAD.color,
+      HEAD.intensity,
+      HEAD.distanceMeters,
+      THREE.MathUtils.degToRad(HEAD.halfAngleDegrees),
+      HEAD.penumbra,
+      HEAD.decay,
+    );
+    spot.castShadow = false; // 그림자 비활성 (§12 실시간 그림자 미사용)
+    spot.position.set(0, HEAD.lensOffsetY, -SUBMARINE_HALF_LENGTH + 0.2);
+    const target = new THREE.Object3D();
+    target.position.set(0, HEAD.lensOffsetY - HEAD.aimDownMeters, -HEAD.distanceMeters);
+    this.root.add(target);
+    spot.target = target;
+    this.root.add(spot);
+    this.headlight = spot;
+
+    // 렌즈 글로우 2점 — Points 1드로우 (가산, 따뜻한 백색)
+    const lensPositions = new Float32Array([
+      -HEAD.lensOffsetX, HEAD.lensOffsetY, -SUBMARINE_HALF_LENGTH + 0.15,
+      HEAD.lensOffsetX, HEAD.lensOffsetY, -SUBMARINE_HALF_LENGTH + 0.15,
+    ]);
+    const lensGeometry = new THREE.BufferGeometry();
+    lensGeometry.setAttribute('position', new THREE.BufferAttribute(lensPositions, 3));
+    const lensTexture = buildDotTexture();
+    const lensMaterial = new THREE.PointsMaterial({
+      map: lensTexture,
+      color: HEAD.color,
+      size: 0.55,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      sizeAttenuation: true,
+    });
+    this.disposables.push(lensGeometry, lensMaterial, lensTexture);
+    const lens = new THREE.Points(lensGeometry, lensMaterial);
+    lens.renderOrder = 3;
+    this.root.add(lens);
+
+    if (!beamsEnabled) return;
+
+    // 빔 콘 2개 — 꼭짓점(렌즈)에서 전방으로 벌어지며 색이 0으로 페이드
+    const beamGeometry = new THREE.ConeGeometry(
+      HEAD.beam.endRadiusMeters,
+      HEAD.beam.lengthMeters,
+      12,
+      1,
+      true,
+    );
+    beamGeometry.translate(0, -HEAD.beam.lengthMeters / 2, 0); // 꼭짓점을 원점으로
+    // 꼭짓점 색 페이드 — 가산 혼합에서 검정 = 투명 (부드러운 원단 소멸)
+    const beamPosition = beamGeometry.getAttribute('position') as THREE.BufferAttribute;
+    const beamColors = new Float32Array(beamPosition.count * 3);
+    for (let i = 0; i < beamPosition.count; i += 1) {
+      const fade = 1 + beamPosition.getY(i) / HEAD.beam.lengthMeters; // 1(꼭짓점)→0(끝)
+      beamColors[i * 3] = fade;
+      beamColors[i * 3 + 1] = fade;
+      beamColors[i * 3 + 2] = fade;
+    }
+    beamGeometry.setAttribute('color', new THREE.BufferAttribute(beamColors, 3));
+    beamGeometry.rotateX(Math.PI / 2); // -Y(빔 진행) → -Z(선수 방향)
+    const beamMaterial = new THREE.MeshBasicMaterial({
+      color: HEAD.color,
+      vertexColors: true,
+      transparent: true,
+      opacity: HEAD.beam.opacity,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+    });
+    this.disposables.push(beamGeometry, beamMaterial);
+    const beamTilt = Math.atan2(HEAD.aimDownMeters, HEAD.distanceMeters);
+    for (const side of [-1, 1]) {
+      const beam = new THREE.Mesh(beamGeometry, beamMaterial);
+      beam.position.set(side * HEAD.lensOffsetX, HEAD.lensOffsetY, -SUBMARINE_HALF_LENGTH + 0.15);
+      beam.rotation.x = -beamTilt; // 전방 약간 아래 — 바닥·암벽에 닿는 빔
+      beam.renderOrder = 3;
+      this.root.add(beam);
+    }
   }
 
   /**

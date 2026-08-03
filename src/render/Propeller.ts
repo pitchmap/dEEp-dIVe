@@ -37,8 +37,10 @@ export class Propeller {
   private readonly disposables: Array<{ dispose(): void }> = [];
   /** 현재 회전 각속도 (rad/s, 부호 = 회전 방향) */
   private spinRadiansPerSecond = 0;
+  /** 회전 블러 디스크 — 고속에서만 나타나는 반투명 원판 (품질 옵션) */
+  private discMaterial: THREE.MeshBasicMaterial | null = null;
 
-  constructor() {
+  constructor(discBlurEnabled = true) {
     // 어두운 철 계열 — 레퍼런스 시트 재질군(선체 도장·철 장비·액센트 중 철).
     // 색은 artDirection.materials 소유 (코드 수치 복제 금지).
     const material = new THREE.MeshLambertMaterial({
@@ -67,6 +69,24 @@ export class Propeller {
       arm.add(blade);
       this.root.add(arm);
     }
+
+    if (discBlurEnabled) {
+      // 낮은 강도의 회전 blur 원판 — 고속 회전에서만 서서히 나타난다.
+      // 가산·depthWrite=false, 불투명 삼각형·네온 느낌 금지 (낮은 상한).
+      const discGeometry = new THREE.CircleGeometry(0.47, 16);
+      this.discMaterial = new THREE.MeshBasicMaterial({
+        color: 0x9fb6c2,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      });
+      this.disposables.push(discGeometry, this.discMaterial);
+      const disc = new THREE.Mesh(discGeometry, this.discMaterial);
+      disc.renderOrder = 3;
+      this.root.add(disc);
+    }
   }
 
   /**
@@ -94,6 +114,13 @@ export class Propeller {
     this.spinRadiansPerSecond += (target - this.spinRadiansPerSecond) * t;
 
     this.root.rotation.z += this.spinRadiansPerSecond * deltaSeconds;
+
+    if (this.discMaterial) {
+      // 회전 비율 35% 이상에서만 점진 등장 — 정지·공회전에서는 보이지 않는다
+      const spinRatio = Math.abs(this.spinRadiansPerSecond) / PARAMS.maxSpinRadiansPerSecond;
+      this.discMaterial.opacity =
+        0.16 * THREE.MathUtils.clamp((spinRatio - 0.35) / 0.65, 0, 1);
+    }
   }
 
   dispose(): void {
