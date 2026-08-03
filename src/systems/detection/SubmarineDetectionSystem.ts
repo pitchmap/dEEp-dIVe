@@ -142,7 +142,32 @@ export class SubmarineDetectionSystem
     this.setGauge(1);
   }
 
+  /**
+   * 액티브 핑 등 **의도적 노출 행위**로 인한 게이지 상승 (M2-5).
+   * 상승량은 호출자의 params가 소유한다 — 이 시스템은 크기를 만들지 않고
+   * 적용만 한다. unwired면 아무것도 하지 않는다(게이지 0 고정 계약 유지).
+   * 별도 노출 정본을 만들지 않기 위해 기존 `setGauge` 경로를 그대로 쓴다.
+   */
+  raiseGauge(amount: number): void {
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    if (!this.wired) return;
+    this.setGauge(this.gaugeValue + amount);
+  }
+
   /* ── 읽기 모델 ──────────────────────────────────────────────────── */
+
+  /**
+   * 현재 **내 소음 계수** (0~1) — 침묵 항행 배율까지 적용된 값이다.
+   *
+   * 소나 스코프의 유일한 입력이다 (17차 결의 4): 스코프는 '침묵 항행 중인가'
+   * 라는 불리언을 모르고 이 계수만 본다. 침묵 항행이 연결되면 여기에 공식
+   * 배율이 곱해지므로 스코프는 **코드 변경 0**으로 선명해진다.
+   * unwired면 0 — 계수를 발명하지 않는다.
+   */
+  get effectiveNoiseFactor(): number {
+    if (!this.wired) return 0;
+    return this.effectiveNoise(this.detectionParams as DetectionParams);
+  }
 
   /** HUD 소비 모델 — 값 복사본 (내부 상태 참조 없음) */
   hudView(): DetectionHudView {
