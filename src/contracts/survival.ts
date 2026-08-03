@@ -281,6 +281,41 @@ export interface EnemyAttackPort {
   requestAttack(request: EnemyAttackRequest): EnemyAttackOutcome;
 }
 
+/**
+ * C4 폭뢰 공격의 정본 runtime 경로 [INT-CORE-015]:
+ *
+ * ```
+ * DetectionStageSource (탐지·추적 상태 — contracts/detection.ts)
+ *   → DestroyerAIController: attack 상태에서 EnemyAttackRequest 생성만
+ *   → EnemyAttackPort (게임플레이 구현 — 쿨다운·사거리 판정)
+ *   → DepthChargeSystem (기존 계약, 게임플레이): 투하 → 신관(3.0s 하한 고정,
+ *     combat.json depthChargeFuseSeconds) → 폭발
+ *   → 거리·근접 판정: DamageCause 'direct' | 'near' (판정 = 게임플레이)
+ *   → DamageRequest { sourceType: 'enemyWeapon', proximity } 생성
+ *   → DamageReceiverPort.applyDamage — **모든 선체 피해의 단일 창구**
+ * ```
+ *
+ * 원칙:
+ *  - AI는 공격 **요청만** 만든다 — 피해량·폭발 반경·쿨다운을 소유하지 않는다.
+ *  - 즉시 피해·거리 무관 피해·AI 내부 직접 체력 차감 금지.
+ *  - 투하 패턴(동시 개수)은 combat.json `simultaneousDepthCharges`(확정 4)
+ *    상한을 따르고, direct/near **피해량은 미확정** — 아래 params가 null이면
+ *    폭발해도 피해는 `unwired`다 (연출만 있고 피해 없는 상태를 UI에
+ *    정상 피해로 위장하지 않는다).
+ */
+export interface DepthChargeDamageParams {
+  /** 직격 판정 반경(m) — 미확정이면 null */
+  readonly directRadiusMeters: number | null;
+  /** 근접 판정 반경(m) — 미확정이면 null */
+  readonly nearRadiusMeters: number | null;
+  /** 직격 피해량 — 미확정이면 null */
+  readonly directDamage: number | null;
+  /** 근접 피해량 — 미확정이면 null */
+  readonly nearDamage: number | null;
+  /** 투하 쿨다운(초) — 미확정이면 null */
+  readonly dropCooldownSeconds: number | null;
+}
+
 /* ── 4-8. 생존 HUD 읽기 모델 ──────────────────────────────── */
 
 /** 경고 키 — 문구·색·이펙트는 그래픽스 소유(계약에 문자열 없음) */
@@ -382,6 +417,33 @@ export interface SortieFailurePort {
 /** 플레이어 생사 소스 — 적 AI·표적 판정이 소비한다(중복 상태 금지) */
 export interface PlayerAliveSource {
   readonly isPlayerAlive: boolean;
+}
+
+/* ── 4-12. DEBRIEF 읽기 모델 (C6·C7 화면 분리) ────────────── */
+
+/** 정산 국면의 종류 — 'none'은 정산 중이 아님 */
+export type DebriefKind = 'none' | 'returned' | 'aborted' | 'destroyed';
+
+/**
+ * DEBRIEF 전용 읽기 모델 — 그래픽스가 `isDestroyed`를 추측해 화면을
+ * 고르지 않게 하는 명시적 계약이다. `MetaState`는 확장하지 않는다.
+ *
+ *  - 정상 귀환·중도 귀환 화면: `kind: 'returned' | 'aborted'` + `settlement`
+ *  - 파괴 실패 화면: `kind: 'destroyed'` + `failure`(failureReason 포함)
+ *  - 저장 상태: `saveStatus` + `canRetrySave` (실패 시 재시도 UI 노출 근거)
+ *
+ * 그래픽스는 이 모델을 **읽기만** 한다 — 어떤 필드도 쓰지 않으며,
+ * 재시도 명령은 조립부가 제공하는 command 경유다.
+ */
+export interface DebriefReadModel {
+  readonly kind: DebriefKind;
+  /** 정산 결과 스냅샷 (MetaLoop 정산 정본의 값) — 정산 전이면 null */
+  readonly settlement: import('./meta').SortieSettlement | null;
+  /** 파괴 실패 스냅샷 — 파괴가 아니면 null */
+  readonly failure: SortieFailureReport | null;
+  readonly saveStatus: FailureSaveStatus;
+  /** 저장 실패 상태라 재시도가 가능한가 */
+  readonly canRetrySave: boolean;
 }
 
 /* ── 4-11. 출항 초기화 ────────────────────────────────────── */
