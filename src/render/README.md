@@ -58,6 +58,18 @@
   보존), 해제 시 layer 복원 + `CameraRig.beginReturnFrom` 자연 복귀
 - `BaseSceneView.ts` — 기지 화면 경량 3D 배경 — 메타 시각 상태 소비 전용
   (상점·구매·저장 판정 없음, INT-RENDER-007 배선 대기)
+- `DriftParticles.ts` — 부유물(마린 스노우) — `THREE.Points` 1드로우, 결정적
+  분포·카메라 상자 되감기(생성·소멸 0)·코드 생성 도트 텍스처. 수중 전용
+  (수면 위 숨김), 판정 무관 순수 연출
+- `renderQuality.ts` — 저사양 fallback 사다리(`?quality=low`): 부유물 개수
+  축소·림라이트 off·항법등 글로우 off. 값은 `renderVisualParams.json`
+  `artDirection.lowSpec` 소유 — 안개·재질 기본색·HUD는 품질 무관 동일
+- 아트 디렉션(`renderVisualParams.json artDirection`): 연속 심도 안개
+  (수면↔해저 보간 — 전경·중경·후경 명도 분리), HemisphereLight 보조 환경광
+  (조명 예산 2등 불변 — AmbientLight 재도입 금지), 벽/바닥/선체 팔레트+미세
+  emissive, 프레넬 림라이트(Lambert onBeforeCompile — 추가 광원·드로우 0),
+  항법등 가산 글로우(주황 식별색), ACES 톤 매핑(Renderer — 후처리 패스 0).
+  실제 스크린 스페이스 bloom은 §12 예산상 미도입(emissive·가산으로 대체)
 - `boss/` — 보스 분절 애니 스파이크(강체 5분절 계층 트랜스폼 + 사인파,
   스켈레탈·스키닝·관절 물리 없음, 충돌은 게임플레이 단일 캡슐 전제).
   A안 `SegmentedSwimMotion` / B안 `BossMotionFallback`(기본 비활성) —
