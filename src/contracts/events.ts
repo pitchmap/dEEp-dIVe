@@ -25,6 +25,7 @@ export type DetectionStage = 'safe' | 'searching' | 'detected';
 
 import type {
   BossPhase,
+  InteractionTargetKind,
   LootSource,
   MetaStateId,
   SortieSettlement,
@@ -164,6 +165,22 @@ export interface GameEvents {
    *  구 'sortieLaunch' cause 폐기). 그 외 자동·주기 저장 없음.
    *  구독: SaveSystem(툴링) */
   saveRequested: { cause: 'settlement' | 'rarePart' };
+
+  /** E 키 상호작용 회수 확정 — 2초 홀드 완료 1회 (발행: 게임플레이
+   *  `InteractionSystem` — 16차 결의 2-4). 조준·접근·홀드 중단으로는
+   *  발행하지 않는다. 구독: 리드 단서 진행(`kind === 'clue'`만 소비),
+   *  economy 판정(금괴·salvage 보상), 렌더(회수 연출), 오디오.
+   *  회수 중 소음 발생은 게임플레이가 기존 소음 경로로 별도 처리한다 */
+  interactionCollected: { kind: InteractionTargetKind; targetId: string; x: number; z: number };
+
+  /** M2 단서 진행 변경 — 반영 성공 시 1회 (발행: 리드 BossProgressStore).
+   *  중복·미지 단서는 발행하지 않는다. 구독: UI(0/3 표시), 렌더 */
+  bossCluesChanged: { collected: number; required: number; unlocked: boolean };
+
+  /** 보스 격파 — 격파 1회당 정확히 1회 (발행: 리드 보스 코어).
+   *  구독: composition 승리 브리지(진행 기록 + 기존 lootDropped 보상 경로),
+   *  렌더(격파 연출), 오디오 */
+  bossDefeated: { bossId: string; x: number; z: number };
 
   /** 보스 단계 전환 (발행: 보스 AI — 리드). 구독: 렌더(단계 연출),
    *  오디오(침묵 전환·음정 하강), UI */

@@ -22,6 +22,14 @@ export type FactionId = 'hostile' | 'neutral' | 'patrol';
 /** 드롭 발생원 (6차 결의 4 — MVP 동사 '부순다'·'줍는다' 2종의 출처) */
 export type LootSource = 'cargoShip' | 'seabedCache' | 'wreckSalvage' | 'elite' | 'boss';
 
+/**
+ * E 키 상호작용 대상 4종 [확정 16차 결의 2-4 — 금괴·salvage·단서·심층
+ * 지점이 공유하는 단일 `InteractionSystem`, M2 배관 겸용].
+ * 회수 판정·프롬프트·홀드는 게임플레이 소유, 단서 진행·해금 게이트는
+ * 리드(`meta/BossProgressStore`), 보상 경제는 economy 판정 소유.
+ */
+export type InteractionTargetKind = 'goldCache' | 'salvage' | 'clue' | 'deepSite';
+
 /** 재화 묶음 — 이원화 [확정 6차 결의 6]: 일반 크레딧 / 희귀 부품 */
 export interface CurrencyBundle {
   readonly credits: number;
