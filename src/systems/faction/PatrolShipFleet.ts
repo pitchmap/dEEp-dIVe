@@ -31,6 +31,8 @@ import type {
   SurfaceShipMotionPortFactory,
 } from '../../contracts/guard';
 import { PLAYER_ENTITY_ID } from '../../contracts/guard';
+import type { DetectionStageSource } from '../../contracts/detection';
+import type { PlayerAliveSource } from '../../contracts/survival';
 import { isWithinCanyonBounds, type CanyonHorizontalBounds } from '../collision/canyonBounds';
 import type { TargetRegistry } from '../TargetRegistry';
 import {
@@ -61,6 +63,13 @@ export class PatrolShipFleet implements SurfaceShipMotionPortFactory {
   private readonly profile: PatrolShipMotionProfile | null;
   private readonly bounds: CanyonHorizontalBounds | null;
   private records: PatrolShipRecord[] = [];
+  /**
+   * [C3] 탐지 단계 소스 — AI는 이 **stage만** 읽는다. 미연결이면 관측
+   * 가능 여부를 탐지로 제한하지 않는다(B5 이전 동작 유지).
+   */
+  private detectionStage: DetectionStageSource | null = null;
+  /** [C4] 플레이어 생사 정본 — 미연결이면 생존으로 본다 */
+  private aliveSource: PlayerAliveSource | null = null;
 
   constructor(
     targets: TargetRegistry,
@@ -177,21 +186,55 @@ export class PatrolShipFleet implements SurfaceShipMotionPortFactory {
   }
 
   /**
-   * 표적 생존 여부. 플레이어는 항상 생존으로 본다 — 선체 체력·격침 판정은
-   * 스프린트 C 범위이며 여기서 만들지 않는다. 그 외 id는 표적 등록소에서
-   * 찾고, 없으면 소멸한 것으로 본다.
+   * [C3] 탐지 단계 소스 연결 (조립부). AI는 stage만 읽으며 탐지 수치·거리
+   * 감쇠·감소율을 계산하지 않는다. 별도 상태 머신을 만들지 않는다 —
+   * 전이는 전적으로 `DestroyerAIController`가 이 입력으로 수행한다.
+   */
+  attachDetectionStageSource(source: DetectionStageSource | null): void {
+    this.detectionStage = source;
+  }
+
+  get detectionStageWired(): boolean {
+    return this.detectionStage !== null;
+  }
+
+  /**
+   * [C4] 플레이어 생사 정본 연결 (조립부 `attachPlayerAliveSource`).
+   * 연결되면 `isTargetAlive(PLAYER_ENTITY_ID)`의 항상 true 경로가 사라진다.
+   */
+  attachPlayerAliveSource(source: PlayerAliveSource | null): void {
+    this.aliveSource = source;
+  }
+
+  get playerAliveWired(): boolean {
+    return this.aliveSource !== null;
+  }
+
+  /**
+   * 표적 생존 여부. 플레이어는 **`PlayerAliveSource` 정본**을 읽는다 —
+   * 별도 체력 상태를 두지 않으며, 미연결일 때만 생존으로 본다(배선 전 동작
+   * 유지). 그 외 id는 표적 등록소에서 찾고, 없으면 소멸한 것으로 본다.
    */
   private isTargetAlive(targetEntityId: number): boolean {
-    if (targetEntityId === PLAYER_ENTITY_ID) return true;
+    if (targetEntityId === PLAYER_ENTITY_ID) {
+      return this.aliveSource === null || this.aliveSource.isPlayerAlive;
+    }
     return this.targets.list.some((target) => target.id === targetEntityId);
   }
 
   /**
-   * 표적 위치 — 탐지 판정이 아니다(시야·소나 없음). 등록된 개체의 현재
-   * 좌표를 그대로 준다. 알 수 없으면 null → AI가 마지막 확인 위치로 간다.
+   * 표적 위치 — **탐지 결과의 소비 지점**이다(자체 탐지 계산 없음).
+   *
+   * 플레이어는 탐지 단계가 `detected`일 때만 관측 가능하다 — 계약의
+   * `alert → attack: stage 'detected' + 표적 위치 관측 가능` 규칙을 입력으로
+   * 만족시킨다. 관측 불가면 null을 주고, AI가 스스로 마지막 확인 위치로
+   * 접근(alert)하거나 상실(lost)로 간다 — 전이 로직은 복제하지 않는다.
+   * 파괴된 플레이어는 관측 불가다.
    */
   private getTargetPosition(targetEntityId: number): { readonly x: number; readonly z: number } | null {
     if (targetEntityId === PLAYER_ENTITY_ID) {
+      if (!this.isTargetAlive(targetEntityId)) return null;
+      if (this.detectionStage !== null && this.detectionStage.stage !== 'detected') return null;
       return { x: this.player.positionX, z: this.player.positionZ };
     }
     const target = this.targets.list.find((candidate) => candidate.id === targetEntityId);
