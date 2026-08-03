@@ -41,6 +41,9 @@ import type {
   InteractableTarget,
   InteractionCompletion,
 } from '../interaction/InteractionSystem';
+import type { ClueDefinition } from '../progress/CluePickupProgress';
+import type { FarmingRewardEntry } from '../economy/SectorFarmingRewards';
+import type { SonarContact } from '../sonar/SonarScopeSystem';
 import type { DetectionStage } from '../../contracts/events';
 import type {
   DamageRequest,
@@ -68,7 +71,7 @@ import { shipPlacementsFromOfficialCargo } from '../faction/shipPlacements';
 
 /** 공식 세력 3종 — 계약 정본과 대조하는 검증 상수 */
 const OFFICIAL_FACTIONS: readonly FactionId[] = ['hostile', 'neutral', 'patrol'];
-import { BossWeakPointTarget, provisionalBossWeakPointConfig } from '../BossWeakPointTarget';
+import { BossWeakPointTarget } from '../BossWeakPointTarget';
 import { EconomySystem } from '../economy/EconomySystem';
 import { EquipmentSystem } from '../EquipmentSystem';
 import { computeShipBoxPush } from '../collision/shipHullBox';
@@ -2359,7 +2362,22 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
   // 37. [BOSS] 약점 판정 — 활성/비활성 구분, 포트 계약만 소비 (AI 내부 접근 없음)
   {
     const port = { phase: 1, weakPointOpen: false };
-    const boss = new BossWeakPointTarget(port, provisionalBossWeakPointConfig(500, 0, 12, -60));
+    const placement = { id: 500, x: 0, y: 12, z: -60 };
+
+    // [M2-3] 배율 미주입 → 판정 반경 0·피해 0. 구분(개방/닫힘)은 그대로
+    //        성립한다 — 확정되지 않은 것은 배율뿐이기 때문이다.
+    const unwiredBoss = new BossWeakPointTarget(port, placement, null);
+    unwiredBoss.onTorpedoHit(0, -60, 2.0);
+    check(
+      '[BOSS] 약점 배율 미주입 → unwired (반경 0·피해 0, 임시 배율 부활 0)',
+      !unwiredBoss.wired &&
+        unwiredBoss.hitRadius === 0 &&
+        unwiredBoss.accumulatedDamage === 0 &&
+        unwiredBoss.lastHitKind === 'hull',
+      `wired=${unwiredBoss.wired}, radius=${unwiredBoss.hitRadius}, dmg=${unwiredBoss.accumulatedDamage}`,
+    );
+
+    const boss = new BossWeakPointTarget(port, placement, BOSS_WEAK_POINT_FIXTURE);
     const targets = new TargetRegistry();
     targets.register(boss); // 기존 어뢰 단일 판정 경로 재사용 가능
     const hitLog: string[] = [];
@@ -2389,11 +2407,28 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       `hull=${boss.hullHits}, weak=${weakHitsAfter}, last=${lastKindAfter}`,
     );
 
-    const expected = 2.0 * 0.25 + 2.0 * 2.0; // 닫힘 감쇠 + 개방 증폭 (임시 배율)
+    // 배율은 **주입값에서만** 온다 — 검증도 픽스처를 참조하지 코드에
+    // 숫자를 다시 적지 않는다(이관이 값 복제로 되돌아가지 않게 한다).
+    const expected =
+      2.0 * (BOSS_WEAK_POINT_FIXTURE.closedHullDamageMultiplier ?? 0) +
+      2.0 * (BOSS_WEAK_POINT_FIXTURE.weakPointDamageMultiplier ?? 0);
     check(
       '[BOSS] 약점 피해 증폭·선체 감쇠 누적 — 그래픽스 구독용 명시 상태 제공',
-      Math.abs(boss.accumulatedDamage - expected) < 1e-9,
+      Math.abs(boss.accumulatedDamage - expected) < 1e-9 &&
+        boss.hitRadius === BOSS_WEAK_POINT_FIXTURE.hitRadiusMeters,
       `damage=${boss.accumulatedDamage} (기대 ${expected})`,
+    );
+
+    // 재출항 초기화 — 배치·params는 유지하고 피격 누적만 비운다
+    boss.resetForNewSortie();
+    check(
+      '[BOSS] 재출항 초기화 — 피격 누적만 비우고 판정 수치는 유지',
+      boss.accumulatedDamage === 0 &&
+        boss.weakPointHits === 0 &&
+        boss.hullHits === 0 &&
+        boss.lastHitKind === null &&
+        boss.wired,
+      `dmg=${boss.accumulatedDamage}, wired=${boss.wired}`,
     );
   }
 
@@ -4423,8 +4458,400 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     );
   }
 
+  /* ═══ M2 2단계 — 단서 획득 (획득만; 개방 게이트는 리드 소유) ═══════ */
+
+  // 70. [LOOP] 단서 3종 획득원 — 고유 id·중복 불가·재출항 복원
+  {
+    const clueTargets = [
+      interactable('wreck-salvage-1', 'salvage'),
+      interactable('hv-transport-1', 'clue'),
+      interactable('deep-survey-1', 'deepSurvey'),
+      interactable('gold-1', 'gold'),
+    ];
+    const rig = makeInteractionRig(params, clueTargets);
+    rig.systems.attachInteractionParams(INTERACTION_FIXTURE);
+
+    const beforeDefs = rig.systems.clueProgressReadModel();
+    check(
+      '[LOOP] 단서 정의 미주입 → unwired (단서 id·필요 개수 발명 0)',
+      beforeDefs.unwired &&
+        beforeDefs.requiredCount === 0 &&
+        beforeDefs.collectedCount === 0 &&
+        !beforeDefs.allCollected,
+      `required=${beforeDefs.requiredCount}, unwired=${beforeDefs.unwired}`,
+    );
+
+    rig.systems.attachClueDefinitions(CLUE_DEFINITION_FIXTURE);
+    const holdFrames = Math.round((INTERACTION_FIXTURE.holdSeconds ?? 0) * 60) + 3;
+    // 필요 개수는 상수가 아니라 **정의 개수**에서 나온다 (코드에 3 없음)
+    check(
+      '[LOOP] 필요 단서 수 = 주입된 정의 개수 (코드 상수 아님)',
+      rig.systems.clueProgressReadModel().requiredCount === CLUE_DEFINITION_FIXTURE.length &&
+        !rig.systems.clueProgressReadModel().unwired,
+      `required=${rig.systems.clueProgressReadModel().requiredCount}`,
+    );
+
+    // 단서 3개를 차례로 회수 — 회수 절차는 InteractionSystem 하나뿐이다
+    const collected: string[] = [];
+    rig.systems.clueProgress.onClueCollected((entry) => collected.push(entry.clueId));
+    // 대상 수만큼 회수 사이클을 돌린다 (한 사이클 = 홀드 시작 → 완료)
+    for (let cycle = 0; cycle < clueTargets.length; cycle += 1) {
+      rig.moveActorTo(0);
+      rig.hold(false);
+      rig.systems.update(1 / 60);
+      rig.hold(true);
+      for (let i = 0; i < holdFrames; i += 1) rig.systems.update(1 / 60);
+    }
+    const afterAll = rig.systems.clueProgressReadModel();
+    check(
+      '[LOOP] 단서 3종(난파선·고가치 수송선·심층 지점) 획득 — 금괴는 단서가 아님',
+      afterAll.collectedCount === CLUE_DEFINITION_FIXTURE.length &&
+        afterAll.allCollected &&
+        afterAll.pendingClueIds.length === 0 &&
+        collected.join(',') === 'clue-wreck,clue-transport,clue-deep' &&
+        rig.completions.length === 4,
+      `획득=${collected.join('/')}, 완료=${rig.completions.length}`,
+    );
+
+    // 리드 게이트 단면 — 판정이 아니라 진행 상태만 제공한다
+    const gateSurface = rig.systems.clueProgressSource;
+    check(
+      '[LOOP] 리드 게이트 단면 = 진행 상태만 (보스 구역 개방 판정 미포함)',
+      gateSurface.collectedCount === CLUE_DEFINITION_FIXTURE.length &&
+        gateSurface.requiredCount === CLUE_DEFINITION_FIXTURE.length &&
+        gateSurface.allCollected &&
+        !Object.getOwnPropertyNames(Object.getPrototypeOf(rig.systems.clueProgress) as object)
+          .some((name) => /bossgate|opensector|unlockboss/i.test(name)),
+      `collected=${gateSurface.collectedCount}/${gateSurface.requiredCount}`,
+    );
+
+    // 중복 획득 불가 — 완료 통지를 직접 재투입해도 진행이 오르지 않는다
+    const duplicate = rig.systems.clueProgress.handleCompletion({
+      interactableId: 'wreck-salvage-1',
+      kind: 'salvage',
+      positionX: 0,
+      positionY: 0,
+      positionZ: 0,
+      completedAt: 99,
+    });
+    check(
+      '[LOOP] 같은 단서 중복 획득 불가 — 진행 개수 불변',
+      !duplicate &&
+        rig.systems.clueProgressReadModel().collectedCount === CLUE_DEFINITION_FIXTURE.length,
+      `duplicate=${duplicate}`,
+    );
+
+    // 재출항 — 단서는 **누적**이므로 지워지지 않는다
+    rig.systems.resetSortieSession(params);
+    check(
+      '[LOOP] 재출항 후에도 단서 진행 유지 (출항 한정 상태가 아니다)',
+      rig.systems.clueProgressReadModel().collectedCount === CLUE_DEFINITION_FIXTURE.length,
+      `collected=${rig.systems.clueProgressReadModel().collectedCount}`,
+    );
+
+    // 저장 복원 — 게임플레이는 저장하지 않고 복원만 받는다
+    const restoredRig = makeInteractionRig(params, clueTargets);
+    restoredRig.systems.attachClueDefinitions(CLUE_DEFINITION_FIXTURE);
+    restoredRig.systems.restoreCollectedClues(['clue-wreck', 'clue-deep']);
+    const restoredModel = restoredRig.systems.clueProgressReadModel();
+    const clueSurface = Object.getOwnPropertyNames(
+      Object.getPrototypeOf(restoredRig.systems.clueProgress) as object,
+    );
+    check(
+      '[LOOP] 재출항 후 단서 복원 — 저장 API 0개(저장 정본은 기존 경로 소유)',
+      restoredModel.collectedCount === 2 &&
+        restoredModel.pendingClueIds.join(',') === 'clue-transport' &&
+        !restoredModel.allCollected &&
+        !clueSurface.some((name) => /^save/i.test(name)),
+      `collected=${restoredModel.collectedCount}, pending=${restoredModel.pendingClueIds.join('/')}`,
+    );
+  }
+
+  /* ═══ M2 4단계 — 파밍 보상 경제 (해역당 상한) ═════════════════════ */
+
+  // 71. [ECON] 파밍 보상 — 기존 단일 재화·해역 상한·상한 미주입 시 무지급
+  {
+    const farmTargets = [
+      interactable('gold-1', 'gold'),
+      interactable('gold-2', 'gold'),
+      interactable('clue-target-1', 'clue'),
+    ];
+    const rig = makeInteractionRig(params, farmTargets);
+    rig.systems.attachInteractionParams(INTERACTION_FIXTURE);
+    rig.systems.attachFarmingRewards(FARMING_REWARD_FIXTURE);
+    const holdFrames = Math.round((INTERACTION_FIXTURE.holdSeconds ?? 0) * 60) + 3;
+
+    // 상한 미주입 → 지급하지 않는다 (무제한 지급은 16차 결의가 거부한 방향)
+    const unwiredOutcome = rig.systems.farmingRewards.handleCompletion({
+      interactableId: 'gold-1',
+      kind: 'gold',
+      positionX: 0,
+      positionY: 0,
+      positionZ: 0,
+      completedAt: 1,
+    });
+    check(
+      '[ECON] 파밍 상한 미주입 → unwired 무지급 (상한 없는 지급 금지)',
+      unwiredOutcome.status === 'unwired' &&
+        !rig.systems.farmingRewards.wired &&
+        rig.systems.economy.wallet.sortieCredits === 0,
+      `status=${unwiredOutcome.status}, 지갑=${rig.systems.economy.wallet.sortieCredits}`,
+    );
+
+    rig.systems.attachFarmingRewardParams(FARMING_CAP_FIXTURE);
+    const cap =
+      (FARMING_CAP_FIXTURE.combatRewardAverageCredits ?? 0) *
+      (FARMING_CAP_FIXTURE.sectorCapRatioOfCombatAverage ?? 0);
+    check(
+      '[ECON] 해역 상한 = 전투 보상 평균 × 비율 (코드 상수 아님)',
+      Math.abs(rig.systems.farmingRewards.sectorCapCredits - cap) < 1e-9 &&
+        rig.systems.farmingRewards.wired,
+      `cap=${rig.systems.farmingRewards.sectorCapCredits} (기대 ${cap})`,
+    );
+
+    // 회수로 지급 — 신규 화폐 없이 기존 지갑(RunEconomy)에만 적립된다
+    for (let cycle = 0; cycle < farmTargets.length; cycle += 1) {
+      rig.moveActorTo(0);
+      rig.hold(false);
+      rig.systems.update(1 / 60);
+      rig.hold(true);
+      for (let i = 0; i < holdFrames; i += 1) rig.systems.update(1 / 60);
+    }
+    const paid = rig.systems.farmingRewards.paidThisSector;
+    const forfeited = rig.systems.farmingRewards.forfeitedThisSector;
+    check(
+      '[ECON] 파밍 보상은 기존 단일 재화로 지급 — 상한 초과분은 지급되지 않는다',
+      Math.abs(paid - cap) < 1e-9 &&
+        forfeited > 0 &&
+        Math.abs(rig.systems.economy.wallet.sortieCredits - paid) < 1e-9 &&
+        rig.systems.farmingRewards.remainingCap === 0,
+      `지급=${paid}, 미지급=${forfeited}, 지갑=${rig.systems.economy.wallet.sortieCredits}`,
+    );
+
+    // 단서·심층 지점은 재화 대상이 아니다 (진행 상태이지 수입이 아님)
+    const clueOutcome = rig.systems.farmingRewards.handleCompletion({
+      interactableId: 'clue-target-1',
+      kind: 'clue',
+      positionX: 0,
+      positionY: 0,
+      positionZ: 0,
+      completedAt: 2,
+    });
+    check(
+      '[ECON] 단서 회수는 재화 지급 대상이 아니다 (수입원 확장 0)',
+      clueOutcome.status === 'noReward',
+      `status=${clueOutcome.status}`,
+    );
+
+    // 해역 예산은 출항마다 다시 찬다
+    rig.systems.resetSortieSession(params);
+    check(
+      '[ECON] 재출항 시 해역 파밍 예산 복구 — 지급 이력 초기화',
+      rig.systems.farmingRewards.paidThisSector === 0 &&
+        Math.abs(rig.systems.farmingRewards.remainingCap - cap) < 1e-9,
+      `지급=${rig.systems.farmingRewards.paidThisSector}`,
+    );
+  }
+
+  /* ═══ M2 5단계 — 소나 스코프 (패시브 + 액티브 핑) ═════════════════ */
+
+  // 72. [LOOP] 스코프 — 소음원만 패시브·핑은 전체·대가는 기존 게이지
+  {
+    const rig = makeInteractionRig(params);
+    rig.systems.attachSonarContacts(() => SONAR_CONTACT_FIXTURE);
+    rig.systems.player.resetTo({ x: 0, y: 0, z: 0, headingRadians: 0 });
+
+    const unwiredModel = rig.systems.sonarScopeReadModel();
+    const unwiredPing = rig.systems.requestSonarPing();
+    check(
+      '[LOOP] 스코프 params 미주입 → unwired (표시 0·핑 불가)',
+      unwiredModel.unwired &&
+        unwiredModel.blips.length === 0 &&
+        !unwiredModel.pingReady &&
+        unwiredPing.status === 'unwired',
+      `unwired=${unwiredModel.unwired}, blips=${unwiredModel.blips.length}`,
+    );
+
+    rig.systems.attachSonarScopeParams(SONAR_SCOPE_FIXTURE);
+    const passive = rig.systems.sonarScopeReadModel();
+    const passiveIds = passive.blips.map((blip) => blip.contactId).sort().join(',');
+    check(
+      '[LOOP] 패시브 = 소음원만 표시 · 거리 없음 (소리 없는 대상은 안 보인다)',
+      passiveIds === 'boss-1,ship-1' &&
+        passive.blips.every((blip) => blip.distanceMeters === null && !blip.fromActivePing),
+      `표시=${passiveIds}`,
+    );
+
+    // 낙하 중 폭뢰는 정책 불리언이 false/미주입이면 패시브에 찍히지 않는다
+    check(
+      '[LOOP] 낙하 폭뢰 패시브 표시 = params 소유 · 초기값 false (17차 결의 4)',
+      SONAR_SCOPE_FIXTURE.depthChargeOnPassiveScope === false &&
+        !passive.blips.some((blip) => blip.kind === 'depthCharge'),
+      `폭뢰 표시=${passive.blips.some((blip) => blip.kind === 'depthCharge')}`,
+    );
+
+    // 방위 — 선수 기준 상대 방위. ship-1은 정선수(-Z) 방향에 있다
+    const shipBlip = passive.blips.find((blip) => blip.contactId === 'ship-1');
+    check(
+      '[LOOP] 방위는 선수 기준 상대각 (축 규약 함수 사용, 벡터 복제 0)',
+      shipBlip !== undefined && Math.abs(shipBlip.bearingRadians) < 1e-9,
+      `bearing=${shipBlip?.bearingRadians}`,
+    );
+
+    // 번짐은 **내 소음 계수 하나**의 함수다 — 침묵 항행 불리언을 모른다
+    const scopeSurface = new Set(
+      Object.getOwnPropertyNames(Object.getPrototypeOf(rig.systems.sonarScope) as object),
+    );
+    check(
+      '[LOOP] 스코프는 침묵 항행을 모른다 — 입력은 noiseFactor 하나 (17차 결의 4)',
+      scopeSurface.has('attachNoiseFactorSource') &&
+        ![...scopeSurface].some((name) => /silent/i.test(name)) &&
+        passive.blips.every(
+          (blip) =>
+            Math.abs(
+              blip.bearingSpreadRadians -
+                (SONAR_SCOPE_FIXTURE.passiveBearingSpreadRadiansAtMaxNoise ?? 0) *
+                  passive.noiseFactor,
+            ) < 1e-9,
+        ),
+      `noiseFactor=${passive.noiseFactor}`,
+    );
+
+    // 계수가 오르면 번짐이 그에 비례해 커진다 — 침묵 항행이 연결되면 이
+    // 계수에 공식 배율이 곱해지므로 스코프는 코드 변경 0으로 선명해진다.
+    rig.systems.sonarScope.attachNoiseFactorSource({ effectiveNoiseFactor: 0.5 });
+    const noisy = rig.systems.sonarScopeReadModel();
+    const maxSpread = SONAR_SCOPE_FIXTURE.passiveBearingSpreadRadiansAtMaxNoise ?? 0;
+    const quietSpread = passive.blips[0]?.bearingSpreadRadians ?? -1;
+    const noisySpread = noisy.blips[0]?.bearingSpreadRadians ?? -1;
+    check(
+      '[LOOP] 번짐 = 내 소음 계수에 비례 — 계수가 낮을수록 선명 (침묵 항행 자동 반영)',
+      noisy.noiseFactor === 0.5 &&
+        Math.abs(noisySpread - maxSpread * 0.5) < 1e-9 &&
+        noisySpread > quietSpread,
+      `계수 ${passive.noiseFactor}→${noisy.noiseFactor}, 번짐 ${quietSpread}→${noisySpread}`,
+    );
+    // 계수 공급을 탐지 시스템으로 되돌린다 (정본은 하나뿐이다)
+    rig.systems.sonarScope.attachNoiseFactorSource(rig.systems.detection);
+
+    // 액티브 핑 — 전체 표시(거리 포함) + 대가로 **기존 탐지 게이지** 상승
+    rig.systems.detection.attachTuningParams(DETECTION_TUNING_FIXTURE);
+    const gaugeBefore = rig.systems.detection.gauge;
+    const ping = rig.systems.requestSonarPing();
+    const active = rig.systems.sonarScopeReadModel();
+    const activeIds = active.blips.map((blip) => blip.contactId).sort().join(',');
+    check(
+      '[LOOP] 액티브 핑 = 보상·단서·지형·보스 전체 정확 표시 (거리 포함·번짐 0)',
+      ping.status === 'pinged' &&
+        activeIds === 'boss-1,depthcharge-1,reward-1,ship-1,terrain-1' &&
+        active.blips.every(
+          (blip) => blip.fromActivePing && blip.distanceMeters !== null && blip.bearingSpreadRadians === 0,
+        ),
+      `표시=${activeIds}, status=${ping.status}`,
+    );
+    check(
+      '[LOOP] 핑의 대가 = 기존 탐지 게이지 상승 (별도 노출 정본 0)',
+      rig.systems.detection.gauge - gaugeBefore ===
+        (SONAR_SCOPE_FIXTURE.activePingDetectionGaugeRise ?? 0) &&
+        rig.systems.detection.wired,
+      `게이지 ${gaugeBefore} → ${rig.systems.detection.gauge}`,
+    );
+
+    // 약점 개방 상태는 보스 접점에서만 노출된다 (M2 3단계 접합면)
+    const bossBlip = active.blips.find((blip) => blip.kind === 'boss');
+    check(
+      '[LOOP] 액티브 핑이 보스 약점 개방 상태를 노출 (판정은 BossWeakPointTarget 소유)',
+      bossBlip?.weakPointOpen === true &&
+        active.blips.filter((blip) => blip.kind !== 'boss').every((blip) => blip.weakPointOpen === null),
+      `weakPointOpen=${bossBlip?.weakPointOpen}`,
+    );
+
+    // 쿨다운 — 표시가 끝나도 쿨다운이 남아 있고 그동안 핑이 거부된다
+    for (let i = 0; i < Math.round((SONAR_SCOPE_FIXTURE.activePingDisplaySeconds ?? 0) * 60) + 3; i += 1) {
+      rig.systems.update(1 / 60);
+    }
+    const afterDisplay = rig.systems.sonarScopeReadModel();
+    const blocked = rig.systems.requestSonarPing();
+    check(
+      '[LOOP] 표시 시간 종료 → 패시브 복귀 · 쿨다운 중 재핑 거부',
+      afterDisplay.activePingRemainingSeconds === 0 &&
+        afterDisplay.blips.every((blip) => !blip.fromActivePing) &&
+        afterDisplay.cooldownRemainingSeconds > 0 &&
+        blocked.status === 'cooldown',
+      `잔여표시=${afterDisplay.activePingRemainingSeconds}, 쿨다운=${afterDisplay.cooldownRemainingSeconds}, status=${blocked.status}`,
+    );
+
+    // 재출항 — 표시·쿨다운은 출항 한정 상태다
+    rig.systems.resetSortieSession(params);
+    check(
+      '[LOOP] 재출항 시 핑 표시·쿨다운 초기화',
+      rig.systems.sonarScopeReadModel().cooldownRemainingSeconds === 0 &&
+        rig.systems.sonarScopeReadModel().pingReady,
+      `쿨다운=${rig.systems.sonarScopeReadModel().cooldownRemainingSeconds}`,
+    );
+  }
+
   return results;
 }
+
+/**
+ * 검증 전용 약점 판정 **픽스처** — production params가 아니다.
+ * `params/boss.json`이 아직 없으므로 production은 unwired다 (INT-GAME-016).
+ */
+const BOSS_WEAK_POINT_FIXTURE = Object.freeze({
+  hitRadiusMeters: 6,
+  weakPointDamageMultiplier: 2,
+  closedHullDamageMultiplier: 0.25,
+});
+
+/**
+ * 검증 전용 단서 정의 **픽스처** — 기획·월드 데이터가 아니다.
+ * 16차 결의 1-5의 획득원 3종(난파선 salvage / 적대 고가치 수송선 /
+ * 경비 심층 탐사 지점)을 구조로만 표현한다.
+ */
+const CLUE_DEFINITION_FIXTURE: readonly ClueDefinition[] = Object.freeze([
+  { clueId: 'clue-wreck', sourceKind: 'wreckSalvage', interactableId: 'wreck-salvage-1' },
+  { clueId: 'clue-transport', sourceKind: 'highValueTransport', interactableId: 'hv-transport-1' },
+  { clueId: 'clue-deep', sourceKind: 'deepSurvey', interactableId: 'deep-survey-1' },
+]);
+
+/** 검증 전용 파밍 보상 **픽스처** — 금액은 기획·월드 소유 데이터다 */
+const FARMING_REWARD_FIXTURE: readonly FarmingRewardEntry[] = Object.freeze([
+  { interactableId: 'gold-1', credits: 40 },
+  { interactableId: 'gold-2', credits: 40 },
+]);
+
+/**
+ * 검증 전용 해역 상한 **픽스처** — production params가 아니다.
+ * 16차 튜닝표(상한 = 전투 보상 평균의 40%)의 구조만 표현하며, 공식 행이
+ * `params/economy.json`에 도착하면 그 값이 쓰인다 (INT-GAME-016).
+ */
+const FARMING_CAP_FIXTURE = Object.freeze({
+  sectorCapRatioOfCombatAverage: 0.4,
+  combatRewardAverageCredits: 120,
+});
+
+/**
+ * 검증 전용 스코프 **픽스처** — production params가 아니다.
+ * 16차 결의 2-5·튜닝표(3초 표시 / 게이지 30% / 쿨다운 25초)와 17차 결의 4
+ * (`depthChargeOnPassiveScope` 초기값 false)의 구조를 표현한다.
+ */
+const SONAR_SCOPE_FIXTURE = Object.freeze({
+  activePingDisplaySeconds: 3,
+  activePingDetectionGaugeRise: 0.3,
+  activePingCooldownSeconds: 25,
+  passiveBearingSpreadRadiansAtMaxNoise: 0.35,
+  depthChargeOnPassiveScope: false,
+});
+
+/** 검증용 스코프 접점 — 소음원 여부로 패시브 표시 자격이 갈린다 */
+const SONAR_CONTACT_FIXTURE: readonly SonarContact[] = Object.freeze([
+  { contactId: 'ship-1', kind: 'ship', positionX: 0, positionZ: -50, noiseEmitting: true },
+  { contactId: 'boss-1', kind: 'boss', positionX: 30, positionZ: -30, noiseEmitting: true, weakPointOpen: true },
+  { contactId: 'reward-1', kind: 'reward', positionX: -20, positionZ: -10, noiseEmitting: false },
+  { contactId: 'terrain-1', kind: 'terrain', positionX: 10, positionZ: 25, noiseEmitting: false },
+  { contactId: 'depthcharge-1', kind: 'depthCharge', positionX: 5, positionZ: -5, noiseEmitting: true },
+]);
 
 /**
  * 검증 전용 회수 수치 **픽스처** — production params가 아니다.

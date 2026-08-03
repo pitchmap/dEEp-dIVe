@@ -59,6 +59,24 @@ import {
   type InteractionReadModel,
 } from './interaction/InteractionSystem';
 import { SubmarineDetectionSystem } from './detection/SubmarineDetectionSystem';
+import {
+  CluePickupProgress,
+  type ClueDefinition,
+  type ClueProgressReadModel,
+  type ClueProgressSource,
+} from './progress/CluePickupProgress';
+import {
+  SectorFarmingRewards,
+  type FarmingRewardEntry,
+  type FarmingRewardParams,
+} from './economy/SectorFarmingRewards';
+import {
+  SonarScopeSystem,
+  type SonarContact,
+  type SonarPingOutcome,
+  type SonarScopeParams,
+  type SonarScopeReadModel,
+} from './sonar/SonarScopeSystem';
 import { CanyonPatrolSpawnLocation } from './faction/CanyonPatrolSpawnLocation';
 import { HighValueTransportSystem } from './faction/HighValueTransportSystem';
 import type { SurfaceShipMotionPortFactory } from '../contracts/guard';
@@ -232,6 +250,8 @@ export class GameplaySystems implements GameSystem {
   private damageReceiver: DamageReceiverPort | null = null;
   /** [M2-1] 회수 대상 공급 — 콘텐츠 시스템이 연결한다 (미연결 = 대상 0) */
   private interactableSource: (() => readonly InteractableTarget[]) | null = null;
+  /** [M2-5] 스코프 접점 공급 — 미연결이면 표시할 접점이 없다 */
+  private sonarContactSource: (() => readonly SonarContact[]) | null = null;
   /**
    * [C1] 탐지 게이지 **정본** — 계약 `DetectionSystem` 구현.
    * HUD는 `detectionHudView()`, AI는 `detectionStageSource`만 소비한다.
@@ -249,6 +269,22 @@ export class GameplaySystems implements GameSystem {
    * `attachInteractables()`로 연결하며 보상·진행 상태 소비는 이 시스템 밖이다.
    */
   readonly interaction: InteractionSystem;
+  /**
+   * [M2-2] 단서 회수 진행 상태 — **획득만** 소유한다. 보스 구역 개방
+   * 게이트는 리드(창 1) 소유이며 `clueProgressSource`를 읽어 판정한다.
+   */
+  readonly clueProgress: CluePickupProgress;
+  /**
+   * [M2-4] 파밍 보상 — 기존 단일 재화(`economy.wallet`)에만 적립하고
+   * 해역당 상한을 강제한다. 신규 화폐를 만들지 않는다 (16차 결의 2-3).
+   */
+  readonly farmingRewards: SectorFarmingRewards;
+  /**
+   * [M2-5] 소나 스코프 판정 — 패시브(소음원 방위) + 액티브 핑.
+   * 침묵 항행을 **모른다**: 입력은 탐지 시스템의 소음 계수 하나뿐이다
+   * (17차 결의 4). 렌더·테두리 색은 그래픽스·툴링 소유.
+   */
+  readonly sonarScope: SonarScopeSystem;
   /**
    * [B6] 고가치 수송선·호위 — **핵심 게이트 B1~B5와 독립**이다.
    * 이 시스템을 빼도 배치·식별·보상·중립 사건·경비 스폰은 그대로 동작한다.
@@ -437,6 +473,24 @@ export class GameplaySystems implements GameSystem {
       this.input,
     );
     this.detectionEnvironment.addNoiseContributor(this.interaction);
+    // [M2-2·M2-4] 회수 완료 **한 줄기**를 두 소비자가 각자 자기 몫만 집는다.
+    //   단서 → 진행 상태 / 금괴·salvage → 재화. 대상 타입별 회수 시스템을
+    //   만들지 않기 위해 분기는 소비측에만 있다.
+    this.clueProgress = new CluePickupProgress();
+    this.farmingRewards = new SectorFarmingRewards(this.economy.wallet, null);
+    this.interaction.onCompleted((entry) => {
+      this.clueProgress.handleCompletion(entry);
+      this.farmingRewards.handleCompletion(entry);
+    });
+    // [M2-5] 스코프 — 소음 계수는 탐지 시스템 하나에서만 오고(침묵 항행
+    //   비인지), 핑의 대가는 기존 탐지 게이지 정본에 적용된다.
+    this.sonarScope = new SonarScopeSystem(
+      this.player,
+      () => this.sonarContacts,
+      null,
+      this.detection,
+      this.detection,
+    );
     // [C3] 추적 입력 — AI는 stage만 읽는다. 전이 로직은 리드
     //      DestroyerAIController 소유이며 여기서 복제하지 않는다.
     this.patrolFleet.attachDetectionStageSource(this.detection.stageSource);
@@ -606,6 +660,72 @@ export class GameplaySystems implements GameSystem {
   /** 회수 대상 목록 — 미연결이면 빈 목록(대상을 만들어 내지 않는다) */
   private get interactables(): readonly InteractableTarget[] {
     return this.interactableSource?.() ?? [];
+  }
+
+  /* ── M2-2 단서 진행 상태 API ──────────────────────────────────── */
+
+  /**
+   * 단서 정의 주입 (기획·월드 데이터) — 어떤 회수 대상이 어떤 단서를
+   * 주는지. 미주입이면 단서가 하나도 성립하지 않는다(단서 id 발명 금지).
+   */
+  attachClueDefinitions(definitions: readonly ClueDefinition[] | null): void {
+    this.clueProgress.attachDefinitions(definitions);
+  }
+
+  /**
+   * 리드(창 1) 보스 구역 개방 게이트가 읽는 단면.
+   * **개방 판정은 여기 없다** — 게이트 로직은 리드 소유다.
+   */
+  get clueProgressSource(): ClueProgressSource {
+    return this.clueProgress.progressSource;
+  }
+
+  /** 저장된 단서 획득 이력 복원 (조립부) — 게임플레이는 저장하지 않는다 */
+  restoreCollectedClues(clueIds: readonly string[]): void {
+    this.clueProgress.restoreCollected(clueIds);
+  }
+
+  clueProgressReadModel(): ClueProgressReadModel {
+    return this.clueProgress.readModel();
+  }
+
+  /* ── M2-4 파밍 보상 API ───────────────────────────────────────── */
+
+  /** 해역당 상한 수치 주입 — 미주입이면 파밍 보상을 지급하지 않는다 */
+  attachFarmingRewardParams(params: FarmingRewardParams | null): void {
+    this.farmingRewards.attachParams(params);
+  }
+
+  /** 회수 대상별 보상 금액 주입 (기획·월드 데이터) */
+  attachFarmingRewards(rewards: readonly FarmingRewardEntry[] | null): void {
+    this.farmingRewards.attachRewards(rewards);
+  }
+
+  /* ── M2-5 소나 스코프 API ─────────────────────────────────────── */
+
+  /** 스코프 접점 공급 연결 (조립부) — 미연결이면 표시할 접점이 없다 */
+  attachSonarContacts(source: (() => readonly SonarContact[]) | null): void {
+    this.sonarContactSource = source;
+  }
+
+  /** 공식 스코프 수치 주입 — 미주입이면 스코프가 아무것도 표시하지 않는다 */
+  attachSonarScopeParams(params: SonarScopeParams | null): void {
+    this.sonarScope.attachParams(params);
+  }
+
+  /** 액티브 핑 요청 (입력 어댑터·HUD 공용 진입점 — 경로를 나누지 않는다) */
+  requestSonarPing(): SonarPingOutcome {
+    return this.sonarScope.requestPing();
+  }
+
+  /** 17차 결의 4가 이름 붙인 소비 계약 */
+  sonarScopeReadModel(): SonarScopeReadModel {
+    return this.sonarScope.readModel();
+  }
+
+  /** 스코프 접점 목록 — 미연결이면 빈 목록 */
+  private get sonarContacts(): readonly SonarContact[] {
+    return this.sonarContactSource?.() ?? [];
   }
 
   /** [C1] 탐지가 실제로 구동 중인가 — false면 게이지 0·safe 고정 */
@@ -848,6 +968,12 @@ export class GameplaySystems implements GameSystem {
     this.enemyAttack.resetForNewSortie();
     // 회수 이력은 지우지 않는다 — 복원은 저장 경로 소유(restoreCollected).
     this.interaction.resetForNewSortie();
+    // [M2-2] 단서는 출항을 가로질러 누적된다 — 여기서 지우지 않는다.
+    this.clueProgress.resetForNewSortie();
+    // [M2-4] 해역 파밍 예산은 출항마다 다시 찬다 (MVP: 해역 = 출항 단위).
+    this.farmingRewards.resetForNewSortie();
+    // [M2-5] 핑 표시·쿨다운은 출항 한정 상태다.
+    this.sonarScope.resetForNewSortie();
     this.economy.resetForNewSortie();
   }
 
@@ -889,7 +1015,12 @@ export class GameplaySystems implements GameSystem {
     this.enemyAttack.update(deltaSeconds);
     this.depthCharges.update(deltaSeconds);
     // 12) [M2-1] 회수 홀드 — 근접·홀드·취소 판정 (수치 미주입이면 무동작)
+    //     완료 통지가 단서 진행·파밍 보상으로 흘러가므로 두 소비자는
+    //     자체 update를 갖지 않는다(중복 판정 경로 없음).
     this.interaction.update(deltaSeconds);
+    // 13) [M2-5] 스코프 핑 표시·쿨다운 시각 진행 — 탐지 갱신 뒤에 둔다
+    //     (핑이 올린 게이지가 같은 프레임에 반영되도록).
+    this.sonarScope.update(deltaSeconds);
 
     // 3.5) 잠수함-함선 충돌 — 통과 방지·밀어냄만, 피해 없음 (5차 결의 1).
     //      어뢰 명중 판정과 동일한 박스 근사(hullBox)를 공유한다.
