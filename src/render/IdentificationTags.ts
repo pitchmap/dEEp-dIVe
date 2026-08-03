@@ -27,12 +27,23 @@ import type {
   ShipIdentificationSource,
   ShipIdentificationView,
 } from '../contracts/identification';
+import { applyMarkMask, cssMaskSupported } from './factionMarks';
+import type { FactionMarkShape } from './factionVisuals';
+import visualParams from './renderVisualParams.json';
+
+/** 태그 마크가 단색 실루엣으로 전환되는 거리 (작은 표시 크기 가독 규칙) */
+const MARK_SOLID_BEYOND_METERS = visualParams.artDirection.factionMarks.solidBeyondMeters;
 
 /** 상태별 표시 규격 — 기호·문구는 그래픽스 소유 표현 (계약에 없음) */
 interface StateAppearance {
   readonly symbol: string;
   readonly text: string;
   readonly color: string;
+  /**
+   * 세력 마크 형태(시안 형태 언어) — 식별 상태에만 존재한다. 미식별은
+   * null: 세력 마크를 조기 노출하지 않는다(기존 ◇ 규칙 유지).
+   */
+  readonly markShape: FactionMarkShape | null;
 }
 
 /**
@@ -40,10 +51,10 @@ interface StateAppearance {
  * 식별 상태의 라벨은 계약 `displayLabelId` 키에서 온다(LABEL_TEXT).
  */
 const STATE_APPEARANCE: Readonly<Record<IdentificationState, StateAppearance>> = {
-  unidentified: { symbol: '◇', text: '미식별', color: '#c8d4da' },
-  hostile: { symbol: '▲', text: '적대', color: '#ff9a7a' },
-  neutral: { symbol: '■', text: '중립', color: '#dfe6ea' },
-  patrol: { symbol: '◆', text: '경비', color: '#8fd2f0' },
+  unidentified: { symbol: '◇', text: '미식별', color: '#c8d4da', markShape: null },
+  hostile: { symbol: '▲', text: '적대', color: '#ff9a7a', markShape: 'triangle' },
+  neutral: { symbol: '■', text: '중립', color: '#dfe6ea', markShape: 'square' },
+  patrol: { symbol: '◆', text: '경비', color: '#8fd2f0', markShape: 'diamond' },
 };
 
 /** 계약 라벨 키 → 표시 문구 (문구·색은 계약이 아니라 그래픽스 소유) */
@@ -206,10 +217,26 @@ export class IdentificationTags {
     // 공격 가능 표시는 targetable일 때만 (§3)
     const targetMark = view.isTargetable ? '◎ 조준 가능' : '― 조준 불가';
     const distance = `${Math.round(view.distanceMeters)}m`;
-    const signature = `${state}|${labelText}|${distance}|${targetMark}`;
+    // 원거리(작은 표시 크기)는 내부 디테일을 제거한 단색 실루엣 마크
+    const solidMark = view.distanceMeters > MARK_SOLID_BEYOND_METERS;
+    const signature = `${state}|${labelText}|${distance}|${targetMark}|${solidMark}`;
     if (node.lastSignature !== signature) {
       node.lastSignature = signature;
-      node.symbol.textContent = appearance.symbol;
+      // 식별 상태 + CSS mask 지원 → 시안 형태 언어의 SVG 마크.
+      // 미식별(markShape null) 또는 mask 미지원 → 기존 텍스트 기호 유지(fallback).
+      if (appearance.markShape && cssMaskSupported()) {
+        node.symbol.textContent = '';
+        applyMarkMask(node.symbol, appearance.markShape, solidMark);
+        node.symbol.style.width = '0.85rem';
+        node.symbol.style.height = '0.85rem';
+      } else {
+        node.symbol.style.backgroundColor = 'transparent';
+        node.symbol.style.removeProperty('mask-image');
+        node.symbol.style.removeProperty('-webkit-mask-image');
+        node.symbol.style.width = '';
+        node.symbol.style.height = '';
+        node.symbol.textContent = appearance.symbol;
+      }
       node.label.textContent = `${appearance.text} · ${labelText}`;
       node.detail.textContent = `${distance} · ${targetMark}`;
       node.root.style.color = appearance.color;
@@ -271,7 +298,7 @@ export class IdentificationTags {
     ].join(';');
 
     const symbol = document.createElement('span');
-    symbol.style.cssText = 'font-size:0.9rem;line-height:1';
+    symbol.style.cssText = 'font-size:0.9rem;line-height:1;display:inline-block;flex:none';
     const texts = document.createElement('span');
     texts.style.cssText = 'display:flex;flex-direction:column';
     const label = document.createElement('span');

@@ -90,6 +90,21 @@
 
 ## 제안 목록
 
+### INT-RENDER-013 — [ART][RENDER] 수심 확장: 시작 협곡 레이아웃 수직 데이터 변경 (리드 확인 요청)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스 창 |
+| 대상 시스템 | `src/world/startingCanyonLayout.ts` (공용 데이터 — 공통 보호에 준함) |
+| 필요한 변경 | **적용 완료(작업 지시 근거) — 사후 확인 요청.** `FLOOR_Y` -6 → **-20**(수직 수역 18m → 32m, 약 1.78배). 벽 sizeY 11/12±2 → 25/26±2, 엄폐 기둥 sizeY 10/12/9 → 24/26/23 — **벽·기둥 상단 절대 높이·수평 통로 폭·S자 수로·해수면(12)은 전부 불변** (INT-CORE-004 능선<해수면 결정 유지) |
+| 변경 이유 | 아트 디렉션 작업 지시: 실수직 잠항 공간 확장(스케일 눈속임 금지). 잠항 상·하한(provisionalWorld 파생), 충돌(collision 파생), salvage 착저 높이(파생), 환경 배치(파생)가 전부 레이아웃 파생이라 코드 변경 없이 자동 추종함을 조사로 확인 |
+| 관련 게이트 | — (밸런스 수치 아님 — 월드 데이터. 탐지 심도 층 3층 계약·게임플레이 판정 무변경) |
+| 영향을 받는 파일 | `src/world/startingCanyonLayout.ts`만 수정. 파생 확인: `systems/provisionalWorld.ts`(min/max Y 자동), `systems/collision/*`(자동), `world/salvagePlacements.ts`(자동), 렌더 심도 그레이딩(`renderVisualParams.json artDirection.depthGrading`) |
+| 하위 호환 여부 | 깨지지 않음 — verify:gameplay 213/213(레이아웃 파생 검증 포함)·verify:hud 34/34·verify:sprint-a/b 통과. 실측: 잠항 하한 -19.0(해저 이탈 없음)·상한 11.0(수면 돌출 없음) |
+| 개발 리드 결정 | (대기 — 조건부 승인, 아래 통합 후 재검증으로 조건 이행) |
+| 적용 커밋 | feat/render — 수심 확장·암벽 셸·탐조등·wake 커밋 |
+| **dev(7eb8d5c) 병합 후 재검증 (그래픽스 창, C 런타임 포함)** | 자동: gameplay **242/242**·meta **128/128**·tooling **26/26**·hud **34/34**·sprint-a·sprint-b·sprint-c **23/23**(C9 **17필드 확정, 미확정 0**) 전부 통과. 브라우저(스크립트 실측, 콘솔·페이지 오류 0): ① 수심 -19.0~11.0 왕복·월드 이탈 없음 ② 4개 심도(잠망경 5.0/중간 -7.8/심해 -15.6/최심부 -19.0)에서 탐지 HUD wired·게이지 심도 보정 작동(수면 0.24 vs 최심부 0.03 — 심층 은신 유지) ③ **폭뢰 목표 심도 기폭**: 투하점 y=11.98 → 기폭 목표 = 플레이어 관측 심도 y=11.0 (y=0 고정 아님), outcome 분류(outOfRange) 작동 ④ 침수 첫 이벤트 severity **0.10 = near 기여 승인값 일치** → 반복 피격 flood 1.0 → **침수 잠식 파괴**(hull 120→0) ⑤ 실패 화면 `DebriefConfirmCommand.confirm()` → BASE 전환 ⑥ 재출항 reset: hull 120·침수 0·salvage 3 재생성·탐지 safe·경비 마커 0 ⑦ 화물선 수면(12) 유지·경비 스폰·태그/마크/탐조등/wake 정상 ⑧ 품질 low/medium/high 로드·텍스처 404 fallback 전부 오류 0 |
+
 ### INT-CORE-016 — C 통합 blocker 마감: AI 공격 요청 생성 · DEBRIEF confirm 정책 개정 · 통합 patch 확정
 
 | 필드 | 내용 |

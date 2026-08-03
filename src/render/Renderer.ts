@@ -6,6 +6,7 @@
  */
 
 import * as THREE from 'three';
+import visualParams from './renderVisualParams.json';
 
 export class Renderer {
   readonly webgl: THREE.WebGLRenderer;
@@ -15,6 +16,11 @@ export class Renderer {
     this.webgl = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.webgl.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.webgl.shadowMap.enabled = false;
+    // 아트 디렉션: 필름형 톤 매핑 — 후처리 패스 없는 0-드로우 톤 조정.
+    // (실제 스크린 스페이스 bloom은 §12 예산상 도입하지 않는다 — 광원 표현은
+    // emissive·가산 스프라이트로 대체. 노출값은 renderVisualParams.json 소유.)
+    this.webgl.toneMapping = THREE.ACESFilmicToneMapping;
+    this.webgl.toneMappingExposure = visualParams.artDirection.toneMappingExposure;
 
     this.camera = new THREE.PerspectiveCamera(
       60,
