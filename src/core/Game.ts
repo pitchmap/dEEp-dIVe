@@ -761,12 +761,18 @@ export class Game {
       debriefConfirm?.confirm();
     };
     const failureScreen = new SortieFailureScreen(this.container);
-    failureScreen.attach(debriefState, () => {
-      sortieFailure.retrySave(() => {
-        saveBridge.writeSnapshot();
-        return saveBridge.lastSaveSucceeded;
-      });
-    });
+    failureScreen.attach(
+      debriefState,
+      () => {
+        sortieFailure.retrySave(() => {
+          saveBridge.writeSnapshot();
+          return saveBridge.lastSaveSucceeded;
+        });
+      },
+      // [INT-CORE-017] 실패 화면 확인 = 리드 guarded confirm command —
+      // 성공(BASE 전환)했을 때만 true를 돌려 화면이 닫힌다.
+      () => debriefConfirm?.confirm() === 'confirmed',
+    );
     const returnScreen = new SortieReturnScreen(this.container);
     returnScreen.attach(debriefState, metaLoop, confirmDebrief);
 

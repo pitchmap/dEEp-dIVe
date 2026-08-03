@@ -91,8 +91,20 @@ export class SprintCUiFixture {
         // 재시도 표본 — 성공으로 전환 (재정산 없음을 화면 규칙으로 검수)
         if (fixture.debrief.failure) {
           const saved: SortieFailureReport = { ...fixture.debrief.failure, saveStatus: 'saved' };
-          fixture.debrief = { ...fixture.debrief, failure: saved, saveStatus: 'saved', canRetrySave: false };
+          fixture.debrief = {
+            ...fixture.debrief,
+            failure: saved,
+            saveStatus: 'saved',
+            canRetrySave: false,
+            canConfirm: true,
+          };
         }
+      },
+      () => {
+        // 확인 표본 — 공식 정책 그대로: canConfirm(saved+DEBRIEF)일 때만 성공
+        if (!fixture.debrief.canConfirm) return false;
+        fixture.debrief = { ...fixture.debrief, canConfirm: false };
+        return true;
       },
     );
     this.returnScreen = new SortieReturnScreen(host);
