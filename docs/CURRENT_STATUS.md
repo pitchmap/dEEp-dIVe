@@ -342,7 +342,13 @@ B 선행개발          = 가능 (선행개발 상태로만)
     - **탐지 기준 배선 2줄 (DECISIONS C-14)**: `torpedoFired`→`reportTorpedoLaunch`(§5.10 확정 규칙 배선) + 출항 시 `reportNoise(1)`(공식 만충 시간 정의의 기준 조건 — 수치 발명 아님)
     - **브라우저 실측 완주** (production, fixture 아님 — 상세: INTEGRATION_NOTES INT-CORE-018): 탐지 상승 9.65s(공칭 8s)·감쇠 8.000s·신관 정확 3.000s×10·공격 간격 6.05s(단일)·direct 45/near 12/miss 0 재현·파괴(near 30.5s/direct 9.1s)·파괴 후 공격 중단·실패 정산 1회·saved·실패 화면 confirm→BASE·재출항 reset. **콘솔 오류 0**
     - **실측 발견 blocker**: ① 침수 미발생 — 피격→침수 기여 공식 param 부재(production `causesFlooding=true` 발신자 0) → 침수 루프 도달 불가, 기획 결정 필요 ② 잠망경 심도 direct 불가(기폭 y=0 규약) ③ 밀려남 상향 성분이 폭격 중 잠항 상쇄
-    - **플래그**: C_COMBAT_PARAMS_DEFINED=**true** · C_RUNTIME_WIRED=**true** · C_BROWSER_EMPIRICAL_COMPLETE=**true**(침수 스테이지 제외 명시) · C_FINAL_COMPLETE=**false**(침수 유발 경로 부재 blocker)
+    - **플래그**: C_COMBAT_PARAMS_DEFINED=**true** · C_RUNTIME_WIRED=**true** · C_BROWSER_EMPIRICAL_COMPLETE=**true**(침수 스테이지 제외 명시) · C_FINAL_COMPLETE=**false**(침수 유발 경로 부재 blocker) → **아래 INT-CORE-019로 갱신됨**
+  - **C 최종 런타임 blocker 3건 마감 (INT-CORE-019 — 커밋 `c2ee51d`·`45257d8`·`74e13c3`. C_FINAL_COMPLETE=true):**
+    - **침수 기여 (C9 v0.1.1, DECISIONS C-15)**: direct 0.35·near 0.10 승인 입력(17필드) — outcome별 피해·침수 동시 결정, 단일 창구·중복 1회·clamp 1.0·tick 경로 유지
+    - **소음 정책 (C-16)**: 속도 비례(정지 0·전속 1·침묵 0.1 배율) — 고정 reportNoise(1) 폐기, 조립부 수치 하드코딩 0. 대화형 침묵 조작 미구현 = 소스 미연결 false 중립(**C_SILENT_RUNNING_INTERACTIVE=false**)
+    - **목표 심도 기폭 (C-17)**: 관측 3D 고정·낙하 보간·목표 심도 기폭 — y=0 고정 폐기, 세 심도 모두 direct/near/miss 성립(실측: periscope 11·cruise −1.2·deep −3.28)
+    - **production 재실측 완주**: 소음·탐지 속도 비례, direct 45+0.35 / near 12+0.10 / miss 0, 침수 단계 실전이(minor 0.151→major→catastrophic)·지속 피해(2.4×level)·침수 잠식 파괴, 파괴 후 공격 0, 정산·confirm·BASE·재출항 reset, 콘솔 오류 0 — 상세: INTEGRATION_NOTES INT-CORE-019
+    - **최종 플래그**: C_COMBAT_PARAMS_DEFINED=**true** · C_RUNTIME_WIRED=**true** · C_BROWSER_EMPIRICAL_COMPLETE=**true** · **C_FINAL_COMPLETE=true** · C_SILENT_RUNNING_INTERACTIVE=false(후속)
   - **C 선행 계약 마감 (INT-CORE-015 — C_ROLE_HANDOFF_READY=true):**
     - C1~C3: `contracts/detection.ts` — 게이지 정본=게임플레이 DetectionSystem(기존 계약), 은신·심도 입력 포트, 거리 감쇠·감소율 null 계약(unwired), HUD·AI 읽기 모델 2종(AI는 stage만), 추적 전이 정본=리드(기존 상태 어휘·경비함/호위함/적대함 공유), alert 발화=기존 detectionChanged, 출항 reset 경계
     - C4: 폭뢰 정본 경로(탐지→AI 요청→EnemyAttackPort→DepthChargeSystem→direct/near→applyDamage) + `DepthChargeDamageParams`(전부 null 허용)
@@ -387,7 +393,7 @@ B 선행개발          = 가능 (선행개발 상태로만)
   - **[INT-CORE-014 적용 요청 — 그래픽스]** `SurvivalReadModel`만 소비(내부 객체 비노출·값 변경 불가). **실패 화면=`sortieFailed` / 귀환 화면=`sortieEnded`** 로 데이터·화면 완전 분리(C7). 침수량·피해량을 결정하지 않으며 경고는 `warningIds` 키로만 온다
   - **[INT-CORE-014 적용 요청 — 빌드·툴]** `params/combat.json` C9 [COMBAT] 확장: 선체 기준값·survivalState 경계 2종·폭뢰 direct/near 피해·침수 3단계 경계/확산율/피해율·(도입 시)압력 4종. **전부 미확정이며 임의 수치 금지.** `verify:sprint-c` 신설은 툴링 몫 — 리드는 없는 script를 실행하지 않았다
   - **계층 경계 [확정]:** 상위(src/meta)가 하위 세션 내부 상태를 읽는 코드, 하위가 메타 상태를 참조하는 코드는 리뷰 반려 대상 — 통신은 SortieSessionPort + 이벤트 3종뿐
-- **마지막 업데이트:** C9 v0.1 승인값 입력 + production 브라우저 실측 완주 (INT-CORE-018 — **C_COMBAT_PARAMS_DEFINED=true · C_RUNTIME_WIRED=true · C_BROWSER_EMPIRICAL_COMPLETE=true**(침수 제외 명시) · C_FINAL_COMPLETE=false — 침수 유발 경로 부재 blocker)
+- **마지막 업데이트:** C 최종 런타임 blocker 3건 마감 (INT-CORE-019 — 침수 기여 v0.1.1·속도 소음 정책·목표 심도 기폭 + production 재실측 완주. **C_FINAL_COMPLETE=true** · C_SILENT_RUNNING_INTERACTIVE=false 후속)
 - **담당 브랜치:** `claude/sprint-c-runtime-closeout` (통합 tip `bd87828` 정확 기준 — 이전 리드 세션: `claude/deep-dive-core-lead-uyg77p`)
 
 ## 게임플레이

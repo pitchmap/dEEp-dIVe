@@ -482,10 +482,12 @@ C_BROWSER_EMPIRICAL_COMPLETE = false
    공인 로더 pending 0건. production 브라우저 실측 완주 기록은
    INTEGRATION_NOTES INT-CORE-018 참조 — 탐지 상승·attack 전이·폭뢰
    신관 3.000s·direct 45/near 12/miss 0·파괴·실패 정산·confirm·재출항
-   reset 전부 실작동, 콘솔 오류 0. **신규 blocker(실측 발견)**: 피격→침수
-   기여 공식 param 부재로 **침수 루프만 도달 불가**(production
-   `causesFlooding=true` 발신자 0 — 수치 발명 없이는 해소 불가, 기획 결정
-   필요). 따라서 C_FINAL_COMPLETE=false 유지.
+   reset 전부 실작동, 콘솔 오류 0. ~~신규 blocker: 피격→침수 기여 공식
+   param 부재로 침수 루프만 도달 불가~~ → **해소 (INT-CORE-019, C9 v0.1.1)**
+   — 침수 기여 2필드 승인 입력(direct 0.35·near 0.10), 속도 기반 소음
+   정책(고정 1 폐기), 목표 심도 기폭(y=0 고정 폐기)까지 마감하고
+   production 재실측 완주(침수 단계 실전이·침수 잠식 파괴 포함).
+   **C_FINAL_COMPLETE=true** (C_SILENT_RUNNING_INTERACTIVE=false 후속).
 2. ~~**`attachCombatParams` 전송 형태 충돌** (§5)~~ → **해소 (INT-CORE-017)** —
    정규화 소유 단일화(공인 로더) + `NormalizedCombatParams` 단면 전달로 배선
    완료. 값이 도착하면 같은 경로로 자동 구동된다(코드 변경 불필요).

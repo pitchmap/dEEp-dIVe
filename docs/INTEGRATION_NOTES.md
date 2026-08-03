@@ -130,6 +130,19 @@
 | 개발 리드 결정 | `C_COMBAT_PARAMS_DEFINED=true` · `C_RUNTIME_WIRED=true` · `C_BROWSER_EMPIRICAL_COMPLETE=true`(**침수 스테이지 제외 명시** — 기능 부재이지 실측 누락이 아님) · **`C_FINAL_COMPLETE=false` 유지**(침수 유발 경로 부재가 생존 루프의 공식 구성요소 미완이므로 최종 완료 선언 불가) |
 | 적용 커밋 | c943d35(승인값)·885839f(배선) + 문서 커밋 |
 
+### INT-CORE-019 — C 최종 런타임 blocker 3건 마감: 침수 기여(v0.1.1)·소음 정책·목표 심도 기폭 — **C_FINAL_COMPLETE=true**
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (C9 v0.1.1 승인 접수 — 브랜치 `claude/sprint-c-runtime-closeout`, 기준 `12dabde`) |
+| Blocker 1 해소 | 침수 기여 2필드(C-15): direct 0.35·near 0.10 — 공인 스키마·로더 단일 해석(17필드)·관계 검증(0<near<direct≤1)·`NormalizedCombatParams` 경유·outcome별 결정·단일 창구·중복 1회·clamp 1.0·tick 경로 유지·pressure 미추가 |
+| Blocker 2 해소 | 소음 정책(C-16): 속도 비례(`\|speed\|/유효 maxSpeed`) — 고정 reportNoise(1) 폐기, 하드코딩 0, 정지 0·전속 1, 침묵 미구현 = 소스 미연결 false 중립(**C_SILENT_RUNNING_INTERACTIVE=false**) |
+| Blocker 3 해소 | 목표 심도 기폭(C-17): 관측 3D 고정 → 낙하(파생 보간) → 목표 심도 기폭 — y=0 고정 폐기, 재추적·유도 없음, 3D 거리 판정 |
+| 실측 (production 재실측 — fixture 아님) | 정지: 소음 0·게이지 0(관측자 20~40m) / 전속: 소음 1·만충 10.2s(가속 램프 ~3s 포함 — 공칭 8s 정합)·상승률 speed4→0.048/s·speed8→0.085/s(비례) / 정지 회피: 감쇠 9.49s→safe / 발사 노출: 정지(소음 0) 발사 → 게이지 즉시 ≈1 / 기폭 심도 3층: periscope 목표 11·cruise −1.2·deep −3.28 — 전부 관측 y에서 기폭(낙하 시작 = 공격자 수면 y≈12) / direct 45+침수 +0.35(×4) / near 12+침수 +0.10 / miss 0+0 / 단계: minor 0.151(자연 확산 도달)→major→catastrophic 0.803 — 실제 피격+확산 경유 / 지속 피해 2.4×level 정확(dt 무관) / 침수 잠식 파괴(침수 1.0 상태 60+ hull 잠식) / 파괴 후 10s 신규 투하 0 / 정산·저장 1회·실패 화면 canConfirm→confirm→BASE / 재출항 reset(120/120·침수 0·어뢰 3·게이지 0 safe·경비함 0) / 콘솔 오류 0 |
+| 잔여 관찰 | 기폭 심도 수정 후 밀려남의 지속적 잠항 상쇄 **재관측 없음**(전투 중 y −1.2 유지 — 구 y=0 기폭 시절의 상향 밀림 평형은 해소). 밀려남 수치는 무변경(8m 확정값) |
+| 개발 리드 결정 | 전체 자동 검증 + production 실측 통과 — **C_BROWSER_EMPIRICAL_COMPLETE=true · C_FINAL_COMPLETE=true** 선언. C_SILENT_RUNNING_INTERACTIVE=false는 후속(대화형 침묵 조작 + 속도 소음과의 상호작용 실측) |
+| 적용 커밋 | c2ee51d(침수 기여·기폭 심도)·45257d8(소음 정책)·74e13c3(검증) + 문서 커밋 |
+
 ### INT-GAME-014 — C1~C4 게임플레이 구현 완료 + production 배선 4줄 요청 (조립부)
 
 | 필드 | 내용 |
