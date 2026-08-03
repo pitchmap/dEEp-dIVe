@@ -6,7 +6,61 @@
 
 ---
 
-## A+B 최종 기술 통합 — 통합 관리자, 최신
+## 스프린트 C 기술 통합 — 통합 관리자, 최신
+
+> 상세: `docs/SPRINT_C_HANDOFF.md` 'C 통합 실행 결과' §1~11.
+> 브랜치: `claude/deep-dive-d5-gray-box-integration-tree5i` (dev 미병합, PR 없음).
+
+### 병합 (시작 `origin/dev` = `d832579`)
+
+| 역할 | SHA | 병합 커밋 | 충돌 |
+|---|---|---|---|
+| 개발 리드 | `839eace` | `edc4b91` | 없음 |
+| 게임플레이 | `844d0c7` | `e331505` | 문서 1건 |
+| 그래픽스 | `97e7dd3` | `6a04be7` | 문서 1건 + fixture 계약 갱신 |
+| 빌드·툴 | `2814dd0` | `834f28f` | 없음 |
+
+### composition 배선
+
+`attachPlayerAliveSource` ✅ · `attachDamageReceiver` ✅ ·
+`enemyAttackBinding.attach(gameplay.enemyAttackPort)` ✅ ·
+선체·침수 params 주입 ✅ · Detection/Tracking/Survival/Debrief HUD ✅ ·
+DEBRIEF confirm을 `debriefConfirm.confirm()` guarded command로 교체 ✅ ·
+**`attachCombatParams` 미배선 (계약 충돌 — blocker)**
+
+### 자동 검증
+
+typecheck ✅ · build ✅ · size 5.2% · scope ✅ ·
+**gameplay 238/238 · meta 119/119 · tooling 26/26 · hud 34/34 ·
+sprint-a 전항목 · sprint-b 자동 22/22 · sprint-c 자동 23/23**
+
+### 브라우저 실측
+
+- **production(공식 null params) 20/20** — 출항·HUD 미연결 표시·경비함 생성/이동·
+  공격 0·정산·저장 후 DEBRIEF 유지·확인 버튼으로 BASE·재출항·salvage 재생성·
+  영구 데이터 보존·화면 배타 표시. **콘솔 오류 0건**
+- **fixture(`?cdemo=1`) 14/14** — 탐지 3단계·추적 4상태·선체/침수/방향 표시·
+  실패↔귀환 분리·저장 실패·retrySave·중복 confirm 방지·640×480 겹침 없음
+
+### 판정
+
+```
+C_INTEGRATION_COMPLETE       = true
+C_RUNTIME_WIRED              = false   (C9 params 15/15 미확정)
+C_BROWSER_EMPIRICAL_COMPLETE = false   (실제 생존 전투 루프 실측 불가)
+C_FINAL_COMPLETE             = false
+```
+
+### blocker 3건
+
+1. C9 공식 수치 미도착 (15/15 null — 발명 금지)
+2. `attachCombatParams` 전송 형태 충돌 (게임플레이 평면 root ↔ 툴링 블록 중첩,
+   + 툴링이 원본 직접 import 금지) — **수치 도착 전에** 해소 필요
+3. 실패 화면 '확인' 버튼에 confirm command 부재 (귀환 화면과 정책 불일치)
+
+---
+
+## A+B 최종 기술 통합 — 이전 회차
 
 > 상세: `docs/SPRINT_A_INTEGRATION_MANIFEST.md` §AB1~AB8 ·
 > `docs/SPRINT_B_ACCEPTANCE.md` 'A+B 최종 기술 통합 판정'.

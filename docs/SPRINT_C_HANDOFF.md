@@ -212,3 +212,272 @@ save failed → DEBRIEF 유지 → canRetrySave=true일 때만 retrySave
 성공만으로 `completeDebrief` 자동 호출 0회, 저장 미완료 confirm 거부
 (`saveIncomplete`), 중복 confirm 거부(BASE 전환 1회). `verify:meta`
 119항목이 전부 결정적으로 검증한다.
+
+---
+
+# C 통합 실행 결과 (통합 관리자 — 실제 병합·배선·실측 후)
+
+> 이 구역은 통합 관리자 창의 실행 기록이다. 위 인계표는 리드가 정한 **지시**이고,
+> 아래는 그 지시를 실제 병합 코드에 적용한 **결과**다. 어긋난 곳은 그대로 적는다.
+
+## 1. 기준
+
+| 항목 | 값 |
+|---|---|
+| 통합 브랜치 | `claude/deep-dive-d5-gray-box-integration-tree5i` |
+| 작업 전 HEAD | `3958ce4` |
+| 시작 `origin/dev` | `d832579` (A+B 통합 PR #4 병합분) |
+| A+B 기준 `3958ce4` | ✅ `origin/dev` ancestry 포함 |
+| dev 최신화 | `3bd8b3d` (rebase 아님 — merge) |
+
+| 역할 | 최종 SHA | 원격 tip 일치 | 병합 커밋 |
+|---|---|---|---|
+| 개발 리드 | `839eace` | ✅ | `edc4b91` |
+| 게임플레이 | `844d0c7` | ✅ | `e331505` |
+| 그래픽스 | `97e7dd3` | ✅ | `6a04be7` |
+| 빌드·툴 | `2814dd0` | ✅ | `834f28f` |
+
+4개 SHA 전부 최종 통합 ancestry에 포함. `--no-ff` tip merge만 사용
+(cherry-pick·rebase·squash·force push 없음, 병합 순서 변경 없음).
+
+## 2. 충돌과 해소
+
+| 파일 | 발생 | 해소 |
+|---|---|---|
+| `docs/INTEGRATION_NOTES.md` | 게임플레이·그래픽스 2회 | 양쪽 전문 보존 (삭제 0) |
+| `src/ui/sprintCUiFixture.ts` | 그래픽스 QA 픽스처가 구 `DebriefReadModel`(canConfirm 이전) 사용 → typecheck 4곳 실패 | **리드 계약대로** 값 채움: `saveStatus==='saved'`인 경우만 `canConfirm: true`, 나머지 false |
+| `src/core/Game.ts` | 자동 병합됨 — 인계표가 예고한 3지점 확인 | ① `DebriefStateTracker` **3인자**(리드) 채택 ② `destroyerAiFactory` **2인자**(공격 바인딩 포함) 채택 ③ import·디버그 핸들 **합집합** |
+| `src/core/Game.ts` (수동) | 귀환 화면이 `metaLoop.completeDebrief()` **직접 호출** | `debriefConfirm.confirm()` guarded command로 **교체** — 직접 호출은 저장 미완료 가드를 우회한다 |
+| `scripts/verify-sprint-c.mjs` | 렌더 소비 스캔이 `src/render/`만 관측 → 그래픽스 병합 후에도 소비 0건으로 오판 | 스캔 범위를 `src/render` + **`src/ui`**로 정정 (게임 UI는 FILE_OWNERSHIP상 `src/ui`). 관측 범위 확대이며 단언 약화가 아니다 |
+
+## 3. Game.ts 최종 composition 순서
+
+```
+loadParams (movement/detection/combat/crew)
+loadEconomyParams + loadAimingParams → OfficialRuntimeParams
+loadCombatParams()                   → CombatParamsResult (15필드 전부 null)
+MetaLoop → SaveStore 복원 → UpgradeState → deriveEffectiveParams
+GameplaySystems(공식 params 생성자 주입) → restoreSavedLoadout
+TorpedoTubeSocketRig(정본 참조)
+SortieEconomyBridge → SortieSalvageSpawner(+placement)
+GuardIncidentLedger → GuardShipAdapter → GuardSpawnCoordinator(+위치 전략)
+EnemyAttackPortBinding ← gameplay.enemyAttackPort   ← C4 사슬 마지막 연결
+  → createProductionDestroyerAIFactory(motionPorts, binding)
+NeutralIncidentBoundary → GuardSpawnBridge → guardAdapter 등록
+FloodingCore(combat.flooding) → PlayerHullSystem(combat.hull) 등록
+  → gameplay.attachPlayerAliveSource(playerHull)
+  → gameplay.attachDamageReceiver(playerHull)
+UpgradePurchaseSystem → SaveBridge → CountingSavePort
+  → PurchaseTransaction / EquipmentTransaction / DepartureCommand → BaseScreenPort
+SortieFailureCoordinator(metaLoop, saveBridge) 등록
+DebriefStateTracker(sortieFailure, saveBridge, metaLoop) 등록
+DebriefConfirmCommand(metaLoop, debriefState)
+EconomyHud / SortiePrepScreen (MetaUiAdapter)
+DetectionHud ← detectionHudView 폴링 어댑터 · guardAdapter(TrackingStateSource)
+SurvivalHud  ← playerHull + consumeDamageFlash
+SortieFailureScreen / SortieReturnScreen ← debriefState (+confirm command)
+sprintCHud 갱신 시스템 → CameraInputAdapter → Audio
+scene attach 클러스터 (pose·cargo·shipWorld·identification·convoy·salvage·socket)
+```
+
+## 4. 배선 결과
+
+| 항목 | 결과 |
+|---|---|
+| `attachPlayerAliveSource` | ✅ `Game.ts` 1회 → `PatrolShipFleet`·`EnemyAttackCoordinator` 양쪽 도달 (`verify:sprint-c` C-playerAliveAttach가 6지점 관측) |
+| `attachDamageReceiver` | ✅ `PlayerHullSystem` **단일 창구** |
+| `EnemyAttackRequest` 경로 | ✅ `DestroyerAIController` → `EnemyAttackPortBinding` → `gameplay.enemyAttackPort`. AI는 피해량·반경·쿨다운 미소유, 요청만 생성 |
+| Detection HUD | ✅ 폴링 어댑터 `{ hudView: () => gameplay.detectionHudView() }` |
+| Tracking HUD | ✅ `guardAdapter`(리드 `TrackingStateSource`) — 게임플레이에 없는 API를 만들지 않았다 |
+| Survival HUD | ✅ `SurvivalReadModel`만 소비 |
+| 실패/귀환 화면 | ✅ `DebriefReadModel.kind`만 소비 · `isDestroyed` 분기 **0건** |
+| DEBRIEF confirm | ✅ `debriefConfirm.confirm()` guarded command |
+| **`attachCombatParams`** | ❌ **미배선 — blocker** (§5) |
+
+## 5. Blocker — `gameplay.attachCombatParams` 전송 형태 충돌
+
+인계표 §① 3번은 `params/combat.json` **원본**을 그대로 넘기라고 지정했으나,
+병합 후 실제 코드가 두 가지로 어긋난다.
+
+| # | 충돌 | 근거 |
+|---|---|---|
+| ⓐ | 툴링 검증기가 **공인 로더 밖 `combat.json` 직접 import를 금지** | `verify:sprint-c` `C9-loaderSingleSource` — 원본을 받을 통로가 없다 |
+| ⓑ | 게임플레이 리더는 **평면 root**(`root['directRadiusMeters']`), 툴링 스키마는 **블록 중첩**(`depthCharge.*`·`detection.*`) | `src/systems/combat/officialCombatParams.ts` vs `params/combat.json` — 원본을 넘겨도 값 도착 후 읽히지 않는다 |
+
+**통합 관리자는 전송 형태를 임의로 정하지 않았다** (계약 충돌 = blocker).
+어댑터를 만들면 두 역할의 규약 중 하나를 통합 창이 대신 결정하는 것이 된다.
+
+- **현재 영향 없음**: 15필드가 전부 null이라 어느 경로로도 결과가 같다 —
+  탐지 safe 고정 · 공격 unwired · 폭뢰 피해 0. 브라우저 실측으로 확인했다.
+- **해소 필요 시점**: 공식 수치 도착 **전까지**. 값이 들어오는 순간 C1·C4가
+  조용히 unwired로 남는다.
+- **소유**: 게임플레이(리더 형태) ↔ 빌드·툴(스키마 형태) ↔ 리드(전송 규약 결정).
+
+선체·침수는 이 충돌의 영향을 받지 않는다 — 툴링 로더의 검증 결과를 리드
+코어 생성자에 **직접** 주입하므로 공인 경로다.
+
+## 6. B5 회귀 검토 (인계표 §⑤)
+
+| # | 항목 | 결과 |
+|---|---|---|
+| 1 | patrol 생성 계약 유지 | ✅ 스폰 → 범용 AI → motion 포트 이동 경로 무변경 |
+| 2 | 이동 계약 유지 | ✅ `verify:meta` B5 이동·경계·안전 정지 항목 전부 유지 |
+| 3 | 테스트 삭제·skip 없음 | ✅ `verify:gameplay` 213 → **238**, `verify:sprint-b` 자동 22 → **22**, B5 항목 10건 전부 존재 |
+| 4 | unwired에서 alert·마지막 확인 위치 접근이 C3와 일치 | ✅ 변경된 테스트 1건은 거리 측정 대상을 플레이어 → **사건 지점**으로 바꿨다. `getTargetPosition`이 stage detected에서만 위치를 주므로 unwired면 attack 전이가 없다 — **C3 계약의 결과이지 회귀가 아니다** |
+| 5 | wired 시 attack·`EnemyAttackRequest` 경로 존치 | ✅ `verify:meta`의 '표적 방향 선회·전진' 테스트가 유효 표적 경로를 덮는다 |
+| 6 | 단순 assertion 약화로 통과시키지 않음 | ✅ 변경 테스트는 **이동·수면 유지 단언을 그대로 유지**하고 대상만 계약에 맞췄다 |
+
+**삭제된 check 2건은 B5가 아니다** — `[ECON] 파괴 정산 손실률`·`희귀 부품 보존`
+두 건이며, 인계표가 지시한 **병행 정산 경로 제거**(`settleDefeat`/`settleReturn`)에
+동반된 검증 정리다. 동일 보장은 정본 경로(`verify:meta` '정산: 파괴 = 크레딧 50%
+손실, 희귀 부품 보존')가 덮고 있고, 부재 자체가
+`[ECON] 병행 정산 API 제거` 검사로 고정됐다.
+
+## 7. `consumeDamageFlash` 검토 (인계표 §⑥)
+
+| 조건 | 결과 |
+|---|---|
+| `currentHull` 변경 없음 | ✅ |
+| `flooding` 변경 없음 | ✅ |
+| `survivalState` 변경 없음 | ✅ |
+| `lastDamage` 기록 변경 없음 | ✅ |
+| 렌더용 flash acknowledge만 | ✅ |
+| `SurvivalReadModel` 스냅샷 불변성 | ✅ 호출마다 새 값 |
+
+**허용된 command로 유지.** 사용 형태
+`survivalHud.attachSource(playerHull, () => playerHull.consumeDamageFlash())`.
+
+## 8. C9 combat params
+
+**15종 전부 null 유지** (선체 3 · 폭뢰 5 · 침수 5 · 탐지 2).
+임의 수치 입력 0 · null→0 변환 0 · provisional fallback 0 · fixture 복사 0 ·
+압력 params 추가 0 (`verify:sprint-c` C9-nullAllowed·C9-fixtureIsolation·
+C9-noProvisionalFallback·C9-pressureExcluded가 전부 관측으로 고정).
+
+## 9. 자동 검증 (A+B+C 통합 빌드)
+
+| 검사 | dev baseline | 통합 후 |
+|---|---|---|
+| `npm ci` / `typecheck` / `build` | ✅ | ✅ / ✅ / ✅ |
+| `check:size` | 4.8% | ✅ **5.2%** |
+| `check:scope` | ✅ | ✅ |
+| `verify:gameplay` | 213/213 | ✅ **238/238** |
+| `verify:meta` | 88/88 | ✅ **119/119** |
+| `verify:tooling` | 26/26 | ✅ **26/26** |
+| `verify:hud` | 34/34 | ✅ **34/34** |
+| `verify:sprint-a` | 자동 전 항목 | ✅ 자동 전 항목 |
+| `verify:sprint-b` | 자동 22/22 | ✅ **자동 22/22** |
+| `verify:sprint-c` | (없음) | ✅ **자동 23/23** |
+
+테스트 삭제·skip·assertion 약화·임의 params로 통과시킨 항목 **0건**.
+
+### `verify:sprint-c` 상태 출력
+
+```
+C_CONTRACT_COMPLETE                = true
+C_GAMEPLAY_COMPOSITION_PRESENT     = true
+C_GRAPHICS_COMPOSITION_PRESENT     = true
+C_TOOLING_READY                    = true
+C_COMBAT_PARAMS_DEFINED            = false   ← 정상 (공식 수치 미도착)
+C_RUNTIME_WIRED                    = false   ← 정상
+C_BROWSER_EMPIRICAL_COMPLETE       = false   ← 정상
+C_FINAL_COMPLETE                   = false   ← 정상
+blockers = [ C9_PARAMS_PENDING:15/15, BROWSER_EMPIRICAL_PENDING ]
+```
+
+**경고로 설계된 항목 vs 실제 필수 실패 구분**
+
+| 구분 | 항목 |
+|---|---|
+| 실제 필수 실패 (종료 코드 반영) | **0건** — 툴링 소유 영역 전 항목 통과 |
+| 설계상 대기(종료 코드 미반영) | `C-browserSurvival`(생존 루프 실측 — params null로 성립 불가), `C-aimingProvisionalNotC`(A 스프린트 조준 provisional 2건 — C9 범위 아님, C 완료 판정에 넣지 않음) |
+
+통합 중 실제로 **실패**했다가 해소한 항목 2건:
+`C9-loaderSingleSource`(내 raw import 제거로 해소) ·
+`C-survivalRender`/`C-debriefRender`(스캔 범위 정정으로 해소).
+
+## 10. 브라우저 실측
+
+### A. production (공식 null params 그대로) — **20/20 통과**
+
+URL `http://localhost:5173/`, 쿼리 플래그 없음.
+
+| # | 항목 | 실측 |
+|---|---|---|
+| 1 | 게임 시작·출항 가능 | `meta=BASE`, `canLaunchSortie=true` → `departed` |
+| 2 | 콘솔 오류 | **0건** |
+| 3 | Detection HUD 미연결 표시 | `"▦ 탐지 계기 미연결 — unwired — 게이지 정지 (판정 데이터 대기)"` |
+| 4 | Survival HUD 미연결 표시 | `"▦ 선체 계기 미연결 (판정 데이터 대기) · ≋ 침수 0%"` — 정상 선체로 위장하지 않음 |
+| 5 | 경비함 생성·이동 | 1척 `patrol` · `y=12` 수면 유지 · 6초 후 이동 확인 · AI `alert` |
+| 6 | 공격·폭뢰 0 | 선체 `hullRatio=null`·침수 0·`survivalState=stable` · `detectionHudView={gauge:0,stage:'safe',unwired:true}` |
+| 7 | 정상 귀환 | `settleSortie('returned')` |
+| 8 | 정상 정산 | `kind=returned` · `saveStatus=saved` · `canConfirm=true` |
+| 9 | 저장 성공 후 자동 BASE 전환 없음 | `meta=DEBRIEF` 유지 |
+| 10 | 확인 버튼 → BASE | 버튼 DOM 클릭 → `meta=BASE` |
+| 11 | 다음 출항 가능 | `departed` |
+| 12 | salvage 재생성 | `salvage-1/2/3` |
+| 13 | wallet·upgrade·loadout 보존 | 크레딧 500→500 · 업그레이드 동일 · loadout 동일 |
+| 14 | 실패·귀환 화면 동시 표시 없음 | 귀환 표시=true · 실패 표시=false |
+| — | C9 params 상태 | 미확정 **15/15** · hull wired=false · flooding wired=false |
+| — | 중복 confirm | `invalidState` — BASE 전환 반복 없음 |
+| — | 새 출항 reset | 경비함 0척 · 침수 0 |
+
+스크린샷: `sprintC_prod_base.png` · `sprintC_prod_hud_unwired.png` ·
+`sprintC_prod_guard.png` · `sprintC_prod_return_screen.png`.
+
+> 자동화 참고: 귀환 화면 '확인' 버튼은 Playwright `click()` actionability에서
+> 간헐적으로 차단된다(오버레이가 매 프레임 `display`를 써서 unstable 판정).
+> `elementFromPoint` 히트테스트는 버튼 자신을 반환하고 실제 DOM click 이벤트로는
+> 정상 동작한다 — **제품 결함이 아니라 자동화 아티팩트**로 판정했다.
+
+### B. fixture / QA 모드 (`?cdemo=1`) — **14/14 통과**
+
+fixture 결과는 production 실측으로 계산하지 않는다. 배지
+`"C fixture — HUD 표시 규칙 검수용 (게임플레이 실제 상태 아님)"` 표시 확인.
+
+| # | 항목 | 실측 |
+|---|---|---|
+| 1 | 탐지 3단계 | `─ 은신` / `◔ 수색` / `◉ 발각` |
+| 2 | 추적 4상태 | `○ 순찰` · `◍ 경계` · `● 공격 태세` · `◌ 추적 상실` |
+| 3 | 선체 피해 HUD | `"⛨ 선체 75 / 100 · 손상"` |
+| 4 | 침수 HUD | `"≋ 침수 55% · ≋≋ 침수 — 심각"` |
+| 5 | 방향성 피격 표시 | `[data-survival-hit-direction]` `⟪` opacity=1, 방위 회전 배치 확인 |
+| 6 | failure/return 화면 분리 | 각각 단독 표시, 동시 표시 0 |
+| 7 | 저장 실패 | `"✕ 저장 실패 — 기지로 이동할 수 없습니다…"` + 재시도 버튼 |
+| 8 | retrySave | 재시도 → 저장 성공 전환 (정산 문구 재계산 없음) |
+| 9 | 저장 성공 후 confirm | 확인 → 화면 종료 |
+| 10 | 중복 confirm 방지 | 재클릭 후 화면 재표시 없음 |
+| 11 | 작은 화면(640×480) HUD 겹침 | production HUD 2종 **화면 안·상호 겹침 없음** (fixture 배지만 탐지 HUD와 겹침 — 배지는 QA 전용, production 미존재) |
+
+스크린샷: `sprintC_fixture_detection.png` · `sprintC_fixture_tracking.png` ·
+`sprintC_fixture_survival.png` · `sprintC_fixture_hit_direction.png` ·
+`sprintC_fixture_failure.png` · `sprintC_fixture_return.png` ·
+`sprintC_fixture_small_screen.png`.
+
+### C. production에서 실측하지 못한 항목 (공식 params null)
+
+아래는 **완료로 보고하지 않는다.**
+
+- 실제 탐지 게이지 상승 · 실제 attack 전이 · 실제 폭뢰 투하 · 신관 실측 ·
+  direct/near 피해 · 실제 침수 증가 · 실제 선체 파괴 · 실제 파괴 기반 실패 정산
+
+fixture에서 확인한 것은 **표시 규칙**뿐이며 판정·수치가 아니다.
+
+```
+C_BROWSER_EMPIRICAL_COMPLETE = false
+```
+
+## 11. 남은 blocker
+
+1. **C9 공식 수치 미도착** — 15/15 미확정. 발명 금지 원칙에 따라 null 유지.
+   해소 입력은 기획 전투 수치표 하나뿐이다.
+2. **`attachCombatParams` 전송 형태 충돌** (§5) — 수치 도착 **전에** 게임플레이·
+   툴링·리드 합의 필요. 지금 고치지 않으면 값이 들어와도 C1·C4가 unwired로 남는다.
+3. **실패 화면 confirm 경로 부재** — `SortieFailureScreen`의 '확인 (기지로)'
+   버튼은 화면만 숨기고 `debriefConfirm.confirm()`을 호출하지 않는다
+   (`attach(model, retryCommand)` — confirm command 파라미터 자체가 없다).
+   인계표 §⑦은 **정상 귀환·실패 양쪽 동일 confirm 정책**을 요구하므로 실패
+   경로에도 confirm이 필요하다. 그래픽스 컴포넌트 시그니처 변경이라 통합 창이
+   임의로 만들지 않았다. **현재 production에서는 도달 불가**(params null →
+   파괴 없음)이며 fixture 경로에서만 재현된다. 소유: 그래픽스 + 리드 정책.
+4. **B7 실측** (B 병렬 슬롯) — C와 무관, 혼합하지 않았다.
