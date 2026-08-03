@@ -18,11 +18,54 @@
 
 import * as THREE from 'three';
 import { TORPEDO_TUBE_ANCHOR } from '../world/torpedoTubeAnchor';
+import { buildDotTexture } from './DriftParticles';
+import visualParams from './renderVisualParams.json';
 
-const HULL_COLOR = 0x8a949b;
-const TIER_ACCENT_COLOR = 0x6d7a82;
+/**
+ * 아트 디렉션 팔레트 (renderVisualParams.json 소유 — 코드에 수치 복제 금지):
+ * 선체는 한랭 청회색, 식별 액센트는 제한적 주황 — 배경(협곡 회청색)에서
+ * 실루엣이 분리되도록 한다.
+ */
+const ART = visualParams.artDirection;
 /** 선체 반長 — 프로펠러(선미 +Z) 장착 위치 (시각 상수) */
 const SUBMARINE_HALF_LENGTH = 2.8;
+
+/**
+ * 프레넬 림라이트 — 추가 광원·추가 드로우 없이 재질 셰이더에 주입한다
+ * (조명 예산 §12.2: 실시간 2등 유지). 차가운 림 색은 잠수함을 배경에서
+ * 분리하는 아트 타깃 문법이다. flatShading 노멀에도 동일하게 작동한다.
+ */
+function applyFresnelRim(material: THREE.MeshLambertMaterial): void {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms['rimColor'] = { value: new THREE.Color(ART.rim.color) };
+    shader.uniforms['rimStrength'] = { value: ART.rim.strength };
+    shader.uniforms['rimPower'] = { value: ART.rim.power };
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        [
+          '#include <common>',
+          'uniform vec3 rimColor;',
+          'uniform float rimStrength;',
+          'uniform float rimPower;',
+        ].join('\n'),
+      )
+      .replace(
+        '#include <opaque_fragment>',
+        [
+          'float rimFacing = saturate(dot(normalize(vViewPosition), normalize(normal)));',
+          'outgoingLight += rimColor * (rimStrength * pow(1.0 - rimFacing, rimPower));',
+          '#include <opaque_fragment>',
+        ].join('\n'),
+      );
+  };
+}
+
+/** 저사양 fallback용 연출 스위치 — 기본은 전체 연출 (renderQuality가 결정) */
+export interface SubmarineVisualOptions {
+  readonly rimEnabled?: boolean;
+  readonly navGlowEnabled?: boolean;
+}
 
 /**
  * 어뢰관 앵커 — 모델이 정의하는 단일 지점 (13차 결의 2: 앵커는 모델 정의,
@@ -68,15 +111,21 @@ export class SubmarineVisual {
   private readonly hullTierParts: THREE.Group[] = [];
   private readonly weaponTierParts: THREE.Group[] = [];
 
-  constructor() {
+  constructor(options: SubmarineVisualOptions = {}) {
     const material = new THREE.MeshLambertMaterial({
-      color: HULL_COLOR,
+      color: ART.materials.hullColor,
+      emissive: ART.materials.hullEmissive,
       flatShading: true,
     });
     const accentMaterial = new THREE.MeshLambertMaterial({
-      color: TIER_ACCENT_COLOR,
+      color: ART.materials.accentColor,
+      emissive: ART.materials.accentEmissive,
       flatShading: true,
     });
+    if (options.rimEnabled ?? true) {
+      applyFresnelRim(material);
+      applyFresnelRim(accentMaterial);
+    }
     this.disposables.push(material, accentMaterial);
 
     // ── 기본형(1단계) — 캡슐 선체 + 함교 (선수 쪽) ──
@@ -98,6 +147,10 @@ export class SubmarineVisual {
     );
     this.root.add(this.aimCameraSocket);
 
+    if (options.navGlowEnabled ?? true) {
+      this.mountNavGlow();
+    }
+
     this.buildHullTierParts(material, accentMaterial);
     this.buildWeaponTierParts(accentMaterial);
     this.setVisualTiers(1, 1);
@@ -116,6 +169,35 @@ export class SubmarineVisual {
     this.weaponTierParts.forEach((part, index) => {
       part.visible = weapon >= index + 2;
     });
+  }
+
+  /**
+   * 항법등 글로우 — 함교 상단·선미 2점, `THREE.Points` 1개(= 드로우 콜 1)의
+   * 가산 스프라이트. 아트 타깃의 '제한적 주황 식별색'을 광원 추가 없이
+   * 표현한다 (조명 예산 불변, 실제 bloom 미사용 — emissive·가산 대체).
+   */
+  private mountNavGlow(): void {
+    const positions = new Float32Array([
+      0, 1.95, -0.5, // 함교 상단
+      0, 0.45, SUBMARINE_HALF_LENGTH - 0.3, // 선미 상부
+    ]);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const texture = buildDotTexture();
+    const material = new THREE.PointsMaterial({
+      map: texture,
+      color: ART.navGlow.color,
+      size: ART.navGlow.sizeMeters,
+      transparent: true,
+      opacity: ART.navGlow.opacity,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      sizeAttenuation: true,
+    });
+    this.disposables.push(geometry, material, texture);
+    const glow = new THREE.Points(geometry, material);
+    glow.renderOrder = 3; // 반투명 서열: 수면·부유물과 같은 층
+    this.root.add(glow);
   }
 
   /**

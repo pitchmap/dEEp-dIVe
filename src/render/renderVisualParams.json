@@ -49,5 +49,57 @@
     "weakpointPulseHz": 1.4,
     "fallbackDashSeconds": 2.6,
     "fallbackShakeAmplitude": 0.25
+  },
+  "artDirection": {
+    "$comment": "아트 타깃(심해 후방 플레이 이미지) 대응 — 전부 순수 연출값 (밸런스 아님). 안개는 전경/중경/후경 명도 분리, 재질은 실루엣 분리, rim·부유물·글로우는 저사양(?quality=low)에서 단계 축소",
+    "toneMappingExposure": 1.12,
+    "fog": {
+      "shallowColor": "#1c4a5c",
+      "deepColor": "#0a2430",
+      "shallowNear": 18,
+      "shallowFar": 150,
+      "deepNear": 10,
+      "deepFar": 95
+    },
+    "lights": {
+      "sunColor": "#cfe8f2",
+      "sunIntensity": 2.3,
+      "skyColor": "#3a6a7c",
+      "groundColor": "#101c22",
+      "hemisphereIntensity": 1.15
+    },
+    "materials": {
+      "wallColor": "#5d6a70",
+      "wallEmissive": "#0c1a20",
+      "floorColor": "#4d5a5c",
+      "floorEmissive": "#0b171c",
+      "hullColor": "#46586a",
+      "hullEmissive": "#0a141c",
+      "accentColor": "#b06a32",
+      "accentEmissive": "#3a1e08"
+    },
+    "rim": {
+      "color": "#7fc4de",
+      "strength": 0.42,
+      "power": 3.1
+    },
+    "navGlow": {
+      "color": "#ffc37a",
+      "sizeMeters": 0.55,
+      "opacity": 0.85
+    },
+    "drift": {
+      "count": 140,
+      "sizeMeters": 0.16,
+      "opacity": 0.28,
+      "boxRadiusMeters": 26,
+      "riseMetersPerSecond": 0.35,
+      "swayMetersPerSecond": 0.12
+    },
+    "lowSpec": {
+      "driftCount": 40,
+      "rimEnabled": false,
+      "navGlowEnabled": false
+    }
   }
 }
