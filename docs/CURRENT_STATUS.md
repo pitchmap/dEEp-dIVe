@@ -274,7 +274,11 @@ B 선행개발          = 가능 (선행개발 상태로만)
     - **선행 계약 (커밋 `d048c40`)** — `contracts/survival.ts`: PlayerHullState(+unwired)·DamageEvent/Request·DamageSourceType(기존 DamageCause는 폭뢰 근접도로 병존)·DamageReceiverPort(결과 7종)·FloodingParams/Snapshot·DepthPressureParams/Port·HullUpgradeConsumer·EnemyAttackPort·SurvivalReadModel·SortieFailureReport/Port·PlayerAliveSource·SortieResettable. events: `playerDestroyed`·`sortieFailed`(실패 화면 — 귀환 `sortieEnded`와 분리, C7)
     - **구현 (`c3367a4`·`b52d437`·`2e7c788`·`59b4bfe`)** — `core/PlayerHullSystem`(피해 수신 단일 창구·중복 원장·전이·파괴 1회·읽기 모델·출항 초기화), `core/FloodingCore`(dt 비례 결정적 누적·단계 파생), `core/SortieFailureCoordinator`(파괴 1회 → MetaLoop 정산 1회 → 기존 저장 경로 → BASE, 저장 실패 시 DEBRIEF 유지·재정산 없는 재시도). Game 조립: FloodingCore → PlayerHullSystem(② 판정) → SaveBridge → SortieFailureCoordinator, 출항 시작 시 생존 상태 초기화. 결정적 검증 **103/103**(C 16항목 신규 + 정적 2 개정)
     - **수치 0**: 선체 기준값·피해량·침수 속도·압력은 **공식 params에 없음**(upgrades.json hullIntegrity·maxDepth는 배율만 승인·paramRef 없음) → 전 시스템 `unwired`, 임시 수치 생성 없음. 연결은 `attachHullParams`·`attachParams` 두 줄
-    - **C 선행 계약 마감 (INT-CORE-015 — C_ROLE_HANDOFF_READY=true):**
+    - **C 통합 blocker 마감 (INT-CORE-016 — C_INTEGRATION_HANDOFF_READY=true):**
+    - **AI 공격 요청**: `DestroyerAIController`가 attack 상태에서만 `EnemyAttackRequest` 생성(요청만 — 피해·반경·쿨다운·신관 비소유, id 단조·결정적). destroyed·위치 미확인·lost·포트 미연결 = 요청 0건. `EnemyAttackPortBinding` 미연결 = unwired(투하·피해 0) — 병합 시 `attach(gameplay.enemyAttackPort)` 1줄
+    - **DEBRIEF confirm 정책 개정**: 저장 성공이 BASE 전환을 자동으로 일으키지 않음 — `canConfirm` → `DebriefConfirmCommand.confirm()`만이 BASE 진입점(정상 귀환·실패 동일, 저장 미완료·중복 confirm 거부). DECISIONS C-9
+    - **통합 patch 확정**: SPRINT_C_HANDOFF §통합 composition patch — 게임플레이 4+1줄·그래픽스 2줄+confirm 교체·Game.ts 충돌 표·B5 검토 5항목·consumeDamageFlash 허용 판정. `GuardShipAdapter`가 `TrackingStateSource` 구현(추적 표시 소스 정본). 결정적 검증 **119/119**
+  - **C 선행 계약 마감 (INT-CORE-015 — C_ROLE_HANDOFF_READY=true):**
     - C1~C3: `contracts/detection.ts` — 게이지 정본=게임플레이 DetectionSystem(기존 계약), 은신·심도 입력 포트, 거리 감쇠·감소율 null 계약(unwired), HUD·AI 읽기 모델 2종(AI는 stage만), 추적 전이 정본=리드(기존 상태 어휘·경비함/호위함/적대함 공유), alert 발화=기존 detectionChanged, 출항 reset 경계
     - C4: 폭뢰 정본 경로(탐지→AI 요청→EnemyAttackPort→DepthChargeSystem→direct/near→applyDamage) + `DepthChargeDamageParams`(전부 null 허용)
     - 침수 지속 피해도 **단일 창구 경유**(tick별 flood:<n> id·닫힌 적분 — dt 분할 무관 총 피해 동일), 파괴 경로 통합
@@ -318,7 +322,7 @@ B 선행개발          = 가능 (선행개발 상태로만)
   - **[INT-CORE-014 적용 요청 — 그래픽스]** `SurvivalReadModel`만 소비(내부 객체 비노출·값 변경 불가). **실패 화면=`sortieFailed` / 귀환 화면=`sortieEnded`** 로 데이터·화면 완전 분리(C7). 침수량·피해량을 결정하지 않으며 경고는 `warningIds` 키로만 온다
   - **[INT-CORE-014 적용 요청 — 빌드·툴]** `params/combat.json` C9 [COMBAT] 확장: 선체 기준값·survivalState 경계 2종·폭뢰 direct/near 피해·침수 3단계 경계/확산율/피해율·(도입 시)압력 4종. **전부 미확정이며 임의 수치 금지.** `verify:sprint-c` 신설은 툴링 몫 — 리드는 없는 script를 실행하지 않았다
   - **계층 경계 [확정]:** 상위(src/meta)가 하위 세션 내부 상태를 읽는 코드, 하위가 메타 상태를 참조하는 코드는 리뷰 반려 대상 — 통신은 SortieSessionPort + 이벤트 3종뿐
-- **마지막 업데이트:** C 선행 계약 마감 (INT-CORE-015 — C1~C4·침수 경로·DEBRIEF 모델·handoff. **C_ROLE_HANDOFF_READY=true**, 인계 정본 SPRINT_C_HANDOFF.md)
+- **마지막 업데이트:** C 통합 blocker 마감 (INT-CORE-016 — AI 공격 요청·DEBRIEF confirm 정책·통합 patch. **C_INTEGRATION_HANDOFF_READY=true**)
 - **담당 브랜치:** `claude/deep-dive-core-lead-uyg77p` (리드 세션 — A_STACK 기준 `85ec32b` / 통합 tip `8f40117` 머지 완료)
 
 ## 게임플레이

@@ -90,6 +90,22 @@
 
 ## 제안 목록
 
+### INT-CORE-016 — C 통합 blocker 마감: AI 공격 요청 생성 · DEBRIEF confirm 정책 개정 · 통합 patch 확정
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (역할 보고 4건 수신 후 — 게임플레이 `844d0c7`·그래픽스 `97e7dd3`·툴링 `2814dd0`. 역할 브랜치 병합 없음, 보고·계약 기준으로만 리드 소유 영역 수정) |
+| 대상 시스템 | `src/core/DestroyerAIController.ts`·`destroyerAiFactory.ts`(공격 요청 생성), `src/contracts/survival.ts`(canConfirm·DebriefConfirmOutcome), `src/core/SortieFailureCoordinator.ts`(자동 전환 제거), `src/core/PveIntegration.ts`(DebriefConfirmCommand·EnemyAttackPortBinding), `src/core/GuardShipAdapter.ts`(TrackingStateSource), `src/core/Game.ts`(조립) |
+| Blocker 1 해소 | `DestroyerAIController`가 **attack 상태에서만** `EnemyAttackRequest` 생성 → 주입된 `EnemyAttackPort`(게임플레이 `EnemyAttackCoordinator`)로 전달. AI는 요청만 — 피해량·반경·사거리·쿨다운·신관 비소유, DamageReceiverPort·DepthChargeRunSystem 직접 접근 0. destroyed·위치 미확인·lost·포트 미연결에서 요청 0건. 탐지 게이트는 게임플레이 motion 포트(getTargetPosition = detected일 때만) 소유 — stage 재판정 없음(이중 판정 금지), 기존 patrol/alert/attack/lost 전이 무변경. `EnemyAttackPortBinding`: 미연결 = unwired(투하·피해 0), 병합 시 `enemyAttackBinding.attach(gameplay.enemyAttackPort)` 1줄 |
+| Blocker 2 해소 | **DEBRIEF 종료 정책 공식 개정** (그래픽스 INT-RENDER-012 '자동 completeDebrief 제거' 요청 승인·확장): 저장 성공 → `saveStatus='saved'`·DEBRIEF 유지·`canConfirm=true` → 사용자 확인(`DebriefConfirmCommand.confirm()`) → BASE. 저장 실패 → DEBRIEF 유지·canRetrySave일 때만 retrySave(재정산 0) → 성공 시 confirm 활성. 정상 귀환·실패 **양쪽 동일 정책**. 보장: 정산 출항당 1회·최초 saveRequested 1회·retry 재정산 0·저장 성공만으로 completeDebrief 자동 호출 0·중복 confirm 시 BASE 전환 1회·저장 미완료 confirm 거부(saveIncomplete)·화면 분기는 kind만 |
+| Blocker 3 | 통합 composition patch 확정 — `docs/SPRINT_C_HANDOFF.md` §'통합 composition patch' (게임플레이 4+1줄·그래픽스 2줄+confirm 교체·조립 순서·Game.ts 충돌 표) |
+| Blocker 4 | B5 테스트 변경 검토 acceptance 5항목 — SPRINT_C_HANDOFF §⑤ (통합 관리자 검사) |
+| Blocker 5 | `consumeDamageFlash` 계약 판정 **허용** — SPRINT_C_HANDOFF §⑥ (플래시 플래그만 해제, 코어 상태·lastDamage 불변, snapshot 계약 유지) |
+| 하위 호환 여부 | `DebriefReadModel.canConfirm` 필드 추가(소비자는 그래픽스 신규 화면뿐 — 병합 시 3-인자 tracker 채택 필요), `SortieFailureReport.nextState`는 이제 항상 'DEBRIEF'(자동 BASE 폐기), factory 2번째 인자 추가(기본 null — 기존 호출 무영향) |
+| 개발 리드 결정 | 승인 — **C_INTEGRATION_HANDOFF_READY=true.** 그래픽스 Game.ts의 `completeDebrief` 직접 호출은 병합 시 `debriefConfirm.confirm()`으로 교체할 것(저장 미완료 가드 우회 방지) |
+| 적용 커밋 | 2dacea4(AI 공격 요청)·fd5574b(confirm 정책·바인딩)·223bfd8(검증 119) + 문서 커밋 |
+
+
 ### INT-CORE-015 — 스프린트 C 선행 계약 마감: 탐지·추적(C1~C3)·폭뢰 경로(C4)·침수 단일 창구·DEBRIEF 모델
 
 | 필드 | 내용 |

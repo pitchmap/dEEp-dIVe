@@ -122,12 +122,12 @@
 | `FloodingParams` / `FloodingSnapshot` | 단계는 level에서 **파생**(이중 저장 금지). 프레임률 독립 누적. 이동 성능 저하·조작 불능은 공식 결정 없음 → 미구현 | 리드(코어) / 기획·툴링(수치) |
 | `DepthPressureParams` / `DepthPressurePort` | **월드 Y 좌표**(위가 +, 깊을수록 작아짐) 규약 명시. 안전 잠항 한계·피해 시작 Y·tick·즉시 파괴 여부 구분. 압력 피해는 C1~C9 목록에 없어 **구현 pending** | 리드(계약) / 게임플레이(판정) |
 | `HullUpgradeConsumer` / maxDepth | `hullIntegrity`·`maxDepth` 배율은 승인 완료(upgrades.json), **기준값 params 부재** → 소비 경계만 확정하고 production은 pending | 리드(경계) / 툴링(params) |
-| `EnemyAttackRequest` / `EnemyAttackPort` | 적 공격 → 피해 전달 경계. 무기·사거리·쿨다운 params 부재 → `unwired` 반환, 거리 무관 자동 피해·테스트용 즉시 피해 금지 | 리드(계약) / 게임플레이(판정) |
+| `EnemyAttackRequest` / `EnemyAttackPort` (+`EnemyAttackPortBinding`) | 적 공격 → 피해 전달 경계. **생성자 = 리드 `DestroyerAIController`(attack 상태에서만, 요청만 — id 단조·관측 좌표)**, 판정 = 게임플레이 `EnemyAttackCoordinator`(사거리·쿨다운·params). 바인딩 미연결 = `unwired`(투하·피해 0), 거리 무관 자동 피해·즉시 피해 금지 | 리드(계약·생성) / 게임플레이(판정) |
 | `SurvivalReadModel` | HUD 소비 전용 — hull·flooding·state·lastHitDirection·damageFlashRequested·warningIds(키만)·failureCountdown·isDestroyed. 문구·색·이펙트 없음 | 리드(모델) / 그래픽스(표현) |
 | `SortieFailureReport` / `SortieFailurePort` | failureId·reason 4종·pendingCredits·securedRareParts·appliedLoss·final*·saveStatus·nextState. 정산·손실률·지갑은 MetaLoop 소유(별도 지갑 금지), 저장은 기존 `saveRequested` 경로 | 리드 |
 | `PlayerAliveSource` | 파괴 후 적 AI·표적 판정이 소비하는 생사 소스(중복 상태 금지) | 리드(상태) / 게임플레이(소비) |
 | `DepthChargeDamageParams` | C4 폭뢰 — 직격/근접 반경·피해·쿨다운 (전부 null 허용 — 미확정 시 폭발해도 피해 unwired). 정본 경로: 탐지 → AI 요청 → EnemyAttackPort → DepthChargeSystem → direct/near → **applyDamage 단일 창구** | 리드(계약) / 게임플레이(판정) / 기획·툴링(수치) |
-| `DebriefReadModel` (+`DebriefStateTracker`) | C6·C7 — kind(returned/aborted/destroyed)·settlement·failure·saveStatus·canRetrySave. 그래픽스는 isDestroyed 추측 없이 이 모델로만 화면 분기, 읽기 전용(스냅샷) | 리드 |
+| `DebriefReadModel` (+`DebriefStateTracker`·`DebriefConfirmCommand`) | C6·C7 — kind(returned/aborted/destroyed)·settlement·failure·saveStatus·canRetrySave·**canConfirm**. 그래픽스는 isDestroyed 추측 없이 이 모델로만 화면 분기, 읽기 전용(스냅샷). **BASE 복귀는 confirm command가 유일한 진입점**(저장 성공 자동 전환 0 — INT-CORE-016, 정상 귀환·실패 동일 정책. 저장 미완료 saveIncomplete·중복 invalidState) | 리드 |
 | 침수 피해 경로 | FloodingCore → 지속 피해 DamageRequest(tick별 `flood:<n>` id) → applyDamage — 선체 직접 수정 없음, dt 분할 무관 총 피해 동일(닫힌 적분) | 리드 |
 | `SortieResettable` | 출항 한정 상태 초기화: 선체·침수·마지막 피해·파괴 플래그·중복 원장·적 공격·실패 코디네이터·경비 사건·salvage. **영구**: 지갑·업그레이드·loadout. 선체 영구 손상은 근거 없음 → 결정 요청 | 리드 |
 

@@ -73,6 +73,7 @@
 | C-6 | **선체 손상·침수 = 출항 단위 상태**: 새 출항 시작 시 업그레이드 반영 maxHull 재계산 + currentHull=maxHull 초기화. 기지까지 이어지는 영구 손상·수리비·수리 시간은 후속 스프린트 이관 | [확정 — INT-CORE-015] |
 | C-7 | **구매 순간 회복 없음**: 선체 업그레이드 구매 시 진행 중 출항의 currentHull을 회복시키지 않는다 — 최대치만 갱신, 효과는 다음 출항 초기화에서 적용 (C-5의 결정 요청 1건 해소) | [확정 — INT-CORE-015] |
 | C-8 | **압력 피해 = C 핵심 범위 제외**: DepthPressure 계약·maxDepth 소비 경계는 확장 지점으로 유지하되 production runtime은 unwired. 압력 수치를 C9 필수 combat params·verify:sprint-c 게이트·C 완료 조건에 포함하지 않는다 (C-5의 결정 요청 1건 해소). 침수 지속 피해 포함 **모든 선체 피해는 applyDamage 단일 창구 경유** — tick별 고유 id, dt 분할 무관 총 피해 동일(닫힌 적분) | [확정 — INT-CORE-015] |
+| C-9 | **DEBRIEF 종료 정책 개정**: 저장 성공이 BASE 전환을 자동으로 일으키지 않는다 — `DebriefReadModel.canConfirm`(saved+DEBRIEF) → 사용자 확인(`DebriefConfirmCommand.confirm()`) → `completeDebrief()` → BASE. 정상 귀환·실패 양쪽 동일 정책. 저장 미완료 confirm 거부, 중복 confirm 거부(전환 1회), retrySave는 재정산 없이 저장만. C-3의 '저장 성공 시 BASE' 문구는 본 결정으로 개정 | [개정 확정 — INT-CORE-016, 그래픽스 INT-RENDER-012 요청 승인] |
 
 ## 버티컬 슬라이스 트랙 유효 결정 (구현 기준 — PvE에서 이월·재편)
 

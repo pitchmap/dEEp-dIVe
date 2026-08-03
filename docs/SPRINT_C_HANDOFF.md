@@ -128,3 +128,87 @@
   C 테스트는 B7 실측 데이터를 요구하지 않는다
 - **dev PR gate**: C1~C9 전 항목 + A·B 회귀(verify:sprint-a/b) + 이중 정산
   방지 정적 검사 통과. `verify:sprint-c` 도착 전에는 이 문서의 manifest가 기준
+
+---
+
+## 통합 composition patch (INT-CORE-016 — 확정본. 통합 관리자 적용용)
+
+> 기준: 리드 최종 커밋 + 게임플레이 `844d0c7`·그래픽스 `97e7dd3`·툴링
+> `2814dd0` 보고. 병합 순서 **리드 → 게임플레이 → 그래픽스 → 툴링** 후
+> `Game.composeSystems` 안에서 아래를 적용한다.
+
+### ① 게임플레이 배선 (INT-GAME-014 — 4줄 + 공격 포트 1줄)
+
+| # | 코드 | 위치 (리드 브랜치 기준) |
+|---|---|---|
+| 1 | `gameplay.attachPlayerAliveSource(playerHull);` | `playerHull` 등록 직후 — '배선 대기' 주석 자리 |
+| 2 | `gameplay.attachDamageReceiver(playerHull);` | 위와 같은 블록 (피해 단일 창구 연결) |
+| 3 | `gameplay.attachCombatParams(combatJson);` | `official` 로드 직후 — `params/combat.json` **원본**을 그대로(툴링 C9 4블록 포함, null 유지). import 1줄 필요 |
+| 4 | `enemyAttackBinding.attach(gameplay.enemyAttackPort);` | `enemyAttackBinding` 생성 직후 — **이 줄이 C4 공격 사슬의 마지막 연결**이다 |
+| 5 | (선택) `scene.attachShipWorldSource(gameplay.shipWorldSource); scene.attachShipIdentificationSource(gameplay.shipIdentification);` | 기존 scene attach 클러스터 |
+
+### ② 그래픽스 배선 (INT-RENDER-012 — 2줄 + 확인 command 교체)
+
+| # | 코드 | 위치 |
+|---|---|---|
+| 1 | `detectionHud.attachDetectionSource(gameplay.detectionHudView 기반 소스);` | 그래픽스 Game.ts의 '도착 시' 주석 자리 — 게임플레이 정확 API는 `gameplay.detectionHudView()`(값 복사본 함수)이므로 폴링 어댑터 `{ get view() { return gameplay.detectionHudView(); } }` 형태로 연결 |
+| 2 | `detectionHud.attachTrackingSource(guardAdapter);` | 같은 자리 — 추적 소스 정본은 **리드 `GuardShipAdapter`**(`TrackingStateSource` 구현, `trackedShips`) |
+| 3 | **확인 command 교체**: 그래픽스 `returnScreen.attach(..., () => metaLoop.completeDebrief())`·실패 화면 저장 성공 경로의 `completeDebrief` 직접 호출을 전부 `this.debriefConfirm.confirm()`으로 교체 | 개정 정책(아래 §DEBRIEF)의 강제 — 직접 호출은 저장 미완료 가드를 우회한다 |
+
+### ③ composition 조립 순서 (확정)
+
+`loadParams`+`loadEconomyParams`+`loadAimingParams`+`combat.json` →
+`FloodingCore`→`PlayerHullSystem`(② 판정) → 게임플레이 `DetectionSystem`·
+`DetectionEnvironmentSource`(gameplay 내부) → `DetectionStageSource`(게임플레이
+motion 포트 게이트) → `DestroyerAIController`(리드 factory + `EnemyAttackPortBinding`)
+→ `attachPlayerAliveSource`·`attachDamageReceiver`·`attachCombatParams` →
+`EnemyAttackCoordinator`←binding attach → `DepthChargeRunSystem`(gameplay 내부)
+→ `SortieFailureCoordinator` → MetaLoop 정산 → `SaveBridge` →
+`DebriefStateTracker`(+`DebriefConfirmCommand`) → read model 4종 → HUD·화면.
+
+### ④ Game.ts 예상 충돌 위치 (그래픽스 97e7dd3 vs 리드 최종)
+
+| 위치 | 충돌 내용 | 해소 방향 |
+|---|---|---|
+| import 블록 | 그래픽스 HUD 4종 import vs 리드 `DebriefConfirmCommand`·`EnemyAttackPortBinding` import | 양쪽 유지 (합집합) |
+| `debriefState` 등록 직후 | 그래픽스 HUD·화면 마운트 블록 vs 리드 confirm command 생성 | 리드 `debriefConfirm` 생성이 먼저, 그 아래 그래픽스 마운트 — 화면 attach의 `completeDebrief` 직접 호출을 `debriefConfirm.confirm()`으로 교체 |
+| `DebriefStateTracker` 생성자 | 그래픽스는 2-인자, 리드는 3-인자(`metaLoop` 추가) | **리드 3-인자 채택** (canConfirm 계산에 필요) |
+| `surfaceMotionPorts`~`guardAdapter.attachFactory` | 리드가 factory 호출을 2-인자(`enemyAttackBinding`)로 변경 | 리드 채택 |
+| 디버그 핸들 | 양쪽 추가 항목(`debriefConfirm`·`enemyAttackBinding`·`gameplay` vs 그래픽스 항목) | 합집합 |
+| `sessionPort.start()` 주석·reset 블록 | 그래픽스가 DEBRIEF 자동 완료 관련 주석 수정 | 리드 확정본(개정 정책 주석) 채택 |
+
+### ⑤ B5 테스트 변경 검토 (acceptance — 게임플레이 C3 적용으로 2건 갱신됨)
+
+통합 관리자는 병합 후 다음을 검사한다:
+
+1. 기존 B5 patrol 생성·이동 계약(스폰 → 범용 AI → motion 포트 이동)이 삭제되지 않았는가
+2. B5 테스트가 제거되거나 skip 처리되지 않았는가 (`verify:gameplay`·`verify:sprint-b` 항목 수 감소 여부 확인)
+3. **탐지 params unwired에서 경비함이 attack이 아니라 alert(마지막 확인 위치 접근)로 동작하는 것이 계약과 일치**하는가 — `getTargetPosition`이 stage detected에서만 위치를 주므로 unwired(항상 safe)면 attack 전이가 없다. 이것은 회귀가 아니라 C3 계약의 결과다
+4. combat·detection params가 wired되면 attack 전이·공격 요청이 가능한 경로가 남아 있는가 (`DetectionStageSource` → 포트 게이트 → attack → `EnemyAttackRequest`)
+5. B5 핵심 완료(범용 AI 재사용·신규 경비 AI 0)가 C3 도입으로 **거짓 통과**되지 않았는가 — `verify:meta`의 B5 정적 검사(구현체 1개·전용 AI 0)가 기준
+
+### ⑥ consumeDamageFlash 계약 판정 (그래픽스 사용 — **허용**)
+
+검토 결과 문제 없음 — 통합 acceptance에 **허용된 command**로 기록한다:
+
+- `consumeDamageFlash()`는 렌더링용 일회성 플래시 플래그만 해제한다 —
+  currentHull·flooding·survivalState·lastDamage 기록을 변경하지 않는다(코어 확인)
+- `SurvivalReadModel`은 호출마다 새 값 스냅샷이므로 불변 계약이 깨지지 않는다
+- 그래픽스 사용 형태(`attachSource(playerHull, () => playerHull.consumeDamageFlash())`)는
+  읽기 + 플래시 acknowledge뿐 — 상태·수치 변경 없음
+- 침수 tick의 지속 피해는 플래시를 만들지 않으므로(코어 규칙) HUD 연속 점멸 없음
+
+### ⑦ DEBRIEF 종료 정책 (INT-CORE-016 개정 — 본 문서 §확정 정책에 우선)
+
+```
+save success → DebriefReadModel.saveStatus='saved' → DEBRIEF 유지
+  → canConfirm=true (확인 command 활성) → 사용자 확인
+  → DebriefConfirmCommand.confirm() → completeDebrief() → BASE
+save failed → DEBRIEF 유지 → canRetrySave=true일 때만 retrySave
+  → 재정산 없이 저장만 재시도 → 성공 시 canConfirm=true → (위와 동일)
+```
+
+정상 귀환(`sortieEnded`)·실패(`sortieFailed`) **양쪽 동일 정책.** 저장
+성공만으로 `completeDebrief` 자동 호출 0회, 저장 미완료 confirm 거부
+(`saveIncomplete`), 중복 confirm 거부(BASE 전환 1회). `verify:meta`
+119항목이 전부 결정적으로 검증한다.
