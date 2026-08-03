@@ -76,7 +76,15 @@
       "hullColor": "#46586a",
       "hullEmissive": "#0a141c",
       "accentColor": "#b06a32",
-      "accentEmissive": "#3a1e08"
+      "accentEmissive": "#3a1e08",
+      "ironColor": "#2b333c",
+      "ironEmissive": "#060a0e"
+    },
+    "hullTwoTone": {
+      "$comment": "레퍼런스 시트 상/하부 이중 도장 — 하부는 어두운 네이비. 셰이더에서 로컬 Y 기준 하부 틴트 곱 (재질·드로우 추가 없음)",
+      "lowerColor": "#28313e",
+      "splitLocalY": -0.18,
+      "blendMeters": 0.05
     },
     "rim": {
       "color": "#7fc4de",

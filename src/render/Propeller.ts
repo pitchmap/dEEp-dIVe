@@ -39,17 +39,21 @@ export class Propeller {
   private spinRadiansPerSecond = 0;
 
   constructor() {
+    // 어두운 철 계열 — 레퍼런스 시트 재질군(선체 도장·철 장비·액센트 중 철).
+    // 색은 artDirection.materials 소유 (코드 수치 복제 금지).
     const material = new THREE.MeshLambertMaterial({
-      color: 0x6d7a82,
+      color: visualParams.artDirection.materials.ironColor,
+      emissive: visualParams.artDirection.materials.ironEmissive,
       flatShading: true,
     });
 
-    // 허브 — 축은 전후 방향(Z)
-    const hubGeometry = new THREE.CylinderGeometry(0.14, 0.1, 0.4, 8);
+    // 허브 — 축은 전후 방향(Z). 치수는 선미 덕트 링(SubmarineVisual) 내부에
+    // 수납되는 크기 — 날 끝 반경 < 덕트 내경 (레퍼런스: 덕트형 단일 프로펠러)
+    const hubGeometry = new THREE.CylinderGeometry(0.15, 0.11, 0.42, 8);
     hubGeometry.rotateX(Math.PI / 2);
-    const bladeGeometry = new THREE.BoxGeometry(0.09, 0.95, 0.26);
+    const bladeGeometry = new THREE.BoxGeometry(0.09, 0.42, 0.24);
     // 블레이드 피치 — 날이 비스듬히 보이도록 (형태 구분용, 물리 의미 없음)
-    bladeGeometry.translate(0, 0.45, 0);
+    bladeGeometry.translate(0, 0.26, 0);
     this.disposables.push(material, hubGeometry, bladeGeometry);
 
     const hub = new THREE.Mesh(hubGeometry, material);
