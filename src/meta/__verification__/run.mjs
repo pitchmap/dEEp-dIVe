@@ -218,17 +218,153 @@ try {
     });
   }
 
-  // ② 스프린트 C 범위(탐지 게이지·소나 상태 머신·폭뢰·선체 체력·침수) 구현
-  //    파일이 B 선행개발에서 생기지 않았는지 — 계약 파일의 예약 정의는 A 이전
-  //    부터 존재하므로 구현 파일(시스템)만 검사한다.
+  // ② C 소유 경계 (INT-CORE-014 — C 공식 착수 후 개정).
+  //    C1~C9는 전 항목 공식 범위지만 **창별 소유가 다르다**: 탐지 게이지·
+  //    소나·폭뢰 판정은 게임플레이 창 소유이며 리드가 만들지 않는다.
+  //    리드 소유는 생존 공용 코어(선체·침수·실패 정산)뿐이다.
   {
-    const cScopeFiles = sourceFiles.filter((file) =>
-      /(DetectionSystem|SonarSystem|DepthCharge|HullSystem|Flooding)\.ts$/.test(path.basename(file)),
+    const leadFiles = sourceFiles.filter((file) => file.startsWith('src/core/'));
+    const forbiddenInLead = leadFiles.filter((file) =>
+      /(DetectionSystem|SonarSystem|DepthCharge|Repair)\.ts$/.test(path.basename(file)),
     );
+    // 생존 공용 코어는 정확히 이 3개 — 이름을 바꿔 늘리지 않는다.
+    const survivalCore = leadFiles.filter((file) =>
+      /(PlayerHullSystem|FloodingCore|SortieFailureCoordinator)\.ts$/.test(path.basename(file)),
+    );
+    const passed = forbiddenInLead.length === 0 && survivalCore.length === 3;
     results.push({
-      name: 'B 범위 밖(C) 구현 파일 없음 — 탐지·소나·폭뢰·내구도·침수 시스템 미생성',
-      passed: cScopeFiles.length === 0,
-      detail: cScopeFiles.length === 0 ? '통과' : `발견: ${cScopeFiles.join(', ')}`,
+      name: 'C 소유 경계: 리드는 탐지·소나·폭뢰·수리를 만들지 않음 (생존 공용 코어 3개만)',
+      passed,
+      detail: passed
+        ? '생존 코어 3개 · 게임플레이 소유 시스템 0개'
+        : `금지 파일: ${forbiddenInLead.join(', ') || '없음'} / 생존 코어 ${survivalCore.length}개`,
+    });
+  }
+
+  // ③-0 이중 정산 방지 (INT-CORE-015 §병행 정산 경로): 정산 정본은
+  //    MetaLoop.settleSortie 하나다. EconomySystem.settleDefeat/settleReturn·
+  //    RunEconomy.settleSortie는 production 호출자가 없어야 하며(삭제는
+  //    게임플레이 소유 — INT-GAME 처리 대기), composition·core는 이 병행
+  //    경로를 호출하지 않는다.
+  {
+    const parallelCallers = sourceFiles.filter((file) => {
+      if (file === 'src/systems/economy/EconomySystem.ts') return false; // 정의 파일
+      if (file === 'src/systems/economy/RunEconomy.ts') return false; // 정의 파일
+      const body = read(file);
+      return /\.settleDefeat\(|\.settleReturn\(/.test(body);
+    });
+    const canonicalCallers = sourceFiles.filter((file) => {
+      if (file === 'src/meta/MetaLoop.ts') return false; // 정의 파일
+      return /\.settleSortie\(\{/.test(read(file));
+    });
+    const allowedCanonical = new Set(['src/core/Game.ts', 'src/core/SortieFailureCoordinator.ts']);
+    const unexpectedCanonical = canonicalCallers.filter((file) => !allowedCanonical.has(file));
+    const passed = parallelCallers.length === 0 && unexpectedCanonical.length === 0;
+    results.push({
+      name: 'C 이중 정산 방지: 병행 정산 호출 0건 · MetaLoop.settleSortie 호출자는 조립부·실패 조정자뿐',
+      passed,
+      detail: passed
+        ? '통과'
+        : `병행 호출: ${parallelCallers.join(', ') || '없음'} / 예상 밖 정산 호출: ${unexpectedCanonical.join(', ') || '없음'}`,
+    });
+  }
+
+  // ③-1 AI 소유 경계 (INT-CORE-016): AI는 공격 **요청만** 생성한다 —
+  //     피해량·반경·사거리·쿨다운·신관·직접 피해 호출을 소유하지 않는다.
+  {
+    const ai = read('src/core/DestroyerAIController.ts');
+    const forbidden = [
+      'applyDamage',
+      'DamageReceiverPort',
+      'DepthChargeRunSystem',
+      'directDamage',
+      'nearDamage',
+      'RadiusMeters',
+      'cooldown',
+      'Cooldown',
+      'fuse',
+    ];
+    const leaked = forbidden.filter((marker) => ai.includes(marker));
+    results.push({
+      name: 'C4 AI 소유 경계: DestroyerAIController에 피해·반경·쿨다운·신관·직접 피해 호출 0건',
+      passed: leaked.length === 0,
+      detail: leaked.length === 0 ? '통과 (요청 생성만)' : `발견: ${leaked.join(', ')}`,
+    });
+  }
+
+  // ③-2 combat params 정규화 단일 소유 (INT-CORE-017): 구 평면 리더
+  //     (이중 정규화) 0건 + combat.json import는 공인 로더 안에서만 +
+  //     Game.ts의 raw combat import 0건.
+  {
+    // 호출·선언 형태(`이름(`)만 잡는다 — 제거 사유를 남긴 주석 속 이름은 위반이 아니다.
+    const duplicateReaders = sourceFiles.filter((file) =>
+      /read(?:DetectionTuning|DepthChargeDamage)Params\s*\(/.test(read(file)),
+    );
+    // 공인 로더 2곳만 허용: combatParamsLoader(C9 중첩 스키마 정본),
+    // ParamLoader(A 시절 확정 5필드 combat 로더 — validateGameParams 경유 정규화 소유).
+    const combatJsonAllowlist = new Set([
+      'src/tools/combatParamsLoader.ts',
+      'src/config/ParamLoader.ts',
+    ]);
+    const combatJsonImporters = sourceFiles.filter(
+      (file) =>
+        /from\s+['"][^'"]*params\/combat\.json['"]/.test(read(file)) &&
+        !combatJsonAllowlist.has(file),
+    );
+    const passed = duplicateReaders.length === 0 && combatJsonImporters.length === 0;
+    results.push({
+      name: 'C9 정규화 단일 소유: 평면 리더(이중 정규화) 0건 · combat.json import는 공인 로더뿐',
+      passed,
+      detail: passed
+        ? '통과'
+        : `평면 리더: ${duplicateReaders.join(', ') || '없음'} / raw import: ${combatJsonImporters.join(', ') || '없음'}`,
+    });
+  }
+
+  // ③-3 실패 화면 confirm 구조 (INT-CORE-017): 확인 버튼이 guarded confirm
+  //     command를 경유해야 하며, UI가 completeDebrief를 직접 호출하지 않는다.
+  {
+    const screen = read('src/ui/SortieFailureScreen.ts');
+    const returnScreen = read('src/ui/SortieReturnScreen.ts');
+    const game = read('src/core/Game.ts');
+    const usesConfirm = screen.includes('confirmCommand');
+    // 직접 호출 형태(`.completeDebrief(`)만 금지 — 정책을 설명하는 주석 속
+    // 이름과 조립부 command 래퍼 경유(주입받은 콜백 호출)는 위반이 아니다.
+    const directCall = /\.completeDebrief\s*\(/;
+    const noDirectComplete = !directCall.test(screen) && !directCall.test(returnScreen);
+    const gameWiresGuarded = /debriefConfirm\?\.confirm\(\)/.test(game);
+    const passed = usesConfirm && noDirectComplete && gameWiresGuarded;
+    results.push({
+      name: 'C 실패 화면 confirm: guarded command 경유 · UI의 completeDebrief 직접 호출 0건',
+      passed,
+      detail: passed
+        ? '통과'
+        : `confirmCommand=${usesConfirm}, directComplete=${!noDirectComplete}, gameGuarded=${gameWiresGuarded}`,
+    });
+  }
+
+  // ③ C 수치 발명 금지 — 생존 코어에 밸런스 상수 리터럴이 없어야 한다.
+  //    (선체 기준값·피해량·침수 속도·압력은 C9 [COMBAT] params 이관 대상)
+  {
+    const coreFiles = [
+      'src/core/PlayerHullSystem.ts',
+      'src/core/FloodingCore.ts',
+      'src/core/SortieFailureCoordinator.ts',
+    ];
+    // 0·1은 경계값, 2는 사다리꼴 적분(평균)의 수학 상수 — 밸런스 수치가 아니다.
+    const numericLiteral = /(?:^|[^\w.])(?!0\b|1\b|2\b)\d+(?:\.\d+)?\s*(?:;|,|\)|\})/;
+    const offenders = [];
+    for (const file of coreFiles) {
+      const body = read(file)
+        .split('\n')
+        .filter((line) => !line.trim().startsWith('*') && !line.trim().startsWith('//'))
+        .join('\n');
+      if (numericLiteral.test(body)) offenders.push(file);
+    }
+    results.push({
+      name: 'C 수치 발명 금지: 생존 코어에 밸런스 상수 없음 (0·1 경계값 제외)',
+      passed: offenders.length === 0,
+      detail: offenders.length === 0 ? '통과' : `숫자 리터럴 발견: ${offenders.join(', ')}`,
     });
   }
 }

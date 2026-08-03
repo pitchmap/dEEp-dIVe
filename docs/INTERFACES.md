@@ -29,6 +29,8 @@
 | `neutralShipHit` | 게임플레이 유효 피해 판정 | targetEntityId, attackerEntityId, targetFaction, attackWorldPosition, damageAmount, attackCorrelationId, timestamp, firstValidNeutralHit | composition 중복 방지 경계 → guardShipRequested | 중립 선박에 **실제 피해 적용 후 1회** | 조준·발사·빗나감으로 발행 금지. 같은 attackCorrelationId·파괴 이후 재발행 금지 [INT-CORE-012] |
 | `guardShipRequested` | composition 중복 방지 경계 (리드) | requestId, sourceNeutralEntityId, attackerEntityId, incidentPosition, spawnReason, requestedFaction, correlationId | GuardSpawnPort → GuardShipAdapter → 기존 구축함 AI | 중립 유효 피격 1건당 1회 | payload v2 [INT-CORE-012] — 기존 이벤트 재사용(신규 이벤트 없음), 구 `{x,z}`는 incidentPosition으로 흡수. 같은 correlationId 중복 금지 |
 | `transportAttacked` | 게임플레이 (B6) | transportEntityId, attackerEntityId, attackWorldPosition, attackCorrelationId | 호위 교전 판정 | 고가치 수송선 유효 피격 시 | B1~B5 핵심 게이트 경로는 이 이벤트에 의존하지 않는다 |
+| `playerDestroyed` | 리드 PlayerHullSystem | reason, destroyedByEntityId, damageSource, worldPosition | SortieFailureCoordinator(실패 정산 1회), 렌더(실패 연출), 오디오 | 파괴 확정 시 **1회** | 파괴 사실의 주인은 선체 상태 하나 — MetaState 확장 금지 [INT-CORE-014] |
+| `sortieFailed` | 리드 SortieFailureCoordinator | report(SortieFailureReport) | 그래픽스 **실패 화면**(C6·C7), UI, 오디오 | 실패 정산 확정 시 1회 | 귀환 화면은 `sortieEnded` — 데이터·화면 분리(C7). 손실 계산은 MetaLoop 소유, 이 이벤트는 결과 전달만 |
 | `saveRequested` | meta/MetaLoop | cause('settlement'/'rarePart') | SaveSystem(툴링, src/meta/save) | 정산 확정·희귀 획득 즉시 | **이벤트 경로는 2종뿐** [INT-CORE-010 저장 책임 단일화] — 구매·장비·출항 저장은 트랜잭션·Departure command의 SavePort 직접 호출(동일 명령 이중 저장 금지). 구 'sortieLaunch' cause 폐기 |
 | `bossPhaseChanged` | 보스 AI (리드) | phase(1/2/3) | 렌더(단계 연출), 오디오(침묵 전환·음정 하강), UI | 단계 전환 시 | — |
 | `bossWeakPointChanged` | 게임플레이 약점 판정 | active | 렌더(발광·개방 연출), UI | 약점 활성/해제 시 | 판정=게임플레이 / 연출=렌더 경계 [소회의 결의 5] |
@@ -86,6 +88,49 @@
 | 출항 확정 직전 | Departure command (조립부) | SavePort 직접 호출 — 실패 시 **해역 전환 없음**. MetaLoop.launchSortie는 저장하지 않음 |
 | 귀환 정산 확정 | MetaLoop → `saveRequested('settlement')` | SaveBridge 구독 기록 |
 | 희귀 부품 획득 즉시 | MetaLoop → `saveRequested('rarePart')` | SaveBridge 구독 기록 |
+
+## 2h. 탐지·추적 계약 (INT-CORE-015 — contracts/detection.ts, C1~C3)
+
+> 게이지 정본 = 게임플레이 `DetectionSystem`(기존 계약 유지). 추적 상태
+> 전이 정본 = 리드 `DestroyerAIController`(상태 어휘 patrol/alert/attack/lost
+> 그대로 — 새 상태명 금지, 경비함·호위함·일반 적대함 공유). 렌더·AI는
+> 탐지 수치를 **자체 계산하지 않는다.**
+
+| 계약 | 내용 | 소유 |
+|---|---|---|
+| `DetectionEnvironmentSource` | 은신·심도 입력 — noiseLevel·depthLayer·silentRunning | 게임플레이 (공급) |
+| `DetectionTuningParams` | 거리 감쇠·게이지 감소율 — null 계약(미확정이면 unwired: 게이지 0·safe 고정, 전이 없음). **C9 v0.1 승인으로 확정**: falloff {60, 240}m·decay 0.125/s (C-13). 소음 기준 입력 1(정상 항행)은 조립부 공급 — C-14 | 기획·툴링 (수치) |
+| `DetectionHudView` | gauge·stage·unwired — HUD 표시 전용(작동 위장 금지) | 게임플레이 (모델) / 그래픽스 (표시) |
+| `DetectionStageSource` | AI 소비 — stage + lastExposedPosition뿐(게이지 수치·계산식 접근 금지). 전역 단일 게이지(결의 4) | 게임플레이 (공급) / 리드 AI (소비) |
+| `TrackingState`·`TrackingStateSource` | 전이 규칙 5종 명시(patrol→alert→attack→alert→lost→alert), 시간 임계값 필요 시 params 소유. 어뢰 캠 alert 발화 지점 = 기존 `detectionChanged` 전이(새 이벤트 없음) | 리드 (전이) |
+| reset 경계 | 게이지·stage·노출 위치·추적 상태 = 출항 한정, 기지에서 증가 없음 | 각 구현 (`SortieResettable`) |
+
+## 2g. 스프린트 C 생존 계약 (INT-CORE-014 — contracts/survival.ts)
+
+> 흐름 정본: 피해 source(게임플레이) → `DamageReceiverPort.applyDamage`
+> (리드 공용 코어 — 중복 방지·선체 변경·파괴 판정 한 트랜잭션) →
+> `playerDestroyed` → `SortieFailureCoordinator` → `MetaLoop.settleSortie
+> ({outcome:'destroyed'})` → `DEBRIEF` → `saveRequested('settlement')` →
+> 저장 성공 → `completeDebrief()` → `BASE`. **MetaState는 확장하지 않는다.**
+
+| 계약 | 내용 | 소유 |
+|---|---|---|
+| `PlayerHullState` | 선체 단일 읽기 모델 — currentHull·maxHull·hullRatio·floodingLevel/Rate·survivalState·isDestroyed·lastDamage*·recoverable·sortieFailurePending·**unwired** | 리드 (상태) / 게임플레이 (피해 source) |
+| `DamageEvent` / `DamageRequest` | damageEventId·correlationId·sourceType·raw/appliedDamage·worldPosition·lethal·causesFlooding·floodingContribution. 음수·NaN·Infinity·중복·파괴 후 적용 금지 | 발행=게임플레이 판정 |
+| `DamageSourceType` | enemyWeapon·pressure·collision·environment·scripted. 기존 `DamageCause`(direct/near)는 **폭뢰 근접도**로 의미가 달라 병존(중복 아님) | 리드 (계약) |
+| `DamageReceiverPort` | 결과 7종 applied·ignoredDuplicate·ignoredDestroyed·invalidDamage·targetNotFound·destroyed·**unwired**. UI·렌더는 읽기만 | 리드 (공용 코어) |
+| `FloodingParams` / `FloodingSnapshot` | 단계는 level에서 **파생**(이중 저장 금지). 프레임률 독립 누적. 이동 성능 저하·조작 불능은 공식 결정 없음 → 미구현 | 리드(코어) / 기획·툴링(수치) |
+| `DepthPressureParams` / `DepthPressurePort` | **월드 Y 좌표**(위가 +, 깊을수록 작아짐) 규약 명시. 안전 잠항 한계·피해 시작 Y·tick·즉시 파괴 여부 구분. 압력 피해는 C1~C9 목록에 없어 **구현 pending** | 리드(계약) / 게임플레이(판정) |
+| `HullUpgradeConsumer` / maxDepth | `hullIntegrity`·`maxDepth` 배율은 승인 완료(upgrades.json), **기준값 params 부재** → 소비 경계만 확정하고 production은 pending | 리드(경계) / 툴링(params) |
+| `EnemyAttackRequest` / `EnemyAttackPort` (+`EnemyAttackPortBinding`) | 적 공격 → 피해 전달 경계. **생성자 = 리드 `DestroyerAIController`(attack 상태에서만, 요청만 — id 단조·관측 좌표)**, 판정 = 게임플레이 `EnemyAttackCoordinator`(사거리·쿨다운·params). 바인딩 미연결 = `unwired`(투하·피해 0), 거리 무관 자동 피해·즉시 피해 금지 | 리드(계약·생성) / 게임플레이(판정) |
+| `SurvivalReadModel` | HUD 소비 전용 — hull·flooding·state·lastHitDirection·damageFlashRequested·warningIds(키만)·failureCountdown·isDestroyed. 문구·색·이펙트 없음 | 리드(모델) / 그래픽스(표현) |
+| `SortieFailureReport` / `SortieFailurePort` | failureId·reason 4종·pendingCredits·securedRareParts·appliedLoss·final*·saveStatus·nextState. 정산·손실률·지갑은 MetaLoop 소유(별도 지갑 금지), 저장은 기존 `saveRequested` 경로 | 리드 |
+| `PlayerAliveSource` | 파괴 후 적 AI·표적 판정이 소비하는 생사 소스(중복 상태 금지) | 리드(상태) / 게임플레이(소비) |
+| `DepthChargeDamageParams` | C4 폭뢰 — 직격/근접 반경·피해·쿨다운 + **침수 기여 2종**(v0.1.1 — direct 0.35·near 0.10, 관계 0<near<direct≤1) (전부 null 허용 — 미확정 시 해당 축만 unwired). 정본 경로: 탐지 → AI 요청(관측 **3D** 고정) → EnemyAttackPort → DepthChargeSystem(목표 심도 낙하·기폭 — C-17) → direct/near 3D 판정(피해+침수 기여 동시 결정) → **applyDamage 단일 창구** | 리드(계약) / 게임플레이(판정) / 기획·툴링(수치) |
+| `DebriefReadModel` (+`DebriefStateTracker`·`DebriefConfirmCommand`) | C6·C7 — kind(returned/aborted/destroyed)·settlement·failure·saveStatus·canRetrySave·**canConfirm**. 그래픽스는 isDestroyed 추측 없이 이 모델로만 화면 분기, 읽기 전용(스냅샷). **BASE 복귀는 confirm command가 유일한 진입점**(저장 성공 자동 전환 0 — INT-CORE-016, 정상 귀환·실패 동일 정책. 저장 미완료 saveIncomplete·중복 invalidState). 실패 화면도 3-인자 attach(confirmCommand)로 동일 경유 — DOM 숨김 전용 종료 금지, 버튼 노출 근거는 canConfirm 하나 (INT-CORE-017) | 리드 |
+| `NormalizedCombatParams` (`systems/combat/officialCombatParams`) | 조립부 → 게임플레이 전투 params 정규화 입력 단면 — `detectionTuning`·`depthCharge` (각 null 허용 = unwired). **정규화 소유자는 공인 로더 한 곳**(`tools/combatParams.validateCombatParams`) — 게임플레이 평면 리더(이중 정규화) 금지, 공인 로더 밖 combat.json import 금지, null→0·fallback·부분 wired 금지(정적 검사 강제). 선체·침수 블록은 리드 코어 생성자 직접 주입 (INT-CORE-017) | 리드(계약·전송 규약) / 툴링(정규화) / 게임플레이(소비) |
+| 침수 피해 경로 | FloodingCore → 지속 피해 DamageRequest(tick별 `flood:<n>` id) → applyDamage — 선체 직접 수정 없음, dt 분할 무관 총 피해 동일(닫힌 적분) | 리드 |
+| `SortieResettable` | 출항 한정 상태 초기화: 선체·침수·마지막 피해·파괴 플래그·중복 원장·적 공격·실패 코디네이터·경비 사건·salvage. **영구**: 지갑·업그레이드·loadout. 선체 영구 손상은 근거 없음 → 결정 요청 | 리드 |
 
 ## 2f. 스프린트 B 세력·식별·경비 계약 (INT-CORE-012 — 선행개발, B 미발효)
 

@@ -420,6 +420,47 @@ world entity registration (attachSpawnListener 훅)
   범용 AI의 C 기능 참조 0건. 렌더·UI 오버레이는 AI가 아니므로 허용하되
   같은 내용 검사를 적용한다.
 
+### 생존 루프 조립 (INT-CORE-014 — 스프린트 C, 공식 착수)
+
+```
+공식 params (C9 [COMBAT] 이관 대기 — 현재 unwired)
+      ▼
+게임플레이 피해 source (폭뢰·충돌·압력 판정 — C4·C5)
+      │  DamageRequest
+      ▼
+PlayerHullSystem  ── DamageReceiverPort (리드 공용 코어)
+      │  중복 방지(eventId·correlationId) → 차감 → 전이 → 파괴 판정
+      │  ↕ FloodingCore (dt 비례 결정적 누적, 단계는 level 파생)
+      │  playerDestroyed (1회)
+      ▼
+SortieFailureCoordinator
+      │  MetaLoop.settleSortie({outcome:'destroyed'})  ← 손실률·지갑 정본
+      ▼
+DEBRIEF → saveRequested('settlement') → SaveBridge
+      │  저장 성공 → completeDebrief() → BASE
+      │  저장 실패 → DEBRIEF 유지 · 재정산 없이 retrySave
+      ▼
+sortieFailed → 그래픽스 **실패 화면** (귀환 화면은 sortieEnded — C7 분리)
+SurvivalReadModel → 렌더 HUD (경고 키만, 문구·색은 그래픽스)
+```
+
+- **피해 수신 창구는 하나다.** 게임플레이가 자체 체력 상태를 두지 않고
+  `DamageReceiverPort`만 호출한다. 적용·차감·파괴 판정은 한 트랜잭션.
+- **파괴 사실의 주인도 하나다** — `PlayerHullState.isDestroyed`.
+  `MetaState`는 확장하지 않고 기존 `DEBRIEF`를 쓴다.
+- **정산·지갑·저장을 복제하지 않는다** — MetaLoop 정산 + 기존
+  `saveRequested('settlement')` 경로. 코디네이터는 SavePort 직접 호출 없음
+  (저장 책임 표 A-12 유지).
+- **수치가 하나도 없다.** 선체 기준값·피해량·침수 속도·압력은 C9 [COMBAT]
+  params 이관 대상이며 도착 전까지 `unwired` — 피해가 적용되지 않고 UI에
+  정상 선체로 위장하지도 않는다. 연결은 `attachHullParams`·`attachParams`
+  두 줄.
+- **압력 피해는 구현하지 않는다** — 공식 종료 조건 C1~C9에 없고 기준값도
+  없어 `DepthPressurePort` 계약과 `maxDepth` 소비 경계만 둔다.
+- 창별 소유: 탐지 게이지(C1·C2)·폭뢰 판정(C4)·내구도 감소 source(C5)는
+  게임플레이, X-ray 침수·실패/귀환 화면(C5·C6·C7)은 그래픽스, params 이관·
+  검증(C9)은 빌드·툴. 정적 검사가 리드의 월권을 차단한다.
+
 ## 게임 상태 전환과 장면 전환의 분리
 
 - **게임 상태(국면)** — `GameStateMachine`이 소유. 전환은 허용표 검증 후

@@ -24,6 +24,7 @@
  * 내부 참조를 교체한다. update()마다 loadParams()를 호출하지 않는다.
  */
 
+import type { NormalizedCombatParams } from './combat/officialCombatParams';
 import type { CanyonLayout } from '../contracts/layout';
 import type { EquipmentChangeJudgePort } from '../contracts/meta';
 import type { SalvageSpawnPlanEntry } from '../contracts/officialParams';
@@ -37,7 +38,21 @@ import type { EventBus } from '../core/EventBus';
 import type { GameSystem, SystemContext } from '../core/GameSystem';
 import { TorpedoTubeSocketRig } from '../core/TorpedoTubeSocketRig';
 import { STARTING_CANYON_LAYOUT } from '../world/startingCanyonLayout';
+import type { DetectionHudView, DetectionStageSource } from '../contracts/detection';
+import type {
+  DamageApplyResult,
+  DamageReceiverPort,
+  DamageRequest,
+  EnemyAttackPort,
+  PlayerAliveSource,
+  PlayerHullState,
+} from '../contracts/survival';
+import { PLAYER_ENTITY_ID } from '../contracts/guard';
 import { CargoShipSystem, cargoShipConfigFromOfficial } from './CargoShipSystem';
+import { DepthChargeRunSystem } from './combat/DepthChargeRunSystem';
+import { EnemyAttackCoordinator } from './combat/EnemyAttackCoordinator';
+import { DetectionEnvironmentAdapter } from './detection/DetectionEnvironmentAdapter';
+import { SubmarineDetectionSystem } from './detection/SubmarineDetectionSystem';
 import { CanyonPatrolSpawnLocation } from './faction/CanyonPatrolSpawnLocation';
 import { HighValueTransportSystem } from './faction/HighValueTransportSystem';
 import type { SurfaceShipMotionPortFactory } from '../contracts/guard';
@@ -95,6 +110,26 @@ export interface GameplayOfficialParams {
   readonly cargo: CargoRuntimeParams;
   readonly equipment: EquipmentCatalog;
 }
+
+/**
+ * 피해 수신 창구가 미연결일 때 돌려주는 선체 상태 — **전부 미확정 표기**다.
+ * 게임플레이는 자체 체력을 갖지 않으므로 값을 만들어 내지 않는다.
+ */
+const UNWIRED_HULL_STATE: PlayerHullState = Object.freeze({
+  currentHull: 0,
+  maxHull: 0,
+  hullRatio: null,
+  floodingLevel: 0,
+  floodingRate: 0,
+  survivalState: 'stable',
+  isDestroyed: false,
+  lastDamageSource: null,
+  lastDamageAmount: 0,
+  lastDamageAt: null,
+  recoverable: true,
+  sortieFailurePending: false,
+  unwired: true,
+});
 
 /** 출항 준비 상태 — 리드 Departure command가 소비하는 판정 결과 */
 export interface SortieReadiness {
@@ -187,6 +222,19 @@ export class GameplaySystems implements GameSystem {
   private readonly shipWorldSourceValue: CombinedShipWorldSource;
   /** 월드 수평 경계 (레이아웃 블록 + 공식 항로 파생) — 소비자 공용 단일 인스턴스 */
   private readonly worldBoundsValue: CanyonHorizontalBounds | null;
+  /** [C4] 피해 수신 창구 (리드 `PlayerHullSystem`) — 미연결이면 피해 없음 */
+  private damageReceiver: DamageReceiverPort | null = null;
+  /**
+   * [C1] 탐지 게이지 **정본** — 계약 `DetectionSystem` 구현.
+   * HUD는 `detectionHudView()`, AI는 `detectionStageSource`만 소비한다.
+   */
+  readonly detection: SubmarineDetectionSystem;
+  /** [C2] 은신·심도 보정 입력 — 계약 `DetectionEnvironmentSource` 구현 */
+  readonly detectionEnvironment: DetectionEnvironmentAdapter;
+  /** [C4] 폭뢰 lifecycle — 투하·신관·폭발·direct/near 판정 */
+  readonly depthCharges: DepthChargeRunSystem;
+  /** [C4] 적 공격 경계 — 사거리·쿨다운 판정 (AI는 요청만 만든다) */
+  readonly enemyAttack: EnemyAttackCoordinator;
   /**
    * [B6] 고가치 수송선·호위 — **핵심 게이트 B1~B5와 독립**이다.
    * 이 시스템을 빼도 배치·식별·보상·중립 사건·경비 스폰은 그대로 동작한다.
@@ -342,6 +390,33 @@ export class GameplaySystems implements GameSystem {
       this.worldBoundsValue,
     );
     this.highValueTransport = new HighValueTransportSystem(bus);
+    // [C2] 탐지 환경 입력 — 기존 3층 심도 정본 소비. 소음·침묵 항행 소스는
+    //      공식 규칙이 없어 미연결(중립 입력)이며 자체 계산하지 않는다.
+    this.detectionEnvironment = new DetectionEnvironmentAdapter(this.depth);
+    // [C1] 탐지 게이지 정본 — 확정 3종은 params/detection.json, 거리 감쇠·
+    //      감소율은 공식 문서에 없어 null이면 unwired(게이지 0·safe 고정).
+    //      관측자는 세력과 무관하게 같은 계약을 쓴다(적대·patrol·호위 공용).
+    this.detection = new SubmarineDetectionSystem(
+      bus,
+      this.detectionEnvironment,
+      this.player,
+      () => this.detectionObservers,
+      params.detection,
+      null,
+    );
+    // [C4] 폭뢰 — 피해는 오직 DamageReceiverPort를 통과한다. 수신 포트가
+    //      연결되기 전까지 폭발해도 피해 경로가 없다(자체 체력 상태 없음).
+    this.depthCharges = new DepthChargeRunSystem(
+      { applyDamage: (request) => this.forwardDamage(request) },
+      () => this.depthChargeTargets,
+      params.combat.depthChargeFuseSeconds.value,
+      null,
+      params.combat.simultaneousDepthCharges.value,
+    );
+    this.enemyAttack = new EnemyAttackCoordinator(this.depthCharges, null, null);
+    // [C3] 추적 입력 — AI는 stage만 읽는다. 전이 로직은 리드
+    //      DestroyerAIController 소유이며 여기서 복제하지 않는다.
+    this.patrolFleet.attachDetectionStageSource(this.detection.stageSource);
     this.officialWired = official !== null;
     this.subscribeToParamsReload = subscribeToParamsReload ?? null;
   }
@@ -412,6 +487,116 @@ export class GameplaySystems implements GameSystem {
   /** 스폰된 경비함 (읽기 전용) — 검증·디버깅용 */
   get patrolShips(): readonly PatrolShipEntity[] {
     return this.patrolFleet.ships;
+  }
+
+  /* ── C1~C4 production API ─────────────────────────────────────── */
+
+  /**
+   * [C1] HUD 소비 모델 — 게이지·stage·unwired. 값 복사본이며 렌더가
+   * 게이지를 재계산하지 않는다.
+   */
+  detectionHudView(): DetectionHudView {
+    return this.detection.hudView();
+  }
+
+  /** [C1·C3] AI 소비 모델 — **stage와 마지막 노출 위치만** (게이지 비노출) */
+  get detectionStageSource(): DetectionStageSource {
+    return this.detection.stageSource;
+  }
+
+  /**
+   * [C3] 추적 입력 교체 — 기본값은 이 클래스의 탐지 정본이며, 조립부가
+   * 다른 소스를 쓰려면 이 진입점으로만 바꾼다. AI는 여전히 stage만 읽고
+   * 전이 로직은 리드 `DestroyerAIController` 소유다(복제 없음).
+   */
+  attachDetectionStageSource(source: DetectionStageSource | null): void {
+    this.patrolFleet.attachDetectionStageSource(source);
+  }
+
+  /** [C4] 적 공격 경계 — AI가 요청만 넣는 포트 */
+  get enemyAttackPort(): EnemyAttackPort {
+    return this.enemyAttack;
+  }
+
+  /**
+   * [C4] 플레이어 생사 정본 연결 — 조립부가
+   * `gameplay.attachPlayerAliveSource(playerHull)` 1줄로 호출한다.
+   *
+   * 연결되면 `PatrolShipFleet.isTargetAlive(PLAYER_ENTITY_ID)`의 항상 true
+   * 경로가 사라지고, 파괴 후에는 추적(관측 불가)·공격 요청이 모두 멈춘다.
+   * 게임플레이는 자체 체력 상태를 두지 않는다 — 정본은 리드 `PlayerHullSystem`.
+   */
+  attachPlayerAliveSource(source: PlayerAliveSource | null): void {
+    this.patrolFleet.attachPlayerAliveSource(source);
+    this.enemyAttack.attachPlayerAliveSource(source);
+  }
+
+  get playerAliveSourceWired(): boolean {
+    return this.patrolFleet.playerAliveWired;
+  }
+
+  /**
+   * [C4] 피해 수신 창구 연결 — 조립부가 `PlayerHullSystem`을 넘긴다.
+   * 미연결이면 폭발해도 피해 경로가 없다(자체 체력 상태를 만들지 않는다).
+   */
+  attachDamageReceiver(receiver: DamageReceiverPort | null): void {
+    this.damageReceiver = receiver;
+  }
+
+  get damageReceiverWired(): boolean {
+    return this.damageReceiver !== null;
+  }
+
+  /**
+   * [C1·C4] 공식 전투 params 주입 (조립부) — **정규화된 계약 타입**을 받는다
+   * [INT-CORE-017 개정]. 중첩 스키마의 해석·검증은 공인 로더
+   * (`tools/combatParams.validateCombatParams`) **한 곳**의 책임이며,
+   * 게임플레이는 툴링 스키마를 해석하지 않는다. null 블록은 null 그대로
+   * 전달돼 해당 판정이 unwired로 남는다 — 임의 기본값·0 변환 금지.
+   */
+  attachCombatParams(params: NormalizedCombatParams): void {
+    this.detection.attachTuningParams(params.detectionTuning);
+    this.depthCharges.attachCombatParams({ damageParams: params.depthCharge });
+    this.enemyAttack.attachDamageParams(params.depthCharge);
+  }
+
+  /** [C1] 탐지가 실제로 구동 중인가 — false면 게이지 0·safe 고정 */
+  get detectionWired(): boolean {
+    return this.detection.wired;
+  }
+
+  /** 탐지 관측자 — 세력과 무관하게 월드의 모든 적 함선이 같은 계약을 쓴다 */
+  private get detectionObservers(): readonly { positionX: number; positionZ: number }[] {
+    return [...this.ships, ...this.patrolFleet.aliveShips];
+  }
+
+  /** 폭뢰 피해 판정 대상 — 플레이어(잠수함) 하나 */
+  private get depthChargeTargets(): readonly {
+    entityId: number;
+    positionX: number;
+    positionY: number;
+    positionZ: number;
+  }[] {
+    return [
+      {
+        entityId: PLAYER_ENTITY_ID,
+        positionX: this.player.positionX,
+        positionY: this.player.positionY,
+        positionZ: this.player.positionZ,
+      },
+    ];
+  }
+
+  /**
+   * 피해 전달 — **단일 창구**. 게임플레이는 선체 상태를 갖지 않으므로
+   * 수신 포트가 없으면 아무것도 적용되지 않는다(임시 체력 생성 금지).
+   */
+  private forwardDamage(request: DamageRequest): DamageApplyResult {
+    const receiver = this.damageReceiver;
+    if (!receiver) {
+      return { outcome: 'unwired', appliedDamage: 0, hull: UNWIRED_HULL_STATE };
+    }
+    return receiver.applyDamage(request);
   }
 
   /**
@@ -609,6 +794,10 @@ export class GameplaySystems implements GameSystem {
     for (const ship of this.otherShips) ship.resetForNewSortie(this.targets);
     this.patrolFleet.resetForNewSortie();
     this.highValueTransport.resetForNewSortie();
+    // [C1·C4] 출항 한정 상태 — 게이지·노출 위치·수중 폭뢰·쿨다운 초기화
+    this.detection.resetForNewSortie();
+    this.depthCharges.resetForNewSortie();
+    this.enemyAttack.resetForNewSortie();
     this.economy.resetForNewSortie();
   }
 
@@ -643,6 +832,12 @@ export class GameplaySystems implements GameSystem {
     // 경비함 이동은 AI(리드 GuardShipAdapter)가 포트로 수행한다 — 여기서는
     // 파괴분 정리만 한다(수명주기). 판단·조종을 중복 실행하지 않는다.
     this.patrolFleet.update(deltaSeconds);
+
+    // 10) [C1] 탐지 게이지 — 관측자·환경 입력에서 갱신 (unwired면 0 고정)
+    this.detection.update(deltaSeconds);
+    // 11) [C4] 폭뢰 신관·폭발 + 공격 쿨다운 시각 진행
+    this.enemyAttack.update(deltaSeconds);
+    this.depthCharges.update(deltaSeconds);
 
     // 3.5) 잠수함-함선 충돌 — 통과 방지·밀어냄만, 피해 없음 (5차 결의 1).
     //      어뢰 명중 판정과 동일한 박스 근사(hullBox)를 공유한다.
@@ -715,6 +910,9 @@ export class GameplaySystems implements GameSystem {
     this.cargoShip.dispose(); // 표적 등록·참조 정리
     for (const ship of this.otherShips) ship.dispose();
     this.patrolFleet.dispose();
+    this.detection.dispose();
+    this.depthCharges.dispose();
+    this.enemyAttack.dispose();
     this.detachInput();
   }
 }

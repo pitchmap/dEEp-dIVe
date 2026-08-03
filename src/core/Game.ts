@@ -19,7 +19,11 @@ import { PurchaseTransaction } from '../meta/PurchaseTransaction';
 import { EquipmentTransaction } from '../meta/EquipmentTransaction';
 import { PerformanceOverlay } from '../ui/PerformanceOverlay';
 import { ControlsHud } from '../ui/ControlsHud';
+import { DetectionHud } from '../ui/DetectionHud';
 import { EconomyHud } from '../ui/EconomyHud';
+import { SortieFailureScreen } from '../ui/SortieFailureScreen';
+import { SortieReturnScreen } from '../ui/SortieReturnScreen';
+import { SurvivalHud } from '../ui/SurvivalHud';
 import { SortiePrepScreen } from '../ui/SortiePrepScreen';
 import { GateMetricRecorder } from '../tools/GateMetricRecorder';
 import { LoadingTimer } from '../tools/LoadingTimer';
@@ -29,8 +33,13 @@ import { MetaLoop } from '../meta/MetaLoop';
 import { defaultSaveStore } from '../meta/save/SaveStore';
 import { loadEconomyParams } from '../tools/economyParams';
 import { loadAimingParams } from '../tools/aimingParams';
+import { loadCombatParams, combatParamsFullyDefined, type CombatParamsResult } from '../tools/combatParamsLoader';
 import type { OfficialRuntimeParams } from '../contracts/officialParams';
 import { GuardShipAdapter } from './GuardShipAdapter';
+import { FloodingCore } from './FloodingCore';
+import { PlayerHullSystem } from './PlayerHullSystem';
+import { SortieFailureCoordinator } from './SortieFailureCoordinator';
+import { PLAYER_ENTITY_ID } from '../contracts/guard';
 import { createProductionDestroyerAIFactory } from './destroyerAiFactory';
 import type { SurfaceShipMotionPortFactory } from '../contracts/guard';
 import { WebAudioSystem } from '../audio/WebAudioSystem';
@@ -45,6 +54,9 @@ import {
   GuardSpawnBridge,
   GuardSpawnCoordinator,
   NeutralIncidentBoundary,
+  DebriefConfirmCommand,
+  DebriefStateTracker,
+  EnemyAttackPortBinding,
   SaveBridge,
   SortieEconomyBridge,
   SortieSalvageSpawner,
@@ -95,6 +107,8 @@ export class Game {
   private savePort: CountingSavePort | null = null;
   /** 공식 런타임 params 번들 — 로더 호출은 composeSystems 1회뿐 (INT-CORE-011) */
   private officialParams: OfficialRuntimeParams | null = null;
+  /** C9 전투 params 검증 결과 — 미확정은 null 유지 (INT-CORE-016) */
+  private combatParams: CombatParamsResult | null = null;
   /** 출항당 1회 salvage 스포너 — 좌표는 SalvagePlacementSource 전용 */
   private salvageSpawner: SortieSalvageSpawner | null = null;
   /** 경비 사건 중복 방지 원장 — 요청·스폰 공용 단일 저장소 (INT-CORE-012) */
@@ -103,6 +117,18 @@ export class Game {
   private guardAdapter: GuardShipAdapter | null = null;
   /** 경비함 생성 포트 — 위치 전략·AI 팩토리 연결 지점 */
   private guardSpawn: GuardSpawnCoordinator | null = null;
+  /** 플레이어 선체 공용 코어 — 피해 수신 단일 창구 (INT-CORE-014) */
+  private playerHull: PlayerHullSystem | null = null;
+  /** 침수 결정적 코어 — 선체와 연계, 수치는 params 주입 */
+  private floodingCore: FloodingCore | null = null;
+  /** 출항 실패 조정자 — 파괴 1회 = 정산 1회 */
+  private sortieFailure: SortieFailureCoordinator | null = null;
+  /** DEBRIEF 읽기 모델 — 정산·실패 화면의 유일한 데이터 소스 (C6·C7) */
+  private debriefState: DebriefStateTracker | null = null;
+  /** DEBRIEF 확인 command — BASE 복귀의 유일한 진입점 (INT-CORE-016) */
+  private debriefConfirm: DebriefConfirmCommand | null = null;
+  /** 적 공격 포트 바인딩 — 게임플레이 EnemyAttackCoordinator 연결 지점 */
+  private enemyAttackBinding: EnemyAttackPortBinding | null = null;
   /** 조립부가 건 EventBus 구독 해제 함수 — stop()에서 전부 해제한다 */
   private readonly unsubscribes: Array<() => void> = [];
 
@@ -201,6 +227,16 @@ export class Game {
         officialParams: this.officialParams,
         salvageSpawner: this.salvageSpawner,
         guardAdapter: this.guardAdapter,
+        playerHull: this.playerHull,
+        debrief: this.debriefState,
+        debriefConfirm: this.debriefConfirm,
+        enemyAttackBinding: this.enemyAttackBinding,
+        // C9 params 검증 결과 (읽기 전용) — 미확정 목록으로 unwired 근거를
+        // 실측에서 확인한다. 이 핸들로 상태를 바꾸는 경로는 없다.
+        combatParams: this.combatParams,
+        gameplay,
+        flooding: this.floodingCore,
+        sortieFailure: this.sortieFailure,
         guardSpawn: this.guardSpawn,
         guardLedger: this.guardLedger,
         // 스프린트 B 실측용 읽기 전용 핸들 (실제 인스턴스 — 더미 아님).
@@ -265,6 +301,16 @@ export class Game {
         `손실률 ${official.economy.creditLossOnDestroyedRatio} · salvage 배치 ${official.economy.salvageSpawns.length}건`,
     );
 
+    //    C9 전투 params (INT-CORE-016 §① — 툴링 로더 1회 호출). 미확정 필드는
+    //    **null 그대로** 흘러가며 소비 측이 계약대로 unwired가 된다 — 조립부가
+    //    기본값·0·임시 상수를 채우지 않는다. 소비자: 선체(기준값·임계)·침수·
+    //    폭뢰 피해·탐지 튜닝.
+    const combat = loadCombatParams();
+    this.combatParams = combat;
+    console.info(
+      `[Game] C9 전투 params 로드·검증 완료 — 확정 여부 ${combatParamsFullyDefined(combat) ? '전량 확정' : '미확정 필드 존재(unwired 유지)'}`,
+    );
+
     // ⓪ 상위 메타 루프 (리드 소유, src/meta — INT-CORE-006·007).
     //    하위 해역 세션은 SortieSessionPort 어댑터로만 접촉한다 (통신 3종 제한).
     //    이 어댑터가 계층 경계의 유일한 구현 지점이다 — 상위는 하위 내부 상태를
@@ -278,12 +324,20 @@ export class Game {
         // 잔탄·드롭이 이월되지 않게). 초회 출항에서는 갓 생성된 상태라 무해.
         const gameplay = this.gameplay;
         if (gameplay) gameplay.resetSortieSession(this.effectiveParams ?? params);
+        // 소음은 상시 연결된 속도 기반 소스가 공급한다 (INT-CORE-019 —
+        // 구 고정 reportNoise(1) 폐기). 소스는 무상태(현재 속도 파생)라
+        // 출항 경계에서 이월될 이전 소음 상태 자체가 없고, reset이 비운
+        // reportedNoise는 null로 남아 환경 소스 경로가 계속 쓰인다.
         // 출항 월드 초기화 — salvage 확정 배치 (INT-CORE-011 production spawn
         // 규칙: 출항당 1회, 보상=economy params·좌표=SalvagePlacementSource.
         // 배치 미연결이면 임시 좌표를 만들지 않고 unwired로 기록만 한다).
         // 경비 사건 원장은 출항 경계에서 비운다 — 이전 출항의 상관 id가
         // 새 출항의 같은 표적 사건을 삼키지 않게 한다 (INT-CORE-012).
         this.guardLedger?.resetForNewSortie();
+        // 출항 한정 생존 상태 초기화 — 선체·침수·중복 원장·실패 처리 이력.
+        // 지갑·업그레이드·loadout(영구분)은 건드리지 않는다 (INT-CORE-014).
+        this.playerHull?.resetForNewSortie();
+        this.sortieFailure?.resetForNewSortie();
         const spawnReport = this.salvageSpawner?.beginSortie();
         if (spawnReport) {
           if (spawnReport.status === 'spawned') {
@@ -436,7 +490,21 @@ export class Game {
     //     (pose 정본 = 게임플레이 entity 하나).
     const surfaceMotionPorts: SurfaceShipMotionPortFactory =
       gameplay.surfaceShipMotionPortFactory;
-    guardAdapter.attachFactory(createProductionDestroyerAIFactory(surfaceMotionPorts));
+    //     적 공격 포트 바인딩 (INT-CORE-016 — C4). AI는 attack 상태에서 이
+    //     바인딩으로 **요청만** 넣는다. 게임플레이 C 브랜치 병합 시
+    //     `enemyAttackBinding.attach(gameplay.enemyAttackPort)` 1줄로 연결되며,
+    //     그 전까지 모든 요청은 unwired — 폭뢰 투하·피해 0건(즉시 피해 금지).
+    const enemyAttackBinding = new EnemyAttackPortBinding();
+    this.enemyAttackBinding = enemyAttackBinding;
+    //     **C4 공격 사슬의 마지막 연결** — AI가 만든 EnemyAttackRequest가 이
+    //     바인딩을 거쳐 게임플레이 `EnemyAttackCoordinator`로 간다. AI는
+    //     피해량·반경·쿨다운을 소유하지 않고 요청만 생성한다.
+    //     폭뢰 피해 params가 null이면 포트가 `unwired`를 돌려주므로 투하·
+    //     피해가 0건으로 남는다 (즉시 피해·거리 무관 피해 금지).
+    enemyAttackBinding.attach(gameplay.enemyAttackPort);
+    guardAdapter.attachFactory(
+      createProductionDestroyerAIFactory(surfaceMotionPorts, enemyAttackBinding),
+    );
     //     경비함 등장 방향 표시(B5) — **실제 스폰 결과만** 렌더에 넘긴다.
     //     스폰이 차단된 동안(위치 전략·AI 팩토리 미연결) 목록은 비어 있고
     //     마커도 뜨지 않는다: 존재하지 않는 경비함을 가리키지 않는다.
@@ -466,6 +534,68 @@ export class Game {
     this.registry.register(new GuardSpawnBridge(guardSpawn));
     // ③ AI 그룹 — 스폰된 기존 구축함 AI들의 수명주기 전달만 담당한다.
     this.registry.register(guardAdapter);
+
+    // ②-b 생존 계통 (INT-CORE-014 — 스프린트 C 공용 코어).
+    //     선체는 **피해 수신의 단일 창구**다: 게임플레이 피해 source(폭뢰·
+    //     충돌·압력)는 전부 이 포트를 통과하며, 중복 방지·차감·전이·파괴
+    //     판정이 한 트랜잭션 경계 안에서 일어난다.
+    //     선체 기준값·침수 수치는 **공식 params에 아직 없다**(C9 [COMBAT]
+    //     이관 대상) — 주입 전까지 unwired 상태이며 피해가 적용되지 않고
+    //     임시 수치도 만들지 않는다. 도착 시 attachHullParams·attachParams
+    //     두 줄로 연결된다.
+    //     C9 params 주입 — 검증기가 돌려준 값을 그대로 넘긴다. 미확정이면
+    //     `null`이 그대로 들어가 선체·침수가 unwired로 남는다(피해 미적용).
+    const floodingCore = new FloodingCore(combat.flooding);
+    this.floodingCore = floodingCore;
+    const playerHull = new PlayerHullSystem(PLAYER_ENTITY_ID, floodingCore, combat.hull);
+    this.playerHull = playerHull;
+    // hullIntegrity 업그레이드 소비 — 배율은 공식 승인값, 기준값은 대기.
+    playerHull.applyHullIntegrityModifier(this.upgrades?.modifiers.hullIntegrity ?? 0);
+    this.registry.register(playerHull);
+    //     생존 상태 배선 (INT-CORE-016 §① — 게임플레이 attach API 도착).
+    //     ① PlayerAliveSource — PatrolShipFleet(추적)과 EnemyAttackCoordinator
+    //        (공격) 양쪽에 도달한다. 파괴 후 추적·공격 요청이 멈춘다.
+    //     ② DamageReceiver — 폭뢰·충돌 등 모든 피해가 이 **단일 창구**를
+    //        통과한다. 게임플레이는 자체 체력 상태를 두지 않는다.
+    gameplay.attachPlayerAliveSource(playerHull);
+    gameplay.attachDamageReceiver(playerHull);
+    //     ③ C9 전투 params → 게임플레이 주입 (INT-CORE-017 — blocker 해소).
+    //        정규화 소유자는 공인 로더 하나다: loadCombatParams()가 중첩
+    //        스키마를 계약 타입 블록으로 검증·변환했고, 여기서는 그 결과의
+    //        게임플레이 단면(NormalizedCombatParams)만 넘긴다. raw JSON
+    //        import·수작업 펼치기 없음, null 블록은 null 그대로(unwired 유지).
+    //        선체·침수 블록은 위에서 리드 코어에 직접 주입했다.
+    gameplay.attachCombatParams({
+      detectionTuning: combat.detectionTuning,
+      depthCharge: combat.depthCharge,
+    });
+    //     ④ 어뢰 발사 지점 무조건 노출 (§5.10 확정 규칙 — C1 계약
+    //        DetectionSystem.reportTorpedoLaunch의 조립 배선). 발사 위치는
+    //        게임플레이가 발행하는 torpedoFired payload 그대로다 — 조립부는
+    //        수치·판정을 만들지 않고 이벤트를 계약 API에 잇기만 한다.
+    //        소음 계산과 무관하게 항상 노출된다.
+    this.registerUnsubscribe(
+      this.bus.on('torpedoFired', ({ originX, originZ }) => {
+        gameplay.detection.reportTorpedoLaunch(originX, originZ);
+      }),
+    );
+    //     ⑤ 공식 production 소음 정책 (INT-CORE-019 — 구 고정 1 폐기):
+    //        noiseLevel = clamp(|현재 속력| / 공인 최고 속력, 0, 1).
+    //        속력 = 게임플레이 PlayerController.speed(계약이 '소음 산출의
+    //        입력값'으로 지정한 비부호 속력), 최고 속력 = 업그레이드 반영
+    //        유효 params(movement 정본 파생 — 조립부 하드코딩 없음).
+    //        정지 = 0, 전속 = 1. 침묵 항행 배율(공식 0.1)은 탐지 시스템이
+    //        environment.silentRunning으로 적용하며, 대화형 침묵 조작은
+    //        미구현이라 소스 미연결 = 공식 중립값 false 유지
+    //        (C_SILENT_RUNNING_INTERACTIVE=false — 임의 토글 생성 금지).
+    const game = this;
+    gameplay.detectionEnvironment.attachNoiseSource({
+      get noiseLevel(): number {
+        const maxSpeed = (game.effectiveParams ?? params).movement.maxSpeedMetersPerSecond.value;
+        if (!(maxSpeed > 0)) return 0;
+        return Math.min(1, Math.max(0, Math.abs(gameplay.player.speed) / maxSpeed));
+      },
+    });
 
     // ①-c 업그레이드 구매 판정 시스템 (게임플레이 소유 — 조립부가 공식
     //     카탈로그와 실지갑 읽기 단면을 주입한다). **단계의 단일 저장소** —
@@ -534,6 +664,32 @@ export class Game {
     );
     this.registry.register(saveBridge);
 
+    // ②-c 출항 실패 조정자 (INT-CORE-014 — C6·C7·C8).
+    //     파괴 1회 = 실패 1회 = 정산 1회. 손실 계산·지갑·상태 전이는 기존
+    //     MetaLoop 정산 경로가, 저장은 기존 saveRequested('settlement') →
+    //     SaveBridge 경로가 수행한다 — 코디네이터는 SavePort를 직접 호출하지
+    //     않는다(저장 책임 표 A-12 유지). 저장 실패 시 DEBRIEF에 머물며
+    //     재정산 없이 저장만 재시도한다.
+    const sortieFailure = new SortieFailureCoordinator(metaLoop, saveBridge, () =>
+      playerHull.markFailureSettled(),
+    );
+    this.sortieFailure = sortieFailure;
+    this.registry.register(sortieFailure);
+
+    // ②-c2 DEBRIEF 읽기 모델 (INT-CORE-015 — C6·C7 화면 분리). 그래픽스
+    //     정산·실패 화면은 isDestroyed 추측이 아니라 이 모델만 소비한다:
+    //     kind('returned'/'aborted'/'destroyed')·settlement·failure·
+    //     saveStatus·canRetrySave. 재시도 명령은 sortieFailure.retrySave를
+    //     조립부가 command로 감싸 제공한다(모델은 읽기 전용).
+    const debriefState = new DebriefStateTracker(sortieFailure, saveBridge, metaLoop);
+    this.debriefState = debriefState;
+    this.registry.register(debriefState);
+    //     확인 command (INT-CORE-016 — 개정 DEBRIEF 종료 정책): 저장 성공이
+    //     BASE 전환을 자동으로 일으키지 않는다. 귀환·실패 화면의 '확인'
+    //     버튼이 이 command를 호출하며, 저장 미완료·중복 확인은 거부된다.
+    //     정상 귀환·실패 양쪽 동일 정책.
+    this.debriefConfirm = new DebriefConfirmCommand(metaLoop, debriefState);
+
     // ②-c production 기지 경제 조립 (INT-CORE-010) — 저장 책임 단일화.
     //     savePort: 명령당 호출 횟수 계측 가능 (CountingSavePort.callCount).
     const savePort = new CountingSavePort({
@@ -559,6 +715,10 @@ export class Game {
       // 장비 배율·외형 단계. UpgradeState는 파생 뷰로만 동기화한다.
       onPurchaseCommitted: () => {
         upgrades.setLevels(upgradePurchase.levelSnapshot);
+        // hullIntegrity 구매 반영 [INT-CORE-015 정책]: 최대치만 재계산 —
+        // 진행 중 출항의 currentHull은 회복시키지 않으며, 효과는 다음 출항
+        // 초기화(currentHull=maxHull)에서 적용된다.
+        this.playerHull?.applyHullIntegrityModifier(upgrades.modifiers.hullIntegrity ?? 0);
         this.effectiveParams = deriveEffectiveParams(params, upgrades.modifiers);
         gameplay.equipment.setUpgradeModifiers({
           torpedoSpeedBonus: 0,
@@ -587,6 +747,85 @@ export class Game {
     //     (계약 편입 요청: INT-RENDER-010).
     prepScreen.attachSlotPositions(gameplay.equipment);
     this.registry.register(new MetaUiAdapter([economyHud, prepScreen]));
+
+    // ②-e 스프린트 C HUD·정산 화면 마운트 (그래픽스 소유 — INT-RENDER-012).
+    //     전부 리드 read model 소비 전용이다: DetectionHudView·
+    //     TrackingStateSource(게임플레이 도착 시 attach 2줄)·
+    //     SurvivalReadModel(playerHull)·DebriefReadModel(debriefState).
+    const detectionHud = new DetectionHud(this.container);
+    //     탐지 HUD 배선 (INT-CORE-016 §②).
+    //     ① 탐지 read model — 게임플레이 정본은 `detectionHudView()`(호출마다
+    //        값 복사본)이므로 폴링 어댑터로 감싼다. HUD는 게이지를 재계산하지
+    //        않고 이 값만 표시한다.
+    //     ② 추적 read model — 정본은 **리드 `GuardShipAdapter`**의
+    //        `TrackingStateSource` 구현이다 (게임플레이에 없는 API를 만들지
+    //        않는다). params 미확정이면 stage가 safe에 고정돼 attack 전이가
+    //        없고, HUD는 그 미연결 상태를 그대로 표시한다.
+    detectionHud.attachDetectionSource({
+      hudView: () => gameplay.detectionHudView(),
+    });
+    detectionHud.attachTrackingSource(guardAdapter);
+    const survivalHud = new SurvivalHud(this.container);
+    survivalHud.attachSource(playerHull, () => playerHull.consumeDamageFlash());
+    const rendererCamera = this.renderer?.camera ?? null;
+    survivalHud.attachViewContext({
+      get headingRadians() {
+        return gameplay.poseSource.headingRadians;
+      },
+      get cameraForwardX() {
+        // 카메라 월드 -Z축 (matrixWorld 3열) — three 스크래치 객체 불필요
+        return -(rendererCamera?.matrixWorld.elements[8] ?? 0);
+      },
+      get cameraForwardZ() {
+        return -(rendererCamera?.matrixWorld.elements[10] ?? 1);
+      },
+    });
+
+    //     실패·귀환 화면 — 데이터 소스와 컴포넌트가 모두 분리돼 있다 (C7).
+    //     재시도 command = 리드 retrySave 래퍼 (재정산 없음 — 저장만).
+    //     확인 command = **리드 guarded command**(INT-CORE-016 §DEBRIEF 개정).
+    //     `metaLoop.completeDebrief()` 직접 호출은 저장 미완료 가드를 우회하므로
+    //     사용하지 않는다 — 저장 성공 전 confirm은 `saveIncomplete`로 거부되고,
+    //     중복 confirm은 BASE 전환을 반복하지 않는다. 정상 귀환·실패 동일 정책.
+    const debriefConfirm = this.debriefConfirm;
+    const confirmDebrief = (): void => {
+      debriefConfirm?.confirm();
+    };
+    const failureScreen = new SortieFailureScreen(this.container);
+    failureScreen.attach(
+      debriefState,
+      () => {
+        sortieFailure.retrySave(() => {
+          saveBridge.writeSnapshot();
+          return saveBridge.lastSaveSucceeded;
+        });
+      },
+      // [INT-CORE-017] 실패 화면 확인 = 리드 guarded confirm command —
+      // 성공(BASE 전환)했을 때만 true를 돌려 화면이 닫힌다.
+      () => debriefConfirm?.confirm() === 'confirmed',
+    );
+    const returnScreen = new SortieReturnScreen(this.container);
+    returnScreen.attach(debriefState, metaLoop, confirmDebrief);
+
+    this.registry.register({
+      id: 'sprintCHud',
+      initialize: () => {},
+      update: (deltaSeconds: number) => {
+        const inSortie = metaLoop.metaState === 'SORTIE';
+        detectionHud.setVisible(inSortie);
+        survivalHud.setVisible(inSortie);
+        detectionHud.update();
+        survivalHud.update(deltaSeconds);
+        failureScreen.update();
+        returnScreen.update();
+      },
+      dispose: () => {
+        detectionHud.dispose();
+        survivalHud.dispose();
+        failureScreen.dispose();
+        returnScreen.dispose();
+      },
+    });
 
     // ④ 표현 연동 — 렌더 소유 카메라 입력(회전·리센터). 이동키와 중복 없음.
     this.registry.register(new CameraInputAdapter(scene.cameraRig));
@@ -638,10 +877,10 @@ export class Game {
     this.registerUnsubscribe(
       this.bus.on('metaStateChanged', ({ next }) => {
         scene.setMetaBaseActive(next === 'BASE', this.upgrades?.visualTiers);
-        if (next === 'DEBRIEF') {
-          // 정산 확정 직후 기지 복귀 (별도 결과 화면 없음 — PvE 1차 통합)
-          this.metaLoop?.completeDebrief();
-        }
+        // DEBRIEF 자동 완료는 제거됐다 — 정산 결과 화면이 도입되어
+        // 귀환 화면의 '확인'(completeDebrief command)과 실패 화면의 저장
+        // 성공 전환(SortieFailureCoordinator)이 기지 복귀를 소유한다
+        // (리드 주석의 예정된 대체 — INT-RENDER-012).
       }),
     );
 

@@ -149,8 +149,12 @@ export interface SurfaceShipMotionPort {
   /** 월드 경계 안인가 (경계 좌표는 구현 소유 — AI가 수치를 갖지 않는다) */
   isWithinWorldBounds(x: number, z: number): boolean;
   isTargetAlive(targetEntityId: number): boolean;
-  /** 표적의 현재 위치 — 관측 불가·소멸 시 null (탐지 판정 아님) */
-  getTargetPosition(targetEntityId: number): { readonly x: number; readonly z: number } | null;
+  /** 표적의 현재 **3D** 위치 — 관측 불가·소멸 시 null (탐지 판정 아님).
+   *  y는 관측 시점의 실제 심도다 — 공격 요청이 이 값을 고정해 폭뢰 목표
+   *  심도로 쓴다(INT-CORE-019: 임의 y=0 채움 금지, 투하 후 재추적 금지). */
+  getTargetPosition(
+    targetEntityId: number,
+  ): { readonly x: number; readonly y: number; readonly z: number } | null;
 }
 
 /** 스폰 1건에 대한 이동 포트를 만들어 주는 게임플레이 측 팩토리 */

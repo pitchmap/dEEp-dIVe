@@ -6,7 +6,61 @@
 
 ---
 
-## A+B 최종 기술 통합 — 통합 관리자, 최신
+## 스프린트 C 기술 통합 — 통합 관리자, 최신
+
+> 상세: `docs/SPRINT_C_HANDOFF.md` 'C 통합 실행 결과' §1~11.
+> 브랜치: `claude/deep-dive-d5-gray-box-integration-tree5i` (dev 미병합, PR 없음).
+
+### 병합 (시작 `origin/dev` = `d832579`)
+
+| 역할 | SHA | 병합 커밋 | 충돌 |
+|---|---|---|---|
+| 개발 리드 | `839eace` | `edc4b91` | 없음 |
+| 게임플레이 | `844d0c7` | `e331505` | 문서 1건 |
+| 그래픽스 | `97e7dd3` | `6a04be7` | 문서 1건 + fixture 계약 갱신 |
+| 빌드·툴 | `2814dd0` | `834f28f` | 없음 |
+
+### composition 배선
+
+`attachPlayerAliveSource` ✅ · `attachDamageReceiver` ✅ ·
+`enemyAttackBinding.attach(gameplay.enemyAttackPort)` ✅ ·
+선체·침수 params 주입 ✅ · Detection/Tracking/Survival/Debrief HUD ✅ ·
+DEBRIEF confirm을 `debriefConfirm.confirm()` guarded command로 교체 ✅ ·
+**`attachCombatParams` 미배선 (계약 충돌 — blocker)**
+
+### 자동 검증
+
+typecheck ✅ · build ✅ · size 5.2% · scope ✅ ·
+**gameplay 238/238 · meta 119/119 · tooling 26/26 · hud 34/34 ·
+sprint-a 전항목 · sprint-b 자동 22/22 · sprint-c 자동 23/23**
+
+### 브라우저 실측
+
+- **production(공식 null params) 20/20** — 출항·HUD 미연결 표시·경비함 생성/이동·
+  공격 0·정산·저장 후 DEBRIEF 유지·확인 버튼으로 BASE·재출항·salvage 재생성·
+  영구 데이터 보존·화면 배타 표시. **콘솔 오류 0건**
+- **fixture(`?cdemo=1`) 14/14** — 탐지 3단계·추적 4상태·선체/침수/방향 표시·
+  실패↔귀환 분리·저장 실패·retrySave·중복 confirm 방지·640×480 겹침 없음
+
+### 판정
+
+```
+C_INTEGRATION_COMPLETE       = true
+C_RUNTIME_WIRED              = false   (C9 params 15/15 미확정)
+C_BROWSER_EMPIRICAL_COMPLETE = false   (실제 생존 전투 루프 실측 불가)
+C_FINAL_COMPLETE             = false
+```
+
+### blocker 3건
+
+1. C9 공식 수치 미도착 (15/15 null — 발명 금지)
+2. `attachCombatParams` 전송 형태 충돌 (게임플레이 평면 root ↔ 툴링 블록 중첩,
+   + 툴링이 원본 직접 import 금지) — **수치 도착 전에** 해소 필요
+3. 실패 화면 '확인' 버튼에 confirm command 부재 (귀환 화면과 정책 불일치)
+
+---
+
+## A+B 최종 기술 통합 — 이전 회차
 
 > 상세: `docs/SPRINT_A_INTEGRATION_MANIFEST.md` §AB1~AB8 ·
 > `docs/SPRINT_B_ACCEPTANCE.md` 'A+B 최종 기술 통합 판정'.
@@ -269,6 +323,40 @@ B 선행개발          = 가능 (선행개발 상태로만)
   - **공식 경제 연결 (INT-CORE-011 — 툴링 승인 params `2a89400`·loader `60ece41` 소비):**
     - **선행 계약** — `contracts/officialParams.ts` 신규: `OfficialRuntimeParams`(공식 로더 composition root 각 1회 호출 번들 — upgrades·equipment·economy·cargo·aiming, 시스템·UI의 JSON/로더 직접 호출 금지), `SalvagePlacementSource`(보상=economy params 소유 / 좌표=월드·그래픽스 소유, spawnId 결합), production spawn 규칙(출항당 1회·파괴분 재생성 금지·미도착 = unwired·임시 좌표 금지)
     - **구현** — Game.ts: `meta/provisionalEconomy` production import **제거·파일 삭제**(손실률 0.5는 economy.json 정본), `loadEconomyParams`+`loadAimingParams` 각 1회 → MetaLoop(손실률)·UpgradePurchaseSystem/UpgradeState/BaseScreenPort/UI 포트(공식 카탈로그 2종) 주입, 구 `upgradeCalculator` 로더 production 미사용(시뮬레이터 전용 존치). PveIntegration: `composeSalvageSpawnPlan`(누락·중복·미지 spawnId/dropTableId/kind 거부 — 거부 시 부분 생성 없음)·`SortieSalvageSpawner`(출항당 1회 가드, `sessionPort.start()`에서 `beginSortie`). 결정적 검증 **58/58**(결합 5·스포너 4·실파일 60/40/25+희귀 1·Game/UI 정적 검사 3 신규)
+  - **스프린트 C 착수 — 생존 루프 공용 코어 (INT-CORE-014):**
+    - **착수 게이트 통과** — A 공식 인수 통과 · `B_CORE_COMPLETE=true` · `origin/dev`(`d832579`)가 A+B 통합 `3958ce4` 포함 · dev 병합 후 자동 검증 전 항목 통과 → **C_OFFICIAL_START=true**. 공식 범위는 **C1~C9 전 항목 핵심 게이트**(12차 결의 3·15차 결의 2)이며 작업용 분류를 쓰지 않는다
+    - **선행 계약 (커밋 `d048c40`)** — `contracts/survival.ts`: PlayerHullState(+unwired)·DamageEvent/Request·DamageSourceType(기존 DamageCause는 폭뢰 근접도로 병존)·DamageReceiverPort(결과 7종)·FloodingParams/Snapshot·DepthPressureParams/Port·HullUpgradeConsumer·EnemyAttackPort·SurvivalReadModel·SortieFailureReport/Port·PlayerAliveSource·SortieResettable. events: `playerDestroyed`·`sortieFailed`(실패 화면 — 귀환 `sortieEnded`와 분리, C7)
+    - **구현 (`c3367a4`·`b52d437`·`2e7c788`·`59b4bfe`)** — `core/PlayerHullSystem`(피해 수신 단일 창구·중복 원장·전이·파괴 1회·읽기 모델·출항 초기화), `core/FloodingCore`(dt 비례 결정적 누적·단계 파생), `core/SortieFailureCoordinator`(파괴 1회 → MetaLoop 정산 1회 → 기존 저장 경로 → BASE, 저장 실패 시 DEBRIEF 유지·재정산 없는 재시도). Game 조립: FloodingCore → PlayerHullSystem(② 판정) → SaveBridge → SortieFailureCoordinator, 출항 시작 시 생존 상태 초기화. 결정적 검증 **103/103**(C 16항목 신규 + 정적 2 개정)
+    - **수치 0**: 선체 기준값·피해량·침수 속도·압력은 **공식 params에 없음**(upgrades.json hullIntegrity·maxDepth는 배율만 승인·paramRef 없음) → 전 시스템 `unwired`, 임시 수치 생성 없음. 연결은 `attachHullParams`·`attachParams` 두 줄
+    - **C 통합 blocker 마감 (INT-CORE-016 — C_INTEGRATION_HANDOFF_READY=true):**
+    - **AI 공격 요청**: `DestroyerAIController`가 attack 상태에서만 `EnemyAttackRequest` 생성(요청만 — 피해·반경·쿨다운·신관 비소유, id 단조·결정적). destroyed·위치 미확인·lost·포트 미연결 = 요청 0건. `EnemyAttackPortBinding` 미연결 = unwired(투하·피해 0) — 병합 시 `attach(gameplay.enemyAttackPort)` 1줄
+    - **DEBRIEF confirm 정책 개정**: 저장 성공이 BASE 전환을 자동으로 일으키지 않음 — `canConfirm` → `DebriefConfirmCommand.confirm()`만이 BASE 진입점(정상 귀환·실패 동일, 저장 미완료·중복 confirm 거부). DECISIONS C-9
+    - **통합 patch 확정**: SPRINT_C_HANDOFF §통합 composition patch — 게임플레이 4+1줄·그래픽스 2줄+confirm 교체·Game.ts 충돌 표·B5 검토 5항목·consumeDamageFlash 허용 판정. `GuardShipAdapter`가 `TrackingStateSource` 구현(추적 표시 소스 정본). 결정적 검증 **119/119**
+  - **C 런타임 마감 준비 (INT-CORE-017 — 브랜치 `claude/sprint-c-runtime-closeout`, 기준 `bd87828`. C_RUNTIME_CLOSEOUT_STRUCTURE_READY=true):**
+    - **combat params 전달 계약 정상화** (통합 blocker §5 해소): 정규화 소유자 = 공인 로더(`tools/combatParams.validateCombatParams`) **한 곳**. 게임플레이 구 평면 리더 2종 제거(중첩 스키마와 불일치하던 이중 정규화), `attachCombatParams(params: NormalizedCombatParams)` 타입화, 조립부가 `loadCombatParams()` 결과의 게임플레이 단면(`detectionTuning`·`depthCharge`)을 슬라이스 전달. raw combat.json import 0건(정적 검사 — 허용 2곳: combatParamsLoader·A 시절 ParamLoader), null 블록은 null 그대로(unwired 유지·부분 wired 금지). DECISIONS C-10
+    - **실패 화면 confirm 경유** (통합 blocker §11-3 해소): `SortieFailureScreen.attach` 3-인자화 — '확인 (기지로)' = `debriefConfirm.confirm()` guarded command, 성공 시에만 화면 닫힘(DOM 숨김 전용 경로 제거), 버튼 노출 근거는 `canConfirm` 하나. 정상 귀환·실패 동일 정책 완결. DECISIONS C-11
+    - **검증**: `verify:meta` +5(정규화 필드 교환 0·null 보존·NaN/음수 거부 + 정적 검사 2) → **124/124**, `verify:gameplay` 실경로 주입으로 교체 → **238/238**
+    - **상태 구분 (DECISIONS C-12)**: 구조 배선 완료(wired 경로 존재) ✅ / C9 수치 확정 ❌(15필드 전량 null — 결정표는 **PROPOSED**로 보고서 제출, 기획 승인 대기, production·params 숫자 미입력) / 브라우저 실측 ❌ / C 최종 완료 ❌ → **아래 INT-CORE-018로 갱신됨**
+  - **C9 v0.1 승인값 입력·production 실측 (INT-CORE-018 — 커밋 `c943d35`·`885839f`):**
+    - **승인값 입력 (DECISIONS C-13)**: 15필드 전량 확정 — hull 120/0.7/0.3 · depthCharge 4m/18m/45/12/6s · flooding 0.15/0.45/0.8/2.4/0.02 · detection {60,240}/0.125. 공인 로더 pending 0건·관계 검사 통과. 지정 필드 외 무변경·pressure 미추가·fallback 0
+    - **탐지 기준 배선 2줄 (DECISIONS C-14)**: `torpedoFired`→`reportTorpedoLaunch`(§5.10 확정 규칙 배선) + 출항 시 `reportNoise(1)`(공식 만충 시간 정의의 기준 조건 — 수치 발명 아님)
+    - **브라우저 실측 완주** (production, fixture 아님 — 상세: INTEGRATION_NOTES INT-CORE-018): 탐지 상승 9.65s(공칭 8s)·감쇠 8.000s·신관 정확 3.000s×10·공격 간격 6.05s(단일)·direct 45/near 12/miss 0 재현·파괴(near 30.5s/direct 9.1s)·파괴 후 공격 중단·실패 정산 1회·saved·실패 화면 confirm→BASE·재출항 reset. **콘솔 오류 0**
+    - **실측 발견 blocker**: ① 침수 미발생 — 피격→침수 기여 공식 param 부재(production `causesFlooding=true` 발신자 0) → 침수 루프 도달 불가, 기획 결정 필요 ② 잠망경 심도 direct 불가(기폭 y=0 규약) ③ 밀려남 상향 성분이 폭격 중 잠항 상쇄
+    - **플래그**: C_COMBAT_PARAMS_DEFINED=**true** · C_RUNTIME_WIRED=**true** · C_BROWSER_EMPIRICAL_COMPLETE=**true**(침수 스테이지 제외 명시) · C_FINAL_COMPLETE=**false**(침수 유발 경로 부재 blocker) → **아래 INT-CORE-019로 갱신됨**
+  - **C 최종 런타임 blocker 3건 마감 (INT-CORE-019 — 커밋 `c2ee51d`·`45257d8`·`74e13c3`. C_FINAL_COMPLETE=true):**
+    - **침수 기여 (C9 v0.1.1, DECISIONS C-15)**: direct 0.35·near 0.10 승인 입력(17필드) — outcome별 피해·침수 동시 결정, 단일 창구·중복 1회·clamp 1.0·tick 경로 유지
+    - **소음 정책 (C-16)**: 속도 비례(정지 0·전속 1·침묵 0.1 배율) — 고정 reportNoise(1) 폐기, 조립부 수치 하드코딩 0. 대화형 침묵 조작 미구현 = 소스 미연결 false 중립(**C_SILENT_RUNNING_INTERACTIVE=false**)
+    - **목표 심도 기폭 (C-17)**: 관측 3D 고정·낙하 보간·목표 심도 기폭 — y=0 고정 폐기, 세 심도 모두 direct/near/miss 성립(실측: periscope 11·cruise −1.2·deep −3.28)
+    - **production 재실측 완주**: 소음·탐지 속도 비례, direct 45+0.35 / near 12+0.10 / miss 0, 침수 단계 실전이(minor 0.151→major→catastrophic)·지속 피해(2.4×level)·침수 잠식 파괴, 파괴 후 공격 0, 정산·confirm·BASE·재출항 reset, 콘솔 오류 0 — 상세: INTEGRATION_NOTES INT-CORE-019
+    - **최종 플래그**: C_COMBAT_PARAMS_DEFINED=**true** · C_RUNTIME_WIRED=**true** · C_BROWSER_EMPIRICAL_COMPLETE=**true** · **C_FINAL_COMPLETE=true** · C_SILENT_RUNNING_INTERACTIVE=false(후속)
+  - **C 선행 계약 마감 (INT-CORE-015 — C_ROLE_HANDOFF_READY=true):**
+    - C1~C3: `contracts/detection.ts` — 게이지 정본=게임플레이 DetectionSystem(기존 계약), 은신·심도 입력 포트, 거리 감쇠·감소율 null 계약(unwired), HUD·AI 읽기 모델 2종(AI는 stage만), 추적 전이 정본=리드(기존 상태 어휘·경비함/호위함/적대함 공유), alert 발화=기존 detectionChanged, 출항 reset 경계
+    - C4: 폭뢰 정본 경로(탐지→AI 요청→EnemyAttackPort→DepthChargeSystem→direct/near→applyDamage) + `DepthChargeDamageParams`(전부 null 허용)
+    - 침수 지속 피해도 **단일 창구 경유**(tick별 flood:<n> id·닫힌 적분 — dt 분할 무관 총 피해 동일), 파괴 경로 통합
+    - `DebriefReadModel`+`DebriefStateTracker` — 그래픽스가 isDestroyed 추측 없이 귀환/실패 화면 분기(C6·C7), 저장 재시도 상태 노출
+    - 정책 확정(DECISIONS C-6~C-8): 선체·침수=출항 단위·구매 순간 회복 없음·영구 손상 후속 이관·**압력 피해 C 핵심 범위 제외**(계약만 유지·production unwired·게이트 불포함)
+    - 이중 정산 방지 정적 검사 + 결정적 검증 **110/110**. 역할별 인계 정본: `docs/SPRINT_C_HANDOFF.md`
+  - **업그레이드 소비 현황**: hullIntegrity = **경계 연결 완료**(기준값 대기) / maxDepth = 계약·경계만(압력 피해가 C1~C9 밖·기준값 없음 → pending) / sonarRange = **deferred 유지**(탐지 시스템 미도입) / torpedoDamage·maxSpeed·turnRate·reloadSpeed = 기존 연결 유지
   - **스프린트 B 선행개발 (INT-CORE-012 — B 공식 발효 전, dev/main·통합 병합 금지):**
     - **선행 계약 (커밋 `afd5c71`)** — `contracts/faction.ts`(FACTION_RULES 규칙표·`patrol` 정본 유지·guard 별칭 미추가·`CombatTargetClass` 승격·`rewardDropTableIdFor`), `contracts/identification.ts`(B2 식별 read model — 미식별 시 라벨 null / B7 로깅 8항목·결과 분류 5종), `contracts/guard.ts`(중립 유효 피격·경비 요청 payload·GuardSpawnPort 결과 5종·GuardShipAdapterConfig·DestroyerAIFactory·B6 호위 계약·PLAYER_ENTITY_ID), `events.ts`(neutralShipHit 신설·guardShipRequested **payload v2**·transportAttacked)
     - **구현 (커밋 `d1577d5`·`b43c906`)** — `core/GuardShipAdapter`(기존 DestroyerAI 계약에 주입+수명주기 전달만, **신규 경비 AI 코어 0**), PveIntegration `GuardIncidentLedger`(중복 방지 **단일 저장소** — 상관 id·요청 id 공용, 출항 경계 리셋)·`NeutralIncidentBoundary`·`GuardSpawnCoordinator`(GuardSpawnPort)·`GuardSpawnBridge`. Game 조립: 경제 브리지 → 사건 경계 → 스폰 브리지 → 어댑터(③ AI 그룹) 등록. 결정적 검증 **77/77**(B 18항목 신규 — 중복 방지·세력 판정·스폰 결과 5종·어댑터 위임·B6 분리·B2 모델·B7 로깅 + 정적 검사 2: 신규 경비 AI 파일 0개·C 범위 구현 파일 미생성)
@@ -276,8 +364,8 @@ B 선행개발          = 가능 (선행개발 상태로만)
     - **남은 미연결 1개**: 게임플레이 motion adapter(`SurfaceShipMotionPortFactory`) — `Game.composeSystems`의 1줄 교체로 연결되며, 그 전까지 스폰은 `spawnFailed`(가짜 이동 생성 금지). B1(적대·중립 동시 배치)은 게임플레이 브랜치에 이미 구현됐고 병합 대기다
   - **업그레이드 7항목 production 소비 현황 조사 (INT-CORE-011):** maxSpeed·turnRate·reloadSpeed = `deriveEffectiveParams` 연결됨 / **torpedoDamage** = `equipment.setUpgradeModifiers` 경유 어뢰 피해 연결됨 / **hullIntegrity·maxDepth** = 소비 시스템 자체가 아직 없음(내구도·침수는 B/C 범위, 심도 한계 파라미터화 미도입) — 현재는 외형 단계(visualTiers 선체 합산)에만 기여 / **sonarRange** = 소비 시스템 없음(탐지는 범위 밖) — 기준값 발명 없이 구매·저장·외형만 유효
 - **진행 중:** 없음
-- **다음 작업:** ① **A 브라우저 인수 검증·A 통합 PR·dev 병합**(B 범위표 발효 조건 — 15차 결의 1) ② A+B 최종 통합 브랜치에서 전체 검증 — 그 전까지 B 완료·발효 보고 금지 ③ 게임플레이 중립 선박 배치·neutralShipHit 발행·위치 전략, 리드 구축함 AI 구현 도착 시 `attachFactory` 배선 ② 그래픽스 `SalvagePlacementSource` 구현체 도착 시 `attachPlacementSource` 연결(1줄) ③ 보스 AI는 스프린트 C(C1~C9) 통과 후 본개발 — 스프린트 B·C·어뢰 캠은 착수 금지 상태(14차 결의 1)
-- **차단 문제:** 없음 (그래픽스 salvage 배치 3좌표 도착 — `world/salvagePlacements.ts` 연결 완료, 출항 시 3개 생성 실측. INT-RENDER-010)
+- **다음 작업:** ① 툴링 C9 [COMBAT] params(선체 기준값·피해·침수·압력) 도착 시 `attachHullParams`·`attachParams` 배선 ② 게임플레이 피해 source(폭뢰·충돌)·탐지 게이지 병합 후 C1~C9 통합 판정 ③ 결정 요청 3건(구매 직후 현재 선체 처리·선체 영구 손상 여부·압력 피해 도입) 회의 상정
+- **차단 문제:** 없음 (대기: C9 [COMBAT] 전투 params — 선체 기준값이 없어 피해 루프가 unwired. 적의 공격 수단도 아직 없음 — 폭뢰 판정은 게임플레이 C4)
 - **변경된 계약:** INT-CORE-011(OfficialRuntimeParams·SalvagePlacementSource·production spawn 규칙). 이전: INT-CORE-010, INT-CORE-008·009, INT-CORE-006·007, INT-CORE-004·003·002, INT-GAME-001
 - **통합 주의사항:**
   - 각 파트는 자기 소유 영역에서 `GameSystem`(`src/core/GameSystem.ts`) 구현체를 export하고, 이 문서 자기 구역에 등록 요청을 남긴다. `src/core` 배선은 feat→dev 병합 시 리드가 수행
@@ -301,9 +389,12 @@ B 선행개발          = 가능 (선행개발 상태로만)
   - **[INT-CORE-012 적용 요청 — 게임플레이]** ① **중립 선박 배치**(현재 화물선 1척 hostile 고정 — B1 미성립) ② 유효 피해 적용 지점에서 `neutralShipHit` 발행(어뢰 1발 = attackCorrelationId 1개, 첫 유효 피격만 true). 기존 `consumeGuardSpawnRequests` 큐는 이행 후 제거(그때까지 병존 — 중복은 조립부 원장이 흡수) ③ `ShipIdentificationSource` 구현(거리·식별 성립 조건은 판정측) ④ `GuardSpawnLocationStrategy` 구현 — 없으면 스폰은 noSpawnLocation ⑤ 중립 격침 드롭 0 유지
   - **[INT-CORE-012 적용 요청 — 그래픽스]** 조준경 태그는 `ShipIdentificationView`만 소비 — 엔티티 이름·모델 종류로 세력 추측 금지, 미식별이면 라벨 없음(세력 비노출). 색·실루엣·항해등은 그래픽스 소유(계약에 문구·색 없음). 경비함 등장 방향 연출은 `guardShipRequested.incidentPosition` 구독
   - **[INT-CORE-012 적용 요청 — 빌드·툴]** economy.json 세력별 드롭 테이블·고가치 배율 확장(**patrol 보상은 수치표 도착 전까지 null 유지**), B7 `IdentificationLogSink` 구현·집계·판정(오인율 계산식·최소 표본), B1~B5 자동 검증 스크립트 신설 — 리드는 없는 script를 실행하지 않는다
+  - **[INT-CORE-014 적용 요청 — 게임플레이]** 피해 source(폭뢰·충돌·압력)는 전부 `DamageReceiverPort.applyDamage`로만 보낸다 — 자체 체력 상태 금지. `PatrolShipFleet.isTargetAlive(PLAYER_ENTITY_ID)`가 현재 항상 true인데 리드 `PlayerAliveSource`를 구독해 파괴 후 추적을 멈출 것. **`EconomySystem.settleDefeat`/`settleReturn`·`RunEconomy.settleSortie`는 production 호출자 0건의 병행 정산 경로 — 삭제 요청**(정본은 MetaLoop, C에서 별도 지갑 금지)
+  - **[INT-CORE-014 적용 요청 — 그래픽스]** `SurvivalReadModel`만 소비(내부 객체 비노출·값 변경 불가). **실패 화면=`sortieFailed` / 귀환 화면=`sortieEnded`** 로 데이터·화면 완전 분리(C7). 침수량·피해량을 결정하지 않으며 경고는 `warningIds` 키로만 온다
+  - **[INT-CORE-014 적용 요청 — 빌드·툴]** `params/combat.json` C9 [COMBAT] 확장: 선체 기준값·survivalState 경계 2종·폭뢰 direct/near 피해·침수 3단계 경계/확산율/피해율·(도입 시)압력 4종. **전부 미확정이며 임의 수치 금지.** `verify:sprint-c` 신설은 툴링 몫 — 리드는 없는 script를 실행하지 않았다
   - **계층 경계 [확정]:** 상위(src/meta)가 하위 세션 내부 상태를 읽는 코드, 하위가 메타 상태를 참조하는 코드는 리뷰 반려 대상 — 통신은 SortieSessionPort + 이벤트 3종뿐
-- **마지막 업데이트:** B5 규칙 개정·범용 구축함 AI 신설 (INT-CORE-013 — `b8ade9e`·`c4026f1`·`4750804`·`8c3bf37`. B 공식 미발효)
-- **담당 브랜치:** `claude/deep-dive-core-lead-uyg77p` (리드 세션 — A_STACK 기준 `85ec32b` / 통합 tip `8f40117` 머지 완료)
+- **마지막 업데이트:** C 최종 런타임 blocker 3건 마감 (INT-CORE-019 — 침수 기여 v0.1.1·속도 소음 정책·목표 심도 기폭 + production 재실측 완주. **C_FINAL_COMPLETE=true** · C_SILENT_RUNNING_INTERACTIVE=false 후속)
+- **담당 브랜치:** `claude/sprint-c-runtime-closeout` (통합 tip `bd87828` 정확 기준 — 이전 리드 세션: `claude/deep-dive-core-lead-uyg77p`)
 
 ## 게임플레이
 
@@ -361,12 +452,23 @@ B 선행개발          = 가능 (선행개발 상태로만)
     - **B6**: 교전 요청 → 경비함과 같은 범용 factory 입력 변환 어댑터 제공(호위 전용 AI 0). 이탈 거리 공식값이 없어 결속 비활성 — **실기동 미완료**
     - 결정적 검증 **213항목**(213/213 — 기존 192 유지 + 신규 21). meta 88/88·tooling 26/26·sprint-a 30/30 동시 통과
     - **브라우저 스모크(역할 브랜치)**: 부팅→출항 콘솔 오류 0, `guardAdapter.aiWired=true`. production 경비 스폰은 아직 **`noSpawnLocation`** — 조립 2줄(INT-GAME-013) 미연결 때문이며 게임플레이 준비는 끝났다
+  - **스프린트 C1~C4 (INT-CORE-015 / SPRINT_C_HANDOFF 이행 — `[COMBAT]`). C 공식 미완료**
+    - **C1 탐지 게이지 정본**(`detection/SubmarineDetectionSystem`): 계약 `DetectionSystem`+`DetectionStageSource`+`SortieResettable`. HUD는 `DetectionHudView` 값 복사본, **AI는 stage와 마지막 노출 위치만**(게이지·내부 state 비노출). 거리 감쇠·감소율 null이면 **게이지 0·safe 고정·전이 0**(임의 기본값 0건). 출항 시작·종료 reset. 관측자는 세력 무관 동일 계약
+    - **C2 은신·심도 입력**(`detection/DetectionEnvironmentAdapter`): 기존 3층 심도 정본 소비, 보정식·계수 자체 계산 0(공식 배율은 탐지 시스템이 적용). 소음·침묵 항행 소스는 공식 규칙 부재 → **미연결 = 중립 입력**. 심도 이동 물리 무변경
+    - **C3 추적 연결**: `PatrolShipFleet.getTargetPosition(PLAYER)`가 stage `detected`일 때만 위치를 준다 → 리드 `DestroyerAIController`가 기존 `patrol/alert/attack/lost`로 전이한다. **새 상태명·상태 머신·이벤트 0**, 전이 로직 복제 0
+    - **C4 공격 경계**(`combat/EnemyAttackCoordinator` = `EnemyAttackPort`): 사거리·쿨다운 소유. params null → `unwired`, 표적 파괴 시 거부, 같은 `attackId` `duplicate`, **요청 즉시 피해 0**(투하만)
+    - **C4 폭뢰**(`combat/DepthChargeRunSystem` = `DepthChargeSystem`): 투하→낙하→**신관 3.0초 하한**→폭발→direct/near **택일**→`DamageRequest`→`applyDamage` **단일 창구**. 반경·피해 null이면 폭발은 진행하되 피해 `damageUnwired`. `damageEventId`·`correlationId` 부여, 같은 상관 id 중복 피해 차단. 게임플레이 자체 체력 상태 0
+    - **PlayerAliveSource 실제 배선**: `attachPlayerAliveSource()`가 함대·공격 포트 양쪽에 연결. `isTargetAlive(PLAYER_ENTITY_ID)`의 **항상 true 경로 제거**. 파괴 후 관측·공격 0, 다음 출항 reset 후 복구
+    - **병행 정산 제거**: `EconomySystem.settleDefeat`·`settleReturn`·`RunEconomy.settleSortie` **삭제**(production 호출자 0건이었음). 정산 정본은 `MetaLoop.settleSortie` 하나. 게임플레이 지갑 직접 확정 0
+    - **수치 출처**: 탐지 확정 3종·신관·동시 폭뢰는 공식 params. 공격 사거리는 폭뢰 `nearRadiusMeters` 재사용(구조 규칙). **미확정 전량 null 유지** — 거리 감쇠·감소율·direct/near 반경·피해·투하 쿨다운. 검증 픽스처는 검증 파일 안에만 있고 production import 0
+    - 결정적 검증 **238항목**(238/238 — 기존 213 유지 + 신규 25). meta 110/110·tooling 26/26·sprint-a 30/30·sprint-b 23/23 동시 통과
+    - **C_RUNTIME_WIRED = false** — `params/combat.json`에 C9 필드가 아직 없어 탐지·폭뢰 피해가 unwired다. 조립 4줄(INT-GAME-014)과 공식 params가 도착해야 런타임이 구동된다
 - **진행 중:** 없음
 - **다음 작업:** INT-GAME-012 조립 배선(스폰 위치 전략·식별 소스·다중 선박 렌더 소스) + 공식 수치 4종 요청, INT-GAME-011 조립 3줄 배선(리드 결정 후 production 값 흐름 완성), INT-GAME-004·006 리드 결정 후 잔여 provisional 이관(심도 구간 경계·비율·어뢰 사거리), 격침 보상 어뢰 +1 배선(§5.9 — torpedoHit 구독), 임시 탐지·폭뢰·내구도(D6~D9 잔여)
 - **차단 문제:** **B5 차단 해소 (B5_BLOCKED=false)** — 리드가 범용 `DestroyerAIController`를 신설(INT-CORE-013)했고, 게임플레이가 `SurfaceShipMotionPort`를 구현해 경비함이 실제로 생성·이동한다(검증 확인). 남은 것은 **조립 2줄(INT-GAME-013)** — 그 전까지 production 스폰은 `noSpawnLocation`이다. **B 배선 대기 (INT-GAME-012)** — 스폰 위치 전략·식별 소스·다중 선박 렌더 소스가 조립부에 연결돼야 B1·B2·B4가 화면·런타임에서 성립한다. **production 배선 대기 1건 (INT-GAME-011)** — 경제·화물선·장비 공식 params 주입과 저장 로드아웃 복원, salvage plan 전달은 조립부(`src/core/Game.ts`, 리드 소유) 3줄이 있어야 값이 흐른다. 그 전까지 세 시스템은 **설계된 unwired 상태**(임시 수치 생성 없음, `*ParamsWired === false`로 노출)로 남는다. 이전 **의존성 대기 2건** — ① 리드 창의 스프린트 A 계약(앵커·2소켓·구매 트랜잭션·지갑/저장 포트)이 원격에 아직 없어, 계약 복제 없이 게임플레이 쪽 **단일 소비 지점**으로 선진행함(도착 시 어댑터로 축소·삭제) ② 툴링 창의 `params/aiming.json`·경제 가격 params 미도착 → `provisionalAiming`·`provisionalUpgradeCost` R7 선진행. 그 외 ① 화물선 속력·반경·침몰 시간·경로와 심도 구간 경계·비율·어뢰 수치는 R7 선진행(`provisionalCargo/`, `provisionalMovement/`, `provisionalCombat/`, `provisionalWorld` 구간 경계 — INT-GAME-004·006·007) ② 격침 보상(어뢰 +1)은 TorpedoSystem 잔량 증가 경로(계약 메서드) 리드 결정 대기(INT-GAME-007)
 - **변경된 계약:** 없음 (직접 변경 없음 — INT-GAME-008 제안 등록. aimRequired·경비 요청·희귀 부품 저장·보스 피격은 계약 확정 전까지 읽기 전용 상태·consume API·콜백으로 제공)
 - **통합 주의사항:** 좌표 규약 — **잠수함 로컬 -Z가 선수, +Z가 선미** (`src/core/conventions.ts`만 참조). heading은 Y축 요(yaw), heading 0 선수 = 월드 -Z, 렌더는 `mesh.rotation.y = headingRadians` 그대로. 속도 소비 규칙(INT-CORE-003): 프로펠러 등 부호가 필요하면 `poseSource.forwardSpeedMetersPerSecond`(+전진/−후진), 소음 산출 등 크기만 필요하면 계약 `player.speed`(비부호). 렌더 잠수함 Y는 `poseSource.positionY`. **화물선 상태는 `gameplay.cargoShipState`(계약 CargoShipStateSource)** — composition root가 CargoShipVisual에 주입, `hit`/`sinkProgress`(시간축 게임플레이 소유)/`removed`를 매핑만 할 것, 명중 연출·오디오는 `torpedoHit` 구독. 심도 초기 구간은 y=0 → `cruise`(초기 이벤트 없음). **충돌체 집합은 `gameplay.collision.colliders`(읽기 전용) 공유** — 은신 시야 차폐(D10~12)는 이 집합을 재사용할 것(별도 집합 금지). **협곡 배치의 유일 소스는 `src/world/startingCanyonLayout.ts`** — 렌더·충돌 모두 `CanyonLayout.blocks` 소비(미러 소멸), 레벨 교체 = 새 레이아웃을 `GameplaySystems` 생성자에 주입(또는 데이터 모듈 교체), 소비 중 레이아웃은 `gameplay.layout`으로 확인. **전투 입력은 반드시 `gameplay.aim`(계약 AimSystem) 하나로** — HUD 조준·발사 버튼은 composition root에서 `aim.beginAim()/endAim()/fireTorpedo()`를 호출(별도 전투 시스템 금지), UI는 `torpedo.remaining`·`torpedo.reloadRemainingSeconds`·`aim.aiming` 폴링 + `aimModeChanged` 구독. 리드샷 보조선 = `targets.list`(위치·속도) + `torpedo.torpedoSpeedMetersPerSecond` + `player` 포즈로 계산. 렌더 어뢰 항적은 `torpedo.torpedoes`(읽기 전용) 폴링. 화물선 시스템은 `targets.register()`로 표적 등록(콜백 `onTorpedoHit`는 어뢰 1발당 1회 보장)
-- **마지막 업데이트:** B5 **런타임 연결** (SurfaceShipMotionPort·경비함 월드 엔티티·다중 선박 read source·patrol 식별·B4→B5 체인 검증. B5 차단 해소 — 남은 것은 조립 2줄. B 공식 미발효)
+- **마지막 업데이트:** 스프린트 **C1~C4** (탐지 게이지 정본·은신/심도 입력·추적 연결·EnemyAttackPort·폭뢰 lifecycle·PlayerAliveSource 실제 배선·병행 정산 제거. **C_RUNTIME_WIRED=false** — 공식 combat params·조립 4줄 대기)
 - **담당 브랜치:** `claude/submarine-controls-depth-3wi424` (원격 세션 지정 브랜치 — `feat/gameplay` 역할, origin/dev + 리드 계약 브랜치 병합 기반)
 
 ## 그래픽스
@@ -381,13 +483,14 @@ B 선행개발          = 가능 (선행개발 상태로만)
   - **[LOOP][ECON] Sprint A 마감 — 경제·성장 UI production 배선 (INT-RENDER-009, 기준 통합 `ebea23b` 병합)** — ① UI 재작성: `SortiePrepScreen`·`EconomyHud`의 유일한 명령·상태 진입점을 공통 계약 **`BaseScreenPort`**로 교체(지갑·단계·loadout·저장소·게임플레이 내부 직접 접근 0), 결과 표시는 계약 `TransactionResult`(불가 5종·saveFailedRolledBack) + UI 전용 `economyDataUnavailable`(가격 null — 트랜잭션 미진입, 0원 구매 없음) ② Game 조립(INT-CORE-009 스니펫 적용): savePort(SaveBridge)·구매 판정(공식 catalog 가격 resolver — provisional 가격 미사용, null=도달 불가 거부 값)·`PurchaseTransaction`·장비 원자 경로 매핑(slotFull→noFreeSlot)·`baseScreenUi` registry 시스템 마운트, 구매 확정 시 유효 파라미터·장비 배율·외형 단계 재파생, 저장 loadout 부팅 복원 ③ 출항 단일 진입점(§6): 자동 출항 제거(**기지 시작**)·ControlsHud launchSortie 미주입, `BaseScreenPort.launchSortie` = 확정 직전 저장 실패 시 cancelSortiePrep(해역 전환 금지·기지 유지) ④ production 기본 URL Playwright 실측: 기지 화면·실지갑 일치·업그레이드 7종 null 비활성·장비 3동작·저장 결함 주입 롤백(지정 문구·loadout 무변경)·저장 실패 출항 거부·정상 출항 후 해역 미확정 집계 줄 — 스크린샷 `sprintA_*_production.png` ⑤ QA 데모(`?econdemo`)는 production 마운트와 분리 유지(가짜 BaseScreenPort — 배지 표기)
   - **[LOOP][ECON] Sprint A 마감 2 — BaseScreenPort v2 동기화·공식 가격 활성·해저 salvage 배치 (INT-RENDER-010, 리드 `ffa945a`·툴링 params `2a89400` 병합)** — ① **v2 직결**: UI가 읽기 모델 9종·명령 5종·결과 8종을 계약 그대로 소비. 게임플레이 로컬 결과 타입 참조 0건. **구계약 변환 어댑터 제거**(`createMetaUiPorts`·`toUiCommandResult`·`isOfficialUpgradeStatId` + 구 UI 포트 타입 일습) ② **공식 가격 활성**: 업그레이드 7종 가격·구매 조건 활성화(1단계 100), 장비 4종(기본 어뢰 시작 보유 / 고속 260 / 중어뢰 420+희귀 1 / 디코이 340+희귀 1). QA 데모 가격은 production 미사용 ③ **해저 salvage 배치**: `world/salvagePlacements.ts` = `SalvagePlacementSource` — spawnId·worldPosition·orientation만 정의(보상 수치 0건). salvage-1(-3.83,-4.5,-30)·salvage-2(5.62,-4.5,16)·salvage-3(2.65,-4.5,42), 지형 여유 ≥8.2m·상호 ≥26m·스폰 17.5m+·화물선 항로 19.7m·해저 접지(상단 -3m) ④ **salvage 시각**: `SalvageVisuals` 회색 박스 3종 + 회수 범위 링(게임플레이 실제 반경 주입) — `rarePartId` 미참조(희귀 부품 사전 노출 금지), 탐지 UI 미추가 ⑤ 출항 진입점 1개 유지(자동 출항 없음, HUD 출항 버튼 미노출)
   - **[FACTION][RENDER] 스프린트 B 선행개발 — 식별 태그·세력 외형·경비 방향·호위 표현 (INT-RENDER-011, 리드 `1378834` 병합)** — ⚠ **B 공식 발효 전 선행개발**이며 dev/main 병합·B 완료 보고 대상이 아니다. ① **B2 식별 태그**(`IdentificationTags` — `ShipIdentificationSource`만 소비, 상태 4종 기호 ◇▲■◆+문구+거리+조준 가부, 미식별 시 세력 비노출, tagDisplayable/isAlive/isTargetable 계약 준수, 십자선 중심 회피·겹침 완화, z-31 별도 층으로 마스크·십자선·눈금 무변경) ② **B7 노출 신호**(`IdentificationExposureSink` — 최초 표시 시각·세력 실노출 여부만, 결과 분류·오인 판정 없음) ③ **B1 세력 외형**(`factionVisuals` + `CargoShipVisual` 변형 — 적대 각진 무장/중립 매끈 화물/경비 저현 전투, 마크 형태 삼각·사각·마름모, 등화 거동 구분 → **색 이외 구분 3중**) ④ **B5 경비 방향**(`GuardDirectionIndicator` — 실제 스폰 좌표만, 화면 밖 가장자리 화살표+거리, 화면 안 해제(0.25s 체류), 6초 소멸, 기지 억제, 시간 정지·컷신·탐지 게이지 없음) ⑤ **B6 호위**(`ConvoyVisuals` — ◈고가치/⚔호위 배지 + EscortBinding 점선 결속선, 거리 추측 없음, 보상 숫자 미노출) ⑥ fixture `?bdemo=1`(UI 단위 검증 전용 배지 표기 — production 아님, 가짜 경비함 3D 개체 없음)
+  - **[DETECT][SURVIVAL][LOOP] 스프린트 C — 탐지·생존 HUD·피격 피드백·실패/귀환 화면 분리 (INT-RENDER-012, 리드 `d689628` 병합)** — ① `DetectionHud`(DetectionHudView 그대로 — 눈 3단계 ─◔◉·게이지 무보정·unwired 빗금+'계기 미연결', TrackingStateSource 4종 칩 — 집계값·새 상태명 0) ② `SurvivalHud`(SurvivalReadModel — 선체 바·침수·survivalState·warningIds 키 매핑·hullRatio null 안전·피격 플래시(consumeDamageFlash 계약 소비)·lastHitDirection 방향 지시자) ③ X-ray 침수 구동(floodingChanged severity 매핑만 — 자체 타이머 0, 선체 레이어 준수) ④ `SortieFailureScreen`/`SortieReturnScreen` **파일·데이터 완전 분리**(DebriefReadModel.kind가 유일 분기 — isDestroyed 추측 0), 저장 실패 시 DEBRIEF 유지 + 재시도 command·기지 이동 불가 명시, 귀환 화면 확인 = completeDebrief command(구 자동 완료 대체) ⑤ fixture `?cdemo=1`(UI 단위 검증 전용 배지) ⑥ production 실측: 정상 귀환 전체 루프·unwired 표시·A/B 회귀 없음. 피해·파괴 실데이터는 combat params null·게임플레이 미구현으로 fixture 검증만
 - **진행 중:** 없음
-- **다음 작업:** INT-RENDER-011 리드 확인(⚠ GuardShipHandle.spawnPosition · B5 가드레일 허용목록) / 게임플레이 `ShipIdentificationSource`·B6 소스 도착 시 1줄 배선 후 production 재검증 / 경비 위치 전략·AI 팩토리 연결 시 마커 실동작 확인
+- **다음 작업:** INT-RENDER-012 리드 확인(DEBRIEF 자동 완료 제거 승인) / 게임플레이 DetectionSystem·TrackingStateSource 도착 시 attach 2줄 배선 + production 재실측 / combat params 확정 시 피해·침수·실패 화면 실데이터 실측
 - **차단 문제:** 게임플레이 B 판정 미구현 — `ShipIdentificationSource`·B6 소스 부재로 production 태그·호위 표시는 0건(가짜 데이터 없음), 경비 스폰은 위치 전략·AI 팩토리 미연결로 차단. 표시 규칙은 fixture(`?bdemo=1`) UI 단위 검증으로만 확인됨
 - **변경된 계약:** 없음 (`src/contracts/*` 미수정 — BaseScreenPort v2·officialParams 소비만). 조립부·게임플레이 최소 변경 2건은 INT-RENDER-010 ⑤ 확인 요청
 - **통합 주의사항:** 조준경은 `aimModeChanged`만 소비(홀드→토글 개편에도 렌더 무변경). 어뢰 소비 인터페이스(`TorpedoStateSource`)는 StraightRunTorpedoSystem이 구조적 충족. 환경 밀도는 renderVisualParams.environment가 상한 — 보스 전장 데코는 '추가'가 아니라 '이동'(11차 결의 1). 반투명 renderOrder 서열: 블롭1<X-ray2<수면3=기포3<폭발4<보조선5. 신규 모듈 전부 dispose 일괄 관리(geometry·material·InstancedMesh). **자기 선체 layer 1은 조준 카메라 전용 규약 — 다른 시스템이 layer 1을 쓰면 조준 중 함께 사라진다.** 출항 진입점은 기지 화면 출항 버튼(BaseScreenPort.launchSortie) 하나 — HUD `launchSortie` 재주입·자동 출항 재도입 금지(INT-RENDER-009 ③). **게임은 기지(BASE)에서 시작한다** — 해역 전제 검증·테스트는 출항 버튼 클릭을 선행해야 한다(verify-hud 도입부 참조). z-index 서열: 준비 화면 25 < 조준경 30 < 재화 HUD 32 < HUD 버튼 90. QA 플래그: `?xray` `?shipdemo` `?lookup` `?bossSpike=1(&bossMotion=b)` `?base=1` `?tiers=h,w` `?aimdemo=1` `?econdemo=1|savefail`
-- **마지막 업데이트:** 스프린트 B 선행개발 — 식별 태그·세력 외형·경비 방향·호위 표현 (feat/render, B 공식 발효 전)
-- **담당 브랜치:** `feat/render` (B 리드 최종 tip `1378834` 병합 기반 — A 스택 `85ec32b`/`8f40117` 포함)
+- **마지막 업데이트:** 스프린트 C 그래픽스 — 탐지·생존 HUD·화면 분리 (feat/render)
+- **담당 브랜치:** `feat/render` (C 리드 계약 `d689628` 병합 기반)
 
 ## 빌드·툴
 
@@ -407,7 +510,10 @@ B 선행개발          = 가능 (선행개발 상태로만)
 - **차단 문제(A 통과 불가 — 툴링 소유 밖):** ① **§8 문서 회귀 7건** — '전 심도 조준(구 심도 전용 규칙 폐기)/에서만'이 게임플레이 코드 2곳(`PeriscopeAimSystem.ts:9`, `verifyGameplay.ts:670`)과 상태 문서 5곳(CURRENT_STATUS 게임플레이 구역, PROJECT_STATE ×2, NEXT_SPRINT, D10_INTEGRATION_CHECKLIST)에 잔존. 7차 결의 1-⑦ 미이행 → 해당 창이 제거해야 A 통과 ② **A8 소비 측 배선 5건** — params 측 이관은 끝났고(미확정 0) 남은 것은 production의 provisional import다: `src/core/Game.ts:26`·`src/meta/provisionalEconomy.ts`(리드), `src/systems/CargoShipSystem.ts:37`·`EquipmentSystem.ts:34`·`economy/EconomySystem.ts:27`·`economy/UpgradePurchaseSystem.ts:30`(게임플레이). **툴링 창에서 수정 불가** — `loadEconomyParams()` 소비로 교체하면 되고 값이 동일해 동작 변화가 없다(손실률 0.4→0.5만 D5 승인 반영). `verify:sprint-a`의 `A8-migration-consumers`가 잔여 목록을 계속 출력한다 ③ **기준값 없는 업그레이드 4항목** — `hullIntegrity`·`maxDepth`·`sonarRange`는 base params도 소비 코드도 없고, `torpedoDamage`는 소비 후보(`EquipmentSystem.setUpgradeModifiers`)가 production 조립에 미배선. **기준값을 추정해 입력하지 않았다** — 승인된 배율만 정의하고 `paramRef`는 비워 둠. 상세: INTEGRATION_NOTES INT-TOOL-008
 - **완료(스프린트 B 선행개발 — 15차 결의 2 창 4 범위):** ⚠ **B 미발효 상태의 선행개발**이다(15차 결의 1: B 발효 조건 = A 통합 PR 병합). 리드 B 계약 `1378834`(A_STACK `8f40117` 포함) 병합, 충돌 0건. ① **`economy.json` B 확장** — `factionRewards`(세력 3종 보상 **정책**만. 세력→드롭 테이블 매핑 정본은 계약 `FACTION_RULES`라 복제하지 않고 검증기가 **기계적으로 대조**한다), `highValueTransport`·`guardSpawn`(스키마만, 수치 전부 null). **A 경제 수치 무변경** ② **null과 0의 구조적 구분** — `none`=확정 무보상(0을 명시적으로 실음) / `pending`=공식 결정 없음(수치 필드를 가질 수 없음). pending에 0을 적으면 로드 거부 — 미정이 무보상 확정으로 위장되는 것을 막는다 ③ **검증기 거부 규칙 11종** — 미존재 테이블·음수 보상·계약 불일치(양방향)·계약 밖 세력 키·배율 1 이하(12차 B6 종료 조건에서 파생된 구조 조건)·범위 밖·스폰 영역 공집합 등 ④ **B7 측정 인프라** `src/tools/b7/` — 스키마 검증(분류 정합성 + 개인정보 거부), 수집기(`IdentificationLogSink` 구현 — 세션 저장·복원·거부 보존·재심사 대체), 집계(제외 3종이 분모에서 빠짐), 판정(20%·5% 임계 + 표본 5명·50회 미달 시 `INSUFFICIENT_SAMPLE`), CSV·JSON export, 결정적 픽스처 4종 ⑤ **`npm run verify:sprint-b` 신설** — 상태 5종 분리(pass/fail/manual/**blocked**/pending). 자동 **17/17 통과** · 보류 5 · 차단 2 · 대기 4 ⑥ 문서 5종: `SPRINT_B_ACCEPTANCE`·`SPRINT_B_TEST_PLAN`·`B7_IDENTIFICATION_STUDY`·`SPRINT_B_B6_PROPOSAL`(DRAFT)·`ECONOMY_PARAMS_SCHEMA`
 - **차단 문제(B — 툴링 소유 밖):** ① **`B5_BLOCKED_NO_DESTROYER_IMPLEMENTATION`** — 저장소에 `DestroyerAI` 계약은 있으나 production 구현체가 없다(`implements DestroyerAI` 정적 스캔 0건; `verifyMeta.ts`의 것은 테스트 대역). B5 조건이 '기존 구축함 AI 재사용'이므로 원본 없이는 성립 불가. **빈 어댑터를 통과로 만들지 않았다.** 계약 `guard.ts`대로 구축함 AI가 C 항목이면 B1~B5 통과가 C 착수 방아쇠인데 B5가 C 산출물을 기다리는 **순서 문제**가 생긴다 — 리드 판단 필요 ② **B1·B2·B4 게임플레이·그래픽스 미병합** — 중립 선박 정의 0건(production은 `hostile`만 2지점), `ShipIdentificationSource` 구현 0건, `neutralShipHit` 발행 0건. 리드의 수신 경계·스폰 배선은 이미 병합돼 발행만 시작하면 경로가 이어진다 ③ **경비함 스폰 수치 부재** — `guardSpawn` 5항목 전부 미확정. 회의록·저장소에 공식 수치가 없고 승계할 기존 수상함 스폰 규칙도 없어 **발명하지 않았다** ④ **B6 배율 미확정** — 12차 '배율은 튜닝표' 항목. 제안서에서 발견한 핵심: **배율보다 등장 빈도가 보스 준비 곡선의 지배 변수**이며, 매 출항 등장 시 어떤 배율이든 4~6회 목표를 깬다. 호위 이탈 거리는 근거 실측이 없어 제안 수치조차 내지 않았다. 상세: INTEGRATION_NOTES INT-TOOL-010
-- **마지막 업데이트:** 스프린트 B 선행개발 산출 (세력 보상 params·검증기·B7 로깅 인프라·`verify:sprint-b` 17/17). 리드 B 계약 `1378834` 병합 기준. A 회귀 `verify:sprint-a` 30/30 유지
+- **완료(스프린트 C — C9 params·검증, 인계표 '빌드·툴 창'):** 리드 인계 계약 `d689628` 병합(충돌 0건). ① **`params/combat.json` C9 4블록** — 선체 3(`baseMaxHull`·`damagedRatioThreshold`·`criticalRatioThreshold`) / 폭뢰 5(`directRadiusMeters`·`nearRadiusMeters`·`directDamage`·`nearDamage`·`dropCooldownSeconds`) / 침수 5(`minorThreshold`·`majorThreshold`·`catastrophicThreshold`·`hullDamagePerSecondAtFull`·`spreadPerSecond`) / 탐지 2(`distanceFalloff`·`gaugeDecayPerSecond`). 필드명은 계약(`survival.ts`·`detection.ts`) property와 1:1이며 새 이름을 만들지 않았다. **전 15항목 `value: null`** — 0·임시 숫자·provisional fallback 없음 ② **검증기·로더** `src/tools/combatParams.ts`·`combatParamsLoader.ts` — null 통과·키 누락 거부(생략과 null 구분), NaN·Infinity·문자열 숫자·boolean·음수 거부, 계약 밖 필드 거부, 경계 관계는 **양쪽 값이 다 있을 때만** 검사(`damaged>critical`·`minor<major<catastrophic`·`direct<near`·`full<zero`), 공식 문서에 없는 범위 미강제. hull·flooding은 전량 확정 시에만 주입하고 폭뢰는 계약이 필드별 null을 허용하므로 부분 확정을 전달 ③ **압력 차단** — `safeDepthY` 등 5종이 C9 블록에 들어오면 로드 거부(DECISIONS C-8) ④ **`npm run verify:sprint-c` 신설** — 자동 **20/20**, 보류 4 · 대기 1. 계약 존재·단일 피해 경로·정산 화이트리스트·composition·params·A/B 회귀를 관측하고 마지막에 상태 플래그와 blockers를 출력한다 ⑤ 테스트 픽스처(`__verification__/combatParamsFixture.ts`)를 production JSON과 분리하고, production import 0건을 러너가 검사
+- **C 상태(툴링 창 기준):** `C_CONTRACT_COMPLETE=true` · `C_TOOLING_READY=true` · `C_GAMEPLAY_COMPOSITION_PRESENT=false` · `C_GRAPHICS_COMPOSITION_PRESENT=false` · `C_COMBAT_PARAMS_DEFINED=false` · `C_RUNTIME_WIRED=false` · `C_BROWSER_EMPIRICAL_COMPLETE=false` · **`C_FINAL_COMPLETE=false`**. runtime 미배선 상태를 C 완료로 판정하지 않는다 — `C_FINAL_COMPLETE`는 배선과 브라우저 실측이 둘 다 참일 때만 true가 된다
+- **차단 문제(C — 툴링 소유 밖):** ① **C9 공식 수치 15/15 미확정** — 기획 수치표 대기. 임의 값을 채우지 않았고 검증기가 미확정 목록을 매 실행 출력한다 ② **게임플레이 미병합** — `attachPlayerAliveSource` 실제 호출 0건(조립부 경계는 준비됨) ③ **그래픽스 미병합** — `SurvivalReadModel`·`DebriefReadModel` 렌더 소비 0건 ④ **브라우저 생존 루프 실측 0회** — params 미확정 + HUD·DEBRIEF 미병합으로 시나리오 자체가 성립하지 않음. ①~④는 전부 `manual`/`pending`으로 분류돼 종료 코드에 반영되지 않는다(툴링 실패와 구분)
+- **마지막 업데이트:** 스프린트 C C9 combat params 스키마·로더·`verify:sprint-c` 신설 (자동 20/20, 전 필드 미확정 유지). 리드 인계 계약 `d689628` 병합 기준. A·B 회귀 유지 (`verify:sprint-a` 30/30 · `verify:sprint-b` 23/23)
 - **담당 브랜치:** `claude/deep-dive-tooling-phase-0-cj6c49` (`feat/tooling`의 세션 사본)
 
 ## 기획

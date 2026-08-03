@@ -28,5 +28,103 @@
     "range": [4, 15],
     "unit": "meters",
     "note": "근접 폭발 밀려남 거리. '억울한 지형 충돌사' 2인+ → 감소"
+  },
+  "$c9Comment": "아래 4블록은 C9 [COMBAT] 이관 대상이다. 필드명은 계약(src/contracts/survival.ts·detection.ts)의 property 이름과 1:1이며 여기서 새 이름을 만들지 않는다. **C9 초기 공식 밸런스 v0.1 승인 완료(15필드 확정)** — 승인 전 상태에서는 value: null = 공식 수치 미확정(unwired)이었으며, 0·임시 숫자·provisional fallback을 넣지 않는다. null과 '키 누락'은 다르다: 키가 없으면 검증기가 거부하고, value가 null이면 통과시키되 미확정으로 보고한다. 압력(DepthPressureParams — safeDepthY 등)은 C 핵심 범위 제외(DECISIONS C-8)라 여기에 넣지 않는다. 검증: src/tools/combatParams.ts.",
+  "hull": {
+    "$contract": "src/contracts/survival.ts HullBaseParams",
+    "baseMaxHull": {
+      "value": 120,
+      "unit": "hull",
+      "note": "업그레이드 적용 전 최대 내구도. hullIntegrity 배율(승인 완료)이 곱해지는 기준값 — C9 v0.1 승인"
+    },
+    "damagedRatioThreshold": {
+      "value": 0.7,
+      "unit": "ratio",
+      "note": "survivalState 'damaged' 경계 (0~1). damaged > critical 이어야 함 — C9 v0.1 승인"
+    },
+    "criticalRatioThreshold": {
+      "value": 0.3,
+      "unit": "ratio",
+      "note": "survivalState 'critical' 경계 (0~1) — C9 v0.1 승인"
+    }
+  },
+  "depthCharge": {
+    "$contract": "src/contracts/survival.ts DepthChargeDamageParams",
+    "directRadiusMeters": {
+      "value": 4,
+      "unit": "meters",
+      "note": "직격 판정 반경. near 반경보다 작아야 함 — C9 v0.1 승인"
+    },
+    "nearRadiusMeters": {
+      "value": 18,
+      "unit": "meters",
+      "note": "근접 판정 반경 — C9 v0.1 승인"
+    },
+    "directDamage": {
+      "value": 45,
+      "unit": "hull",
+      "note": "직격 피해량 — C9 v0.1 승인. (null이었다면 폭발해도 피해는 unwired)"
+    },
+    "nearDamage": {
+      "value": 12,
+      "unit": "hull",
+      "note": "근접 피해량 — C9 v0.1 승인"
+    },
+    "dropCooldownSeconds": {
+      "value": 6,
+      "unit": "seconds",
+      "note": "투하 쿨다운 — C9 v0.1 승인. 신관 하한 3.0초는 별도 확정값(depthChargeFuseSeconds)"
+    },
+    "directFloodingContribution": {
+      "value": 0.35,
+      "unit": "ratio",
+      "note": "직격 1회의 침수 기여량 (정규화 flooding level) — C9 v0.1.1 승인. 범위 0 < near < direct ≤ 1"
+    },
+    "nearFloodingContribution": {
+      "value": 0.1,
+      "unit": "ratio",
+      "note": "근접 1회의 침수 기여량 (정규화 flooding level) — C9 v0.1.1 승인. miss는 기여 0"
+    }
+  },
+  "flooding": {
+    "$contract": "src/contracts/survival.ts FloodingParams",
+    "minorThreshold": {
+      "value": 0.15,
+      "unit": "ratio",
+      "note": "침수 minor 단계 경계 (0~1). minor < major < catastrophic — C9 v0.1 승인"
+    },
+    "majorThreshold": {
+      "value": 0.45,
+      "unit": "ratio",
+      "note": "침수 major 단계 경계 (0~1) — C9 v0.1 승인"
+    },
+    "catastrophicThreshold": {
+      "value": 0.8,
+      "unit": "ratio",
+      "note": "침수 catastrophic 단계 경계 (0~1) — C9 v0.1 승인"
+    },
+    "hullDamagePerSecondAtFull": {
+      "value": 2.4,
+      "unit": "hull/second",
+      "note": "침수 1.0당 초당 선체 피해율 — C9 v0.1 승인"
+    },
+    "spreadPerSecond": {
+      "value": 0.02,
+      "unit": "level/second",
+      "note": "침수 자연 확산율(초당) — C9 v0.1 승인"
+    }
+  },
+  "detection": {
+    "$contract": "src/contracts/detection.ts DetectionTuningParams",
+    "distanceFalloff": {
+      "value": { "fullEffectMeters": 60, "zeroEffectMeters": 240 },
+      "unit": "meters",
+      "note": "거리 감쇠 곡선 — 확정 시 { fullEffectMeters, zeroEffectMeters } 객체. full < zero 이어야 함. 미확정 시 탐지 시스템은 unwired(게이지 0 고정)"
+    },
+    "gaugeDecayPerSecond": {
+      "value": 0.125,
+      "unit": "gauge/second",
+      "note": "탐지권 이탈 시 게이지 감소율(초당) — C9 v0.1 승인"
+    }
   }
 }
