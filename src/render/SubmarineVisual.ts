@@ -19,6 +19,7 @@
 import * as THREE from 'three';
 import { TORPEDO_TUBE_ANCHOR } from '../world/torpedoTubeAnchor';
 import { buildDotTexture } from './DriftParticles';
+import { onSceneTexture } from './sceneTextures';
 import visualParams from './renderVisualParams.json';
 
 /**
@@ -126,6 +127,15 @@ export class SubmarineVisual {
       applyFresnelRim(material);
       applyFresnelRim(accentMaterial);
     }
+    // 공통 금속 base color (선박·기지와 공유 텍스처 1장 — GPU 업로드 1회).
+    // 기능별 슬롯(선체/액센트)은 material 인스턴스 그대로 유지되고 map만
+    // 공유한다 — 색·림·emissive 계약 불변, 로딩 실패 시 단색 유지.
+    onSceneTexture('metal', (texture) => {
+      material.map = texture;
+      material.needsUpdate = true;
+      accentMaterial.map = texture;
+      accentMaterial.needsUpdate = true;
+    });
     this.disposables.push(material, accentMaterial);
 
     // ── 기본형(1단계) — 캡슐 선체 + 함교 (선수 쪽) ──

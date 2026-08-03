@@ -62,8 +62,16 @@
   분포·카메라 상자 되감기(생성·소멸 0)·코드 생성 도트 텍스처. 수중 전용
   (수면 위 숨김), 판정 무관 순수 연출
 - `renderQuality.ts` — 저사양 fallback 사다리(`?quality=low`): 부유물 개수
-  축소·림라이트 off·항법등 글로우 off. 값은 `renderVisualParams.json`
-  `artDirection.lowSpec` 소유 — 안개·재질 기본색·HUD는 품질 무관 동일
+  축소·림라이트 off·항법등 글로우 off·텍스처 512 상한. 값은
+  `renderVisualParams.json` `artDirection.lowSpec` 소유 — 안개·재질
+  기본색·HUD는 품질 무관 동일
+- `sceneTextures.ts` — base color 텍스처 공유 로더(`public/textures/` WebP):
+  암벽(협곡 벽)·퇴적물(해저)·산업 금속(잠수함·선박·기지 공통) 3종 —
+  종류당 GPU 업로드 1회, 소비 재질은 map만 지연 장착(드로우 콜 증가 0),
+  로딩 실패 시 기존 단색 유지. 에셋은 오프라인 중립화 albedo(평균 224)라
+  최종 색은 material.color(아트 팔레트)가 결정한다. UV 규약: 협곡 벽/바닥은
+  **월드 미터 UV**(`scaleBoxUvsToWorldMeters`) + repeat=1/tileMeters, 금속은
+  0..1 UV × repeat. KTX2/Basis·normal/roughness 미도입(§12·로우폴리 문법)
 - 아트 디렉션(`renderVisualParams.json artDirection`): 연속 심도 안개
   (수면↔해저 보간 — 전경·중경·후경 명도 분리), HemisphereLight 보조 환경광
   (조명 예산 2등 불변 — AmbientLight 재도입 금지), 벽/바닥/선체 팔레트+미세

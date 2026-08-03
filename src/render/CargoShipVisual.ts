@@ -21,6 +21,7 @@ import type { FactionId } from '../contracts/meta';
 import type { CargoShipStateSource } from '../contracts/systems';
 import { meshYawRadians } from '../core/conventions';
 import { factionVisualVariant, type FactionVisualVariant } from './factionVisuals';
+import { onSceneTexture } from './sceneTextures';
 import visualParams from './renderVisualParams.json';
 
 const PARAMS = visualParams.cargoShip;
@@ -64,6 +65,15 @@ export class CargoShipVisual {
     const upperMaterial = new THREE.MeshLambertMaterial({
       color: 0x5f6e76,
       flatShading: true,
+    });
+    // 공통 금속 base color — 잠수함·기지와 동일 텍스처 1장 공유.
+    // 세력 색(hullMaterial.color)·마크·항해등 슬롯은 그대로 유지된다.
+    onSceneTexture('metal', (texture) => {
+      if (this.disposed) return;
+      hullMaterial.map = texture;
+      hullMaterial.needsUpdate = true;
+      upperMaterial.map = texture;
+      upperMaterial.needsUpdate = true;
     });
 
     // 선체 — 그룹 원점이 흘수선(계약 positionY)에 오도록 배치

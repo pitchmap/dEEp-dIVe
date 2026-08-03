@@ -96,10 +96,34 @@
       "riseMetersPerSecond": 0.35,
       "swayMetersPerSecond": 0.12
     },
+    "textures": {
+      "$comment": "base color 텍스처 (public/textures — 오프라인 중립화·edge 블렌드 완료 albedo). 최종 색 = 텍스처 × material.color(아트 팔레트). wall/floor는 UV가 월드 미터라 tileMeters가 반복 주기(미터/타일), metal은 0..1 UV × repeat. sizeStandard는 표준 품질 해상도(저사양은 512)",
+      "basePath": "textures/",
+      "anisotropy": 4,
+      "wall": {
+        "file": "canyon_wall",
+        "sizeStandard": 1024,
+        "tileMetersU": 14,
+        "tileMetersV": 14
+      },
+      "floor": {
+        "file": "seafloor_sediment",
+        "sizeStandard": 1024,
+        "tileMetersU": 18,
+        "tileMetersV": 18
+      },
+      "metal": {
+        "file": "hull_metal",
+        "sizeStandard": 512,
+        "repeatU": 1,
+        "repeatV": 1
+      }
+    },
     "lowSpec": {
       "driftCount": 40,
       "rimEnabled": false,
-      "navGlowEnabled": false
+      "navGlowEnabled": false,
+      "textureSize": 512
     }
   }
 }

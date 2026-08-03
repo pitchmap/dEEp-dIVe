@@ -64,6 +64,11 @@ import type { SalvageStateSource } from './SalvageVisuals';
 import { SalvageVisuals } from './SalvageVisuals';
 import { DriftParticles } from './DriftParticles';
 import { parseRenderQuality, type RenderQuality } from './renderQuality';
+import {
+  initSceneTextures,
+  onSceneTexture,
+  scaleBoxUvsToWorldMeters,
+} from './sceneTextures';
 import { SubmarineVisual } from './SubmarineVisual';
 import type { TorpedoStateSource } from './TorpedoVisuals';
 import { TorpedoVisuals } from './TorpedoVisuals';
@@ -248,8 +253,10 @@ export class CanyonScene implements ManagedScene {
 
     this.quality = parseRenderQuality(window.location.search);
     if (this.quality.low) {
-      console.info('[CanyonScene] 저사양 모드 (?quality=low) — 부유물 축소·림라이트·항법등 글로우 비활성.');
+      console.info('[CanyonScene] 저사양 모드 (?quality=low) — 부유물 축소·림라이트·항법등 글로우 비활성·텍스처 512.');
     }
+    // base color 텍스처 로딩 시작 (멱등) — 실패 시 아래 단색 재질이 그대로 유지된다
+    initSceneTextures(this.renderer.webgl.capabilities.getMaxAnisotropy());
     this.submarine = new SubmarineVisual({
       rimEnabled: this.quality.rimEnabled,
       navGlowEnabled: this.quality.navGlowEnabled,
@@ -900,6 +907,8 @@ export class CanyonScene implements ManagedScene {
    */
   private buildCanyonFromLayout(): void {
     const floorGeometry = new THREE.BoxGeometry(240, 1, 240);
+    // UV = 월드 미터 (텍스처 repeat = 1/tileMeters — sceneTextures 규약)
+    scaleBoxUvsToWorldMeters(floorGeometry, 240, 1, 240);
     // 회색 박스 팔레트 → 아트 디렉션 팔레트 (renderVisualParams.json 소유).
     // 미세한 emissive는 안개 속 최원경이 완전 검정으로 뭉개지는 것을 막는다.
     const floorMaterial = new THREE.MeshLambertMaterial({
@@ -912,22 +921,36 @@ export class CanyonScene implements ManagedScene {
     floor.position.y = this.layout.floorY - 0.5;
     this.scene.add(floor);
 
-    const unitBox = new THREE.BoxGeometry(1, 1, 1);
     const wallMaterial = new THREE.MeshLambertMaterial({
       color: ART.materials.wallColor,
       emissive: ART.materials.wallEmissive,
       flatShading: true,
     });
-    this.disposables.push(unitBox, wallMaterial);
+    this.disposables.push(wallMaterial);
 
     for (const block of this.layout.blocks) {
-      const mesh = new THREE.Mesh(unitBox, wallMaterial);
-      mesh.scale.set(block.sizeX, block.sizeY, block.sizeZ);
+      // 블록별 지오메트리(24정점) — 공유 단위 박스 + scale 대신 실치수 박스에
+      // 월드 미터 UV를 부여해 블록 크기와 무관하게 텍셀 밀도를 균일화한다.
+      // **배치·회전·충돌 데이터는 계약 blocks 그대로다** (시각 mesh만 변경).
+      const blockGeometry = new THREE.BoxGeometry(block.sizeX, block.sizeY, block.sizeZ);
+      scaleBoxUvsToWorldMeters(blockGeometry, block.sizeX, block.sizeY, block.sizeZ);
+      this.disposables.push(blockGeometry);
+      const mesh = new THREE.Mesh(blockGeometry, wallMaterial);
       // 계약 규약: 블록 바닥이 floorY — 중심 Y = floorY + sizeY/2
       mesh.position.set(block.x, this.layout.floorY + block.sizeY / 2, block.z);
       mesh.rotation.y = block.rotationY;
       this.scene.add(mesh);
     }
+
+    // 텍스처 도착 시 map 장착 — 실패하면 위 단색이 그대로 남는다 (fallback)
+    onSceneTexture('wall', (texture) => {
+      wallMaterial.map = texture;
+      wallMaterial.needsUpdate = true;
+    });
+    onSceneTexture('floor', (texture) => {
+      floorMaterial.map = texture;
+      floorMaterial.needsUpdate = true;
+    });
   }
 
   /**

@@ -22,6 +22,8 @@ export interface RenderQuality {
   readonly rimEnabled: boolean;
   /** 항법등(주황 식별 글로우) 사용 여부 */
   readonly navGlowEnabled: boolean;
+  /** base color 텍스처 해상도 상한 (null = 텍스처별 표준 크기 사용) */
+  readonly textureSizeCap: number | null;
 }
 
 /** URL 쿼리에서 품질 단계 해석 — 기본은 표준(전체 연출) */
@@ -33,6 +35,7 @@ export function parseRenderQuality(search: string): RenderQuality {
       driftCount: ART.lowSpec.driftCount,
       rimEnabled: ART.lowSpec.rimEnabled,
       navGlowEnabled: ART.lowSpec.navGlowEnabled,
+      textureSizeCap: ART.lowSpec.textureSize,
     };
   }
   return {
@@ -40,5 +43,6 @@ export function parseRenderQuality(search: string): RenderQuality {
     driftCount: ART.drift.count,
     rimEnabled: true,
     navGlowEnabled: true,
+    textureSizeCap: null,
   };
 }
