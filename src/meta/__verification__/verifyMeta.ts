@@ -5,6 +5,7 @@
  * 실제 EventBus·MetaLoop·순수 함수를 그대로 사용한다 — 난수·시간 의존 없음.
  */
 
+import { validateCombatParams } from '../../tools/combatParams';
 import { EventBus } from '../../core/EventBus';
 import type { SystemContext } from '../../core/GameSystem';
 import type { GameStateMachine } from '../../core/GameStateMachine';
@@ -2118,6 +2119,93 @@ export function runMetaVerification(): VerificationResult[] {
           `tracked=${JSON.stringify(tracked)}`,
         );
       }
+    }
+    {
+      // ── INT-CORE-017: combat params 정규화 (중첩 로더 → 평면 gameplay 입력) ──
+      const wrap = (value: number | null): { value: number | null } => ({ value });
+      const nested = {
+        hull: {
+          baseMaxHull: wrap(100),
+          damagedRatioThreshold: wrap(0.6),
+          criticalRatioThreshold: wrap(0.25),
+        },
+        depthCharge: {
+          directRadiusMeters: wrap(3),
+          nearRadiusMeters: wrap(9),
+          directDamage: wrap(40),
+          nearDamage: wrap(15),
+          dropCooldownSeconds: wrap(6),
+        },
+        flooding: {
+          minorThreshold: wrap(0.2),
+          majorThreshold: wrap(0.5),
+          catastrophicThreshold: wrap(0.8),
+          hullDamagePerSecondAtFull: wrap(4),
+          spreadPerSecond: wrap(0.02),
+        },
+        detection: {
+          distanceFalloff: { value: { fullEffectMeters: 30, zeroEffectMeters: 120 } },
+          gaugeDecayPerSecond: wrap(0.08),
+        },
+      };
+      const result = validateCombatParams(nested);
+      // 필드 교환·단위 변환 오류 검사 — 서로 다른 값이 정확한 자리에 도착한다
+      check(
+        'C9 정규화: 중첩 로더 결과가 정확한 평면 계약 블록으로 변환 (필드 교환 0)',
+        result.hull?.baseMaxHull === 100 &&
+          result.hull.damagedRatioThreshold === 0.6 &&
+          result.hull.criticalRatioThreshold === 0.25 &&
+          result.depthCharge?.directRadiusMeters === 3 &&
+          result.depthCharge.nearRadiusMeters === 9 &&
+          result.depthCharge.directDamage === 40 &&
+          result.depthCharge.nearDamage === 15 &&
+          result.depthCharge.dropCooldownSeconds === 6 &&
+          result.flooding?.spreadPerSecond === 0.02 &&
+          result.flooding.hullDamagePerSecondAtFull === 4 &&
+          result.detectionTuning?.distanceFalloff?.fullEffectMeters === 30 &&
+          result.detectionTuning.distanceFalloff.zeroEffectMeters === 120 &&
+          result.detectionTuning.gaugeDecayPerSecond === 0.08 &&
+          result.pendingFields.length === 0,
+        JSON.stringify(result.pendingFields),
+      );
+      // null 보존 + 미확정 목록
+      const partial = validateCombatParams({
+        ...nested,
+        hull: {
+          baseMaxHull: wrap(null),
+          damagedRatioThreshold: wrap(0.6),
+          criticalRatioThreshold: wrap(0.25),
+        },
+      });
+      check(
+        'C9 정규화: null은 null로 보존 — 부분 확정 시 hull 블록 미주입(unwired)·pending 보고',
+        partial.hull === null && partial.pendingFields.includes('hull.baseMaxHull'),
+        `hull=${partial.hull === null ? 'null' : 'set'}, pending=${partial.pendingFields.join(',')}`,
+      );
+      // NaN·음수 거부 — 필드명 포함 명시적 실패
+      let nanMessage = '';
+      try {
+        validateCombatParams({
+          ...nested,
+          depthCharge: { ...nested.depthCharge, directDamage: wrap(Number.NaN) },
+        });
+      } catch (error) {
+        nanMessage = error instanceof Error ? error.message : '';
+      }
+      let negativeMessage = '';
+      try {
+        validateCombatParams({
+          ...nested,
+          flooding: { ...nested.flooding, spreadPerSecond: wrap(-1) },
+        });
+      } catch (error) {
+        negativeMessage = error instanceof Error ? error.message : '';
+      }
+      check(
+        'C9 정규화: NaN·음수 = 필드명 포함 명시적 검증 실패 (조용한 보정 없음)',
+        nanMessage.includes('directDamage') && negativeMessage.includes('spreadPerSecond'),
+        `nan=${nanMessage.slice(0, 60)} / neg=${negativeMessage.slice(0, 60)}`,
+      );
     }
     {
       // 해역 밖 파괴 보고는 무시 (기지에서 정산 금지)
