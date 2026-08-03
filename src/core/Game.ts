@@ -19,7 +19,11 @@ import { PurchaseTransaction } from '../meta/PurchaseTransaction';
 import { EquipmentTransaction } from '../meta/EquipmentTransaction';
 import { PerformanceOverlay } from '../ui/PerformanceOverlay';
 import { ControlsHud } from '../ui/ControlsHud';
+import { DetectionHud } from '../ui/DetectionHud';
 import { EconomyHud } from '../ui/EconomyHud';
+import { SortieFailureScreen } from '../ui/SortieFailureScreen';
+import { SortieReturnScreen } from '../ui/SortieReturnScreen';
+import { SurvivalHud } from '../ui/SurvivalHud';
 import { SortiePrepScreen } from '../ui/SortiePrepScreen';
 import { GateMetricRecorder } from '../tools/GateMetricRecorder';
 import { LoadingTimer } from '../tools/LoadingTimer';
@@ -677,6 +681,71 @@ export class Game {
     prepScreen.attachSlotPositions(gameplay.equipment);
     this.registry.register(new MetaUiAdapter([economyHud, prepScreen]));
 
+    // ②-e 스프린트 C HUD·정산 화면 마운트 (그래픽스 소유 — INT-RENDER-012).
+    //     전부 리드 read model 소비 전용이다: DetectionHudView·
+    //     TrackingStateSource(게임플레이 도착 시 attach 2줄)·
+    //     SurvivalReadModel(playerHull)·DebriefReadModel(debriefState).
+    const detectionHud = new DetectionHud(this.container);
+    //     [배선 대기 — 게임플레이 DetectionSystem·TrackingStateSource]
+    //     도착 시: detectionHud.attachDetectionSource(gameplay.detection);
+    //             detectionHud.attachTrackingSource(gameplay.trackingState);
+    //     그 전까지 HUD는 '탐지 계기 미연결'을 표시한다 (위장 없음).
+    const survivalHud = new SurvivalHud(this.container);
+    survivalHud.attachSource(playerHull, () => playerHull.consumeDamageFlash());
+    const rendererCamera = this.renderer?.camera ?? null;
+    survivalHud.attachViewContext({
+      get headingRadians() {
+        return gameplay.poseSource.headingRadians;
+      },
+      get cameraForwardX() {
+        // 카메라 월드 -Z축 (matrixWorld 3열) — three 스크래치 객체 불필요
+        return -(rendererCamera?.matrixWorld.elements[8] ?? 0);
+      },
+      get cameraForwardZ() {
+        return -(rendererCamera?.matrixWorld.elements[10] ?? 1);
+      },
+    });
+
+    //     실패·귀환 화면 — 데이터 소스와 컴포넌트가 모두 분리돼 있다 (C7).
+    //     재시도 command = 리드 retrySave 래퍼 (재정산 없음 — 저장만).
+    //     확인 command = **리드 guarded command**(INT-CORE-016 §DEBRIEF 개정).
+    //     `metaLoop.completeDebrief()` 직접 호출은 저장 미완료 가드를 우회하므로
+    //     사용하지 않는다 — 저장 성공 전 confirm은 `saveIncomplete`로 거부되고,
+    //     중복 confirm은 BASE 전환을 반복하지 않는다. 정상 귀환·실패 동일 정책.
+    const debriefConfirm = this.debriefConfirm;
+    const confirmDebrief = (): void => {
+      debriefConfirm?.confirm();
+    };
+    const failureScreen = new SortieFailureScreen(this.container);
+    failureScreen.attach(debriefState, () => {
+      sortieFailure.retrySave(() => {
+        saveBridge.writeSnapshot();
+        return saveBridge.lastSaveSucceeded;
+      });
+    });
+    const returnScreen = new SortieReturnScreen(this.container);
+    returnScreen.attach(debriefState, metaLoop, confirmDebrief);
+
+    this.registry.register({
+      id: 'sprintCHud',
+      initialize: () => {},
+      update: (deltaSeconds: number) => {
+        const inSortie = metaLoop.metaState === 'SORTIE';
+        detectionHud.setVisible(inSortie);
+        survivalHud.setVisible(inSortie);
+        detectionHud.update();
+        survivalHud.update(deltaSeconds);
+        failureScreen.update();
+        returnScreen.update();
+      },
+      dispose: () => {
+        detectionHud.dispose();
+        survivalHud.dispose();
+        failureScreen.dispose();
+        returnScreen.dispose();
+      },
+    });
+
     // ④ 표현 연동 — 렌더 소유 카메라 입력(회전·리센터). 이동키와 중복 없음.
     this.registry.register(new CameraInputAdapter(scene.cameraRig));
 
@@ -727,10 +796,10 @@ export class Game {
     this.registerUnsubscribe(
       this.bus.on('metaStateChanged', ({ next }) => {
         scene.setMetaBaseActive(next === 'BASE', this.upgrades?.visualTiers);
-        if (next === 'DEBRIEF') {
-          // 정산 확정 직후 기지 복귀 (별도 결과 화면 없음 — PvE 1차 통합)
-          this.metaLoop?.completeDebrief();
-        }
+        // DEBRIEF 자동 완료는 제거됐다 — 정산 결과 화면이 도입되어
+        // 귀환 화면의 '확인'(completeDebrief command)과 실패 화면의 저장
+        // 성공 전환(SortieFailureCoordinator)이 기지 복귀를 소유한다
+        // (리드 주석의 예정된 대체 — INT-RENDER-012).
       }),
     );
 

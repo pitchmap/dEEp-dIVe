@@ -130,6 +130,57 @@
 **수치 출처 (임의 전투 수치 0):** 탐지 확정 3종 = `params/detection.json` / 신관 = `combat.json depthChargeFuseSeconds`(하한 3.0 고정) / 동시 폭뢰 = `simultaneousDepthCharges` / 공격 사거리 = 폭뢰 `nearRadiusMeters`(피해 가능 거리 밖 투하 금지라는 구조 규칙, 새 수치 아님). **미확정 전량 null 유지**: 거리 감쇠·게이지 감소율·direct/near 반경·피해·투하 쿨다운·선체 기준값. 검증 픽스처(`DETECTION_TUNING_FIXTURE`·`DEPTH_CHARGE_FIXTURE`)는 검증 파일 안에만 있고 production import 0건
 
 **남은 blocker:** ① 위 4줄 배선 ② `params/combat.json` C9 필드(툴링) — 도착 전까지 탐지·폭뢰 피해는 unwired ③ **AI가 공격 요청을 만들지 않는다** — 리드 `DestroyerAIController`는 이동만 하고 `EnemyAttackRequest`를 생성하지 않는다. `attack` 상태에서 요청을 만들어 `EnemyAttackPort`로 넘기는 지점이 리드 소유 파일에 필요하다(게임플레이는 포트를 제공했다)
+### INT-RENDER-012 — [DETECT][SURVIVAL][LOOP] 스프린트 C 그래픽스: 탐지·생존 HUD·피격 피드백·실패/귀환 화면 분리
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스 (SPRINT_C_HANDOFF 그래픽스 창 — 리드 `d689628` 병합) |
+| 대상 시스템 | `src/ui/DetectionHud.ts`·`SurvivalHud.ts`·`SortieFailureScreen.ts`·`SortieReturnScreen.ts`·`sprintCUiFixture.ts`(신규), `src/render/CanyonScene.ts`(X-ray 침수 구동), `src/core/Game.ts`(마운트·command 배선 — 조립부) |
+| 관련 게이트 | C1(HUD)·C3(추적 표시)·C5(생존·X-ray)·C6·C7(화면 분리)·저장 실패 재시도 |
+| 하위 호환 여부 | 계약 무수정. 동작 변경 1건: **DEBRIEF 자동 completeDebrief 제거** — 귀환 화면 '확인' command와 실패 코디네이터의 저장 성공 전환이 기지 복귀를 소유(리드 주석의 예정된 대체) |
+| 개발 리드 결정 | **확인 대기** |
+| 적용 커밋 | (이 브랜치 스프린트 C 그래픽스 커밋) |
+
+**소비 read model (4종 — 그 외 게임플레이 내부 접근 0건).**
+`DetectionHudView`(게이지·stage·unwired 그대로 — 보정·재계산 없음),
+`TrackingStateSource`(patrol/alert/attack/lost 그대로 — 새 상태명·집계값
+없음, attack 문구는 '공격 태세'·폭뢰 단정 없음), `SurvivalReadModel`
+(hullRatio null=미연결 표기·warningIds 키 매핑·damageFlash는
+consumeDamageFlash로만 소비·lastHitDirection 표시 삼각법만),
+`DebriefReadModel`(kind가 화면 선택의 유일 근거 — isDestroyed 추측 금지).
+
+**C6·C7 화면 분리.** `SortieFailureScreen`(kind destroyed·failure 스냅샷·
+저장 실패 시 '기지 이동 불가' + 재시도 버튼, canRetrySave=false면 미노출)과
+`SortieReturnScreen`(kind returned/aborted·settlement — 실패 문구·버튼 0)이
+**파일·데이터 경로 모두 분리**. 재시도 = 조립부 command(리드
+`SortieFailureCoordinator.retrySave` 래퍼 — 재정산 없음), 확인 =
+`completeDebrief` command. UI가 정산·저장을 직접 수행하지 않는다.
+
+**X-ray 침수 구동 (C5).** CanyonScene이 `floodingChanged` severity만 매핑해
+XrayFloodingSpike를 잠수함에 지연 장착(자체 타이머 없음, severity 0이면
+투명 복귀). 자기 선체 레이어를 따라 조준 카메라에서는 함께 제외된다.
+
+**시각 언어 분리 (작업 6).** faction 태그 ◇▲■◆ / 탐지 ─◔◉(눈 3단계) /
+추적 ○◍●◌ / 생존 ⛨≋⚠ — 기호 체계가 겹치지 않아 색각 이상에서도 구분된다.
+탐지·선체 unwired는 빗금 + '계기 미연결' 명시(정상 위장 없음).
+
+**조립부 변경 (Game.ts).** C HUD·화면 마운트(registry `sprintCHud`),
+SurvivalHud에 playerHull + consumeDamageFlash + 카메라 전방 컨텍스트 주입,
+DEBRIEF 자동 완료 제거. **게임플레이 DetectionSystem·TrackingStateSource
+도착 시 attach 2줄**(Game.ts 주석에 위치 표기): `detectionHud.
+attachDetectionSource(...)` / `attachTrackingSource(...)` — 그 전까지
+production HUD는 '탐지 계기 미연결'을 표시한다.
+
+**검증 구분.**
+- production 실측: 탐지·선체 unwired 표시(위장 없음), **정상 귀환 전체 루프**
+  (출항→귀환→DEBRIEF 유지→귀환 화면 실정산(+0)→확인→BASE→재출항·salvage
+  재생성), 실패/귀환 화면 동시 표시 없음, snapshot 변조 시도 후 코어값 유지,
+  A·B 회귀 없음(기지 UI·salvage 3·재화 HUD·verify:hud 34/34), 콘솔 오류 0.
+- fixture(`?cdemo=1` — production 아님): 탐지 3단계·게이지 60% 그대로·추적
+  4종 칩·피격 플래시 1회성·방향 지시자·경고 키 렌더·hullRatio null·실패
+  화면(저장 실패→재시도→확인 노출)·귀환 화면(실패 문구 0)·820×560 겹침 없음.
+- **production 미실측(사유)**: 피해·침수·파괴·실패 화면의 실데이터 구동 —
+  combat params null(C9 대기) + 게임플레이 DetectionSystem·폭뢰 미구현.
 
 ### INT-CORE-015 — 스프린트 C 선행 계약 마감: 탐지·추적(C1~C3)·폭뢰 경로(C4)·침수 단일 창구·DEBRIEF 모델
 
