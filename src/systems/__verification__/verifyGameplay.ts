@@ -34,6 +34,12 @@ import type {
   TransportAttackedPayload,
 } from '../../contracts/guard';
 import { rewardDropTableIdFor } from '../../contracts/faction';
+import type { DetectionStage } from '../../contracts/events';
+import type {
+  DamageRequest,
+  EnemyAttackRequest,
+  PlayerHullState,
+} from '../../contracts/survival';
 import type { FactionId } from '../../contracts/faction';
 import type { GameParams } from '../../contracts/params';
 import type { SystemContext } from '../../core/GameSystem';
@@ -1745,7 +1751,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     );
   }
 
-  // 35. [ECON] 손실 페널티 — 출항 크레딧 일부 손실, 희귀 부품·확정분 보존
+  // 35. [ECON] 병행 정산 경로 제거 — 정산 정본은 MetaLoop 하나 (C)
   {
     const targets = new TargetRegistry();
     const input = new ScriptedInput();
@@ -1754,33 +1760,33 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
 
     economy.wallet.addCredits(180);
     economy.wallet.acquireRarePart('rare-core');
-    const settlement = economy.settleDefeat();
-    const lossRatio = testEconomyParams?.creditLossOnDestroyedRatio ?? -1;
-    const expectedLost = Math.floor(180 * lossRatio);
+    // 게임플레이 계층에 정산 API가 존재하지 않는다 (표면 검사).
+    const economySurface = Object.getOwnPropertyNames(Object.getPrototypeOf(economy));
+    const walletSurface = Object.getOwnPropertyNames(Object.getPrototypeOf(economy.wallet));
     check(
-      '[ECON] 파괴 정산: 손실률 파라미터 적용 — 일반 크레딧 일부 손실',
-      settlement.outcome === 'defeat' &&
-        settlement.creditsEarned === 180 &&
-        settlement.creditsLost === expectedLost &&
-        settlement.creditsKept === 180 - expectedLost &&
-        economy.wallet.confirmedCredits === 180 - expectedLost &&
-        economy.wallet.sortieCredits === 0,
-      `lost=${settlement.creditsLost}/${settlement.creditsEarned} (률 ${lossRatio})`,
+      '[ECON] 병행 정산 API 제거 — settleDefeat·settleReturn·settleSortie 부재',
+      !economySurface.includes('settleDefeat') &&
+        !economySurface.includes('settleReturn') &&
+        !walletSurface.includes('settleSortie') &&
+        !economySurface.some((name) => /^settle/i.test(name)) &&
+        !walletSurface.some((name) => /^settle/i.test(name)),
+      `economy=${economySurface.filter((n) => /settle/i.test(n)).join(',') || '없음'}, wallet=${walletSurface.filter((n) => /settle/i.test(n)).join(',') || '없음'}`,
     );
     check(
-      '[ECON] 희귀 부품은 손실하지 않는다 (정산 데이터에 보존 명시)',
-      economy.wallet.rareParts.length === 1 && settlement.rarePartsHeld[0] === 'rare-core',
-      `parts=${settlement.rarePartsHeld.join(',')}`,
+      '[ECON] 게임플레이는 지갑 확정을 하지 않는다 — 회수분만 미정산 상태로 보관',
+      economy.wallet.sortieCredits === 180 &&
+        economy.wallet.confirmedCredits === 0 &&
+        economy.wallet.rareParts.length === 1,
+      `미정산=${economy.wallet.sortieCredits}, 확정=${economy.wallet.confirmedCredits}`,
     );
-
-    economy.wallet.addCredits(50);
-    const returned = economy.settleReturn();
+    // 재출항 초기화는 미정산분만 버린다 (확정분·희귀 부품은 영구분).
+    economy.resetForNewSortie();
     check(
-      '[ECON] 귀환 정산: 전액 확정 (손실 없음) — 저장용 정산 데이터 제공',
-      returned.creditsLost === 0 &&
-        returned.creditsKept === 50 &&
-        economy.wallet.confirmedCredits === 180 - expectedLost + 50,
-      `total=${economy.wallet.confirmedCredits}`,
+      '[ECON] 재출항 초기화 — 미정산분만 폐기, 희귀 부품 보존 (정산 아님)',
+      economy.wallet.sortieCredits === 0 &&
+        economy.wallet.confirmedCredits === 0 &&
+        economy.wallet.rareParts.length === 1,
+      `미정산=${economy.wallet.sortieCredits}, 희귀=${economy.wallet.rareParts.length}`,
     );
   }
 
@@ -2263,13 +2269,15 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     systems.economy.wallet.acquireRarePart('rare-core');
     const reflectsLoot =
       systems.sortiePendingCredits === 120 && systems.sortiePendingRareParts === 1;
-    const settlement = systems.economy.settleReturn();
-    const afterSettle =
+    // 정산은 MetaLoop 소유다 — 게임플레이는 미정산분을 보여 주기만 하며,
+    // 재출항 초기화에서 미정산분이 사라진다(확정은 정산 경로에서만).
+    systems.resetSortieSession(params);
+    const afterReset =
       systems.sortiePendingCredits === 0 && systems.sortiePendingRareParts === 1;
     check(
-      '[LOOP] pending 재화 getter — 실제 loot·정산 상태에서만 파생 (임시 숫자 없음)',
-      initialZero && reflectsLoot && afterSettle && settlement.creditsKept === 120,
-      `획득 120 → 정산 후 pending=${systems.sortiePendingCredits}, 희귀=${systems.sortiePendingRareParts}`,
+      '[LOOP] pending 재화 getter — 실제 loot 회수 상태에서만 파생 (임시 숫자 없음)',
+      initialZero && reflectsLoot && afterReset,
+      `획득 120 → 재출항 초기화 후 pending=${systems.sortiePendingCredits}, 희귀=${systems.sortiePendingRareParts}`,
     );
 
     const readyInBase = systems.sortieReadiness(true);
@@ -2845,12 +2853,10 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     const input = new ScriptedInput();
     const controller = new SubmarinePlayerController(params.movement, input);
     const economy = new EconomySystem(targets, controller, () => [], economyParams);
-    economy.wallet.addCredits(200);
-    const settlement = economy.settleDefeat();
     check(
-      '[ECON] 파괴 정산 손실률이 주입값에서 온다 (게임플레이 상수 0.4 잔재 없음)',
-      economy.creditLossOnDestroyedRatio === 0.5 && settlement.creditsLost === 100,
-      `lost=${settlement.creditsLost} (률 ${economy.creditLossOnDestroyedRatio})`,
+      '[ECON] 손실률은 주입값에서 온다 (게임플레이 상수 0.4 잔재 없음 — 적용은 MetaLoop)',
+      economy.creditLossOnDestroyedRatio === 0.5,
+      `률=${economy.creditLossOnDestroyedRatio}`,
     );
   }
 
@@ -3416,16 +3422,17 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       `경계 x[${bounds?.minX.toFixed(1)}, ${bounds?.maxX.toFixed(1)}] (블록만 [${blocksOnly?.minX.toFixed(1)}, ${blocksOnly?.maxX.toFixed(1)}])`,
     );
 
-    // 표적 조회 — 플레이어는 살아 있고 위치를 준다 / 미지 id는 안전 동작
+    // 표적 조회 — [C3] 탐지 unwired면 플레이어는 **관측 불가**(위치 null),
+    // 생사는 PlayerAliveSource 미연결이라 생존으로 본다. 미지 id는 안전 동작.
     const playerPosition = portA?.getTargetPosition(PLAYER_ENTITY_ID);
     check(
-      '[AI] motion port — 표적 조회: 플레이어 생존·위치 / 미지 id는 null·비생존',
+      '[AI] motion port — 표적 조회: 탐지 unwired = 관측 불가(null) / 미지 id는 null·비생존',
       portA?.isTargetAlive(PLAYER_ENTITY_ID) === true &&
-        playerPosition?.x === systems.player.positionX &&
-        playerPosition.z === systems.player.positionZ &&
+        !systems.detectionWired &&
+        playerPosition === null &&
         portA.isTargetAlive(987654) === false &&
         portA.getTargetPosition(987654) === null,
-      `플레이어=(${playerPosition?.x}, ${playerPosition?.z})`,
+      `플레이어 관측=${String(playerPosition)}, 탐지 배선=${systems.detectionWired}`,
     );
 
     // 같은 entityId 재요청 — 추가 엔티티를 만들지 않는다
@@ -3498,19 +3505,25 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       `사건=(${patrol?.incidentPosition.x.toFixed(1)}, ${patrol?.incidentPosition.z.toFixed(1)}), AI=${handle?.ai.state}`,
     );
 
-    // 실제 이동 — AI가 포트를 통해 플레이어 쪽으로 접근한다
-    const startDistance = distanceTo(patrol, systems.player);
+    // 실제 이동 — [C3] 탐지 unwired에서는 플레이어가 관측 불가이므로 AI가
+    // **마지막 확인 위치(사건 지점)** 로 접근한다(alert 유지). 전이 규칙은
+    // 리드 DestroyerAIController 소유이며 여기서 복제하지 않는다.
+    const incidentPoint = {
+      positionX: requests[0]?.incidentPosition.x ?? 0,
+      positionZ: requests[0]?.incidentPosition.z ?? 0,
+    };
+    const startDistance = distanceTo(patrol, incidentPoint);
     for (let i = 0; i < 300; i += 1) {
       adapter.update(1 / 60);
       systems.update(1 / 60);
     }
-    const endDistance = distanceTo(patrol, systems.player);
+    const endDistance = distanceTo(patrol, incidentPoint);
     check(
-      '[AI] B5 경비함 실제 이동 — 수면 유지하며 표적 방향으로 접근',
+      '[AI] B5 경비함 실제 이동 — 수면 유지하며 마지막 확인 위치로 접근 (탐지 unwired = alert)',
       patrol !== undefined &&
         endDistance < startDistance &&
         patrol.positionY === STARTING_CANYON_LAYOUT.seaSurfaceY &&
-        handle?.ai.state === 'attack',
+        handle?.ai.state === 'alert',
       `거리 ${startDistance.toFixed(1)} → ${endDistance.toFixed(1)}, AI=${handle?.ai.state}`,
     );
 
@@ -3666,8 +3679,502 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     systems.dispose();
   }
 
+  /* ═══ 스프린트 C1~C4 (INT-CORE-015 / SPRINT_C_HANDOFF) ═════════════ */
+
+  // 62. [COMBAT] C1 — 탐지 게이지 unwired 고정 / 확정 시 구동
+  {
+    const bus = new EventBus();
+    const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
+    // 공식 combat.json에는 거리 감쇠·감소율이 아직 없다 → unwired
+    systems.attachCombatParams(rawParams.combat);
+    const changes: Array<{ gauge: number; stage: string }> = [];
+    bus.on('detectionChanged', (payload) => changes.push(payload));
+
+    systems.detection.reportNoise(1);
+    for (let i = 0; i < 600; i += 1) systems.update(1 / 60);
+    const hud = systems.detectionHudView();
+    check(
+      '[COMBAT] C1 tuning params null → 게이지 0·stage safe 고정·전이 0 (임의 기본값 없음)',
+      !systems.detectionWired &&
+        hud.gauge === 0 &&
+        hud.stage === 'safe' &&
+        hud.unwired &&
+        changes.length === 0 &&
+        systems.detectionStageSource.stage === 'safe',
+      `gauge=${hud.gauge}, stage=${hud.stage}, unwired=${hud.unwired}, 전이=${changes.length}`,
+    );
+
+    // 픽스처 수치 주입(검증 전용 — production params 아님) → 게이지 구동
+    systems.detection.attachTuningParams(DETECTION_TUNING_FIXTURE);
+    systems.player.resetTo({ x: 0, y: 0, z: 0, headingRadians: 0 });
+    systems.detection.reportNoise(1);
+    for (let i = 0; i < 60; i += 1) systems.update(1 / 60);
+    const wiredHud = systems.detectionHudView();
+    check(
+      '[COMBAT] C1 확정 수치 주입 시 게이지 상승 + detectionChanged 발행 (별도 이벤트 없음)',
+      systems.detectionWired &&
+        !wiredHud.unwired &&
+        wiredHud.gauge > 0 &&
+        wiredHud.stage === 'searching' &&
+        changes.length > 0,
+      `gauge=${wiredHud.gauge.toFixed(4)}, stage=${wiredHud.stage}, 전이=${changes.length}`,
+    );
+
+    // AI 소비 모델에는 게이지가 없다 (stage·마지막 노출 위치만)
+    const stageSourceKeys = Object.keys(systems.detectionStageSource).concat(
+      Object.getOwnPropertyNames(systems.detectionStageSource),
+    );
+    check(
+      '[COMBAT] C1 AI에는 stage만 노출 — 게이지·내부 상태 접근 경로 없음',
+      !stageSourceKeys.includes('gauge') &&
+        stageSourceKeys.includes('stage') &&
+        stageSourceKeys.includes('lastExposedPosition'),
+      `키=${[...new Set(stageSourceKeys)].join(',')}`,
+    );
+
+    // 출항 초기화에서 게이지·노출 위치가 비워진다
+    systems.resetSortieSession(params);
+    check(
+      '[COMBAT] C1 출항 reset — 게이지 0·노출 위치 null',
+      systems.detectionHudView().gauge === 0 &&
+        systems.detection.lastExposedPosition === null,
+      `gauge=${systems.detectionHudView().gauge}`,
+    );
+    systems.dispose();
+  }
+
+  // 63. [COMBAT] C2 — 은신·심도 보정 입력
+  {
+    const bus = new EventBus();
+    const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
+    const environment = systems.detectionEnvironment;
+    check(
+      '[COMBAT] C2 심도 층은 기존 3층 정본 소비 · 소음·침묵 미연결 = 중립 입력',
+      environment.depthLayer === systems.depth.currentLayer &&
+        environment.noiseLevel === 0 &&
+        environment.silentRunning === false &&
+        !environment.wired.noise &&
+        !environment.wired.silentRunning,
+      `layer=${environment.depthLayer}, noise=${environment.noiseLevel}, silent=${environment.silentRunning}`,
+    );
+
+    // 소스를 연결하면 값을 그대로 전달한다 (보정 계산은 하지 않는다)
+    const silent = { silentRunning: true };
+    environment.attachNoiseSource({ noiseLevel: 1 });
+    environment.attachSilentRunningSource(silent);
+    systems.detection.attachTuningParams(DETECTION_TUNING_FIXTURE);
+    systems.player.resetTo({ x: 0, y: 0, z: 0, headingRadians: 0 });
+    for (let i = 0; i < 60; i += 1) systems.update(1 / 60);
+    const silentGauge = systems.detectionHudView().gauge;
+
+    systems.resetSortieSession(params);
+    silent.silentRunning = false;
+    for (let i = 0; i < 60; i += 1) systems.update(1 / 60);
+    const loudGauge = systems.detectionHudView().gauge;
+    const officialMultiplier = params.detection.silentRunningNoiseMultiplier.value;
+    check(
+      '[COMBAT] C2 침묵 항행이 게이지 증가율에 반영 — 공식 배율 그대로 (자체 계수 없음)',
+      silentGauge > 0 &&
+        loudGauge > silentGauge &&
+        Math.abs(silentGauge - loudGauge * officialMultiplier) < 1e-9,
+      `침묵=${silentGauge.toFixed(6)}, 일반=${loudGauge.toFixed(6)} (공식 배율 ${officialMultiplier})`,
+    );
+
+    // 심도 보정 — 층별 공식 배율이 그대로 곱해진다
+    const depthModifier = params.detection.depthModifiers[systems.depth.currentLayer];
+    check(
+      '[COMBAT] C2 심도 보정은 공식 depthModifiers 사용 (렌더·어댑터 계산 0)',
+      typeof depthModifier === 'number' && depthModifier > 0,
+      `layer=${systems.depth.currentLayer}, modifier=${depthModifier}`,
+    );
+    systems.dispose();
+  }
+
+  // 64. [COMBAT] C3 — 추적 상태 연결 (기존 어휘·전이만 사용)
+  {
+    const bus = new EventBus();
+    const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
+    const adapter = new GuardShipAdapter(
+      createProductionDestroyerAIFactory(systems.surfaceShipMotionPortFactory),
+    );
+    const incident = { x: 0, z: -20 };
+    const handle = adapter.spawn('c3', guardConfig(1200, incident, { x: 12, z: -20 }));
+
+    // 탐지 unwired → 관측 불가 → alert(마지막 확인 위치 접근)
+    for (let i = 0; i < 60; i += 1) adapter.update(1 / 60);
+    const unwiredState = handle?.ai.state;
+
+    // 픽스처 stage 소스를 detected로 두면 관측 가능 → attack 전이
+    const stage: { stage: DetectionStage; lastExposedPosition: null } = {
+      stage: 'detected',
+      lastExposedPosition: null,
+    };
+    systems.attachDetectionStageSource(stage);
+    for (let i = 0; i < 60; i += 1) adapter.update(1 / 60);
+    const detectedState = handle?.ai.state;
+
+    stage.stage = 'safe';
+    for (let i = 0; i < 60; i += 1) adapter.update(1 / 60);
+    const lostContactState = handle?.ai.state;
+    check(
+      '[COMBAT] C3 stage만으로 patrol/alert/attack/lost 전이 — 새 상태명·상태 머신 0',
+      unwiredState === 'alert' &&
+        detectedState === 'attack' &&
+        lostContactState === 'alert' &&
+        (['patrol', 'alert', 'attack', 'lost'] as const).includes(
+          handle?.ai.state ?? 'patrol',
+        ),
+      `unwired=${unwiredState} → detected=${detectedState} → 상실=${lostContactState}`,
+    );
+    systems.dispose();
+  }
+
+  // 65. [COMBAT] C4 PlayerAliveSource 실제 배선
+  {
+    const bus = new EventBus();
+    const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
+    const adapter = new GuardShipAdapter(
+      createProductionDestroyerAIFactory(systems.surfaceShipMotionPortFactory),
+    );
+    const incident = { x: 0, z: -20 };
+    const port = systems.surfaceShipMotionPortFactory.create(
+      guardConfig(1300, incident, { x: 12, z: -20 }),
+    );
+    const alive = { isPlayerAlive: true };
+    const beforeWired = systems.playerAliveSourceWired;
+    systems.attachPlayerAliveSource(alive);
+    const stage: { stage: DetectionStage; lastExposedPosition: null } = {
+      stage: 'detected',
+      lastExposedPosition: null,
+    };
+    systems.attachDetectionStageSource(stage);
+
+    const aliveObserved = port?.getTargetPosition(PLAYER_ENTITY_ID) !== null;
+    alive.isPlayerAlive = false;
+    check(
+      '[COMBAT] C4 destroyed 플레이어를 PatrolShipFleet가 alive로 판단하지 않음',
+      !beforeWired &&
+        systems.playerAliveSourceWired &&
+        aliveObserved &&
+        port?.isTargetAlive(PLAYER_ENTITY_ID) === false &&
+        port.getTargetPosition(PLAYER_ENTITY_ID) === null,
+      `생존 시 관측=${aliveObserved}, 파괴 후 alive=${port?.isTargetAlive(PLAYER_ENTITY_ID)}`,
+    );
+
+    // 파괴 후 공격 요청 0건
+    systems.enemyAttack.attachDamageParams(DEPTH_CHARGE_FIXTURE);
+    const destroyedOutcome = systems.enemyAttackPort.requestAttack(
+      attackRequest('atk-destroyed', { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }),
+    );
+    check(
+      '[COMBAT] C4 destroyed 후 공격 요청 0건 (폭뢰 투하 0)',
+      destroyedOutcome !== 'delivered' && systems.depthCharges.activeCount === 0,
+      `결과=${destroyedOutcome}, 수중 폭뢰=${systems.depthCharges.activeCount}`,
+    );
+
+    // 다음 출항 reset 후 다시 살아 있는 target으로 인식
+    alive.isPlayerAlive = true;
+    systems.resetSortieSession(params);
+    check(
+      '[COMBAT] C4 다음 출항 reset 후 alive 상태 복구',
+      port?.isTargetAlive(PLAYER_ENTITY_ID) === true &&
+        port.getTargetPosition(PLAYER_ENTITY_ID) !== null,
+      `alive=${port?.isTargetAlive(PLAYER_ENTITY_ID)}`,
+    );
+    adapter.dispose();
+    systems.dispose();
+  }
+
+  // 66. [COMBAT] C4 EnemyAttackPort — unwired·사거리·쿨다운·중복
+  {
+    const rig = makeSurvivalRig(params);
+    const unwiredOutcome = rig.systems.enemyAttackPort.requestAttack(
+      attackRequest('atk-unwired', { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }),
+    );
+    check(
+      '[COMBAT] C4 params null → unwired (즉시 피해·거리 무관 피해 0)',
+      unwiredOutcome === 'unwired' &&
+        rig.systems.depthCharges.activeCount === 0 &&
+        rig.damageCalls.length === 0,
+      `결과=${unwiredOutcome}, 피해 호출=${rig.damageCalls.length}`,
+    );
+
+    rig.systems.enemyAttack.attachDamageParams(DEPTH_CHARGE_FIXTURE);
+    const far = rig.systems.enemyAttackPort.requestAttack(
+      attackRequest('atk-far', { x: 0, y: 0, z: 0 }, { x: 500, y: 0, z: 0 }),
+    );
+    check(
+      '[COMBAT] C4 사거리 밖 = outOfRange (투하 0)',
+      far === 'outOfRange' && rig.systems.depthCharges.activeCount === 0,
+      `결과=${far}`,
+    );
+
+    const delivered = rig.systems.enemyAttackPort.requestAttack(
+      attackRequest('atk-1', { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }),
+    );
+    check(
+      '[COMBAT] C4 공격 요청 즉시 피해 없음 — 투하만 발생',
+      delivered === 'delivered' &&
+        rig.systems.depthCharges.activeCount === 1 &&
+        rig.damageCalls.length === 0,
+      `결과=${delivered}, 폭뢰=${rig.systems.depthCharges.activeCount}, 피해=${rig.damageCalls.length}`,
+    );
+
+    const duplicate = rig.systems.enemyAttackPort.requestAttack(
+      attackRequest('atk-1', { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }),
+    );
+    check(
+      '[COMBAT] C4 동일 attackId 중복 요청 차단 (duplicate)',
+      duplicate === 'duplicate' && rig.systems.depthCharges.activeCount === 1,
+      `결과=${duplicate}, 폭뢰=${rig.systems.depthCharges.activeCount}`,
+    );
+
+    const cooled = rig.systems.enemyAttackPort.requestAttack(
+      attackRequest('atk-2', { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }),
+    );
+    check(
+      '[COMBAT] C4 쿨다운 중 재요청 거부 (onCooldown)',
+      cooled === 'onCooldown',
+      `결과=${cooled}`,
+    );
+  }
+
+  // 67. [COMBAT] C4 폭뢰 lifecycle — 신관 하한·direct/near·단일 창구
+  {
+    // 신관 하한 3.0초 — 더 짧은 값을 주입해도 하한을 지킨다
+    const shortFuse = makeSurvivalRig(params, { fuseSeconds: 0.5 });
+    check(
+      '[COMBAT] C4 신관 하한 3.0초 준수 — 더 짧게 만들지 않는다',
+      shortFuse.systems.depthCharges.fuseSecondsInUse === 3.0 &&
+        params.combat.depthChargeFuseSeconds.value >= 3.0,
+      `적용 신관=${shortFuse.systems.depthCharges.fuseSecondsInUse}s (공식 ${params.combat.depthChargeFuseSeconds.value}s)`,
+    );
+
+    // 신관 이전에는 피해가 없다
+    const rig = makeSurvivalRig(params);
+    rig.systems.enemyAttack.attachDamageParams(DEPTH_CHARGE_FIXTURE);
+    rig.systems.depthCharges.attachCombatParams({ damageParams: DEPTH_CHARGE_FIXTURE });
+    rig.systems.enemyAttackPort.requestAttack(
+      attackRequest('atk-direct', { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }),
+    );
+    for (let i = 0; i < 60 * 2; i += 1) rig.systems.update(1 / 60); // 2초 — 신관 이전
+    const beforeFuse = rig.damageCalls.length;
+    for (let i = 0; i < 60 * 2; i += 1) rig.systems.update(1 / 60); // 총 4초 — 폭발 후
+    check(
+      '[COMBAT] C4 신관 이전 피해 0 → 신관 후 direct 피해 정확히 1회',
+      beforeFuse === 0 &&
+        rig.damageCalls.length === 1 &&
+        rig.damageCalls[0]?.proximity === 'direct' &&
+        rig.damageCalls[0]?.rawDamage === DEPTH_CHARGE_FIXTURE.directDamage &&
+        rig.systems.depthCharges.lastDetonationOutcome === 'directDamage',
+      `신관 전=${beforeFuse}, 총 피해=${rig.damageCalls.length}, 근접도=${String(rig.damageCalls[0]?.proximity)}`,
+    );
+    check(
+      '[COMBAT] C4 direct와 near 중복 적용 없음 — 폭발 1건 = 피해 1건',
+      rig.damageCalls.filter((call) => call.proximity === 'near').length === 0 &&
+        rig.damageCalls.length === 1,
+      `direct=${rig.damageCalls.filter((c) => c.proximity === 'direct').length}, near=${rig.damageCalls.filter((c) => c.proximity === 'near').length}`,
+    );
+
+    // near 판정 — direct 반경 밖·near 반경 안
+    const nearRig = makeSurvivalRig(params);
+    nearRig.systems.enemyAttack.attachDamageParams(DEPTH_CHARGE_FIXTURE);
+    nearRig.systems.depthCharges.attachCombatParams({ damageParams: DEPTH_CHARGE_FIXTURE });
+    const nearOffset = (DEPTH_CHARGE_FIXTURE.directRadiusMeters ?? 0) + 1;
+    nearRig.systems.player.resetTo({ x: nearOffset, y: 0, z: 0, headingRadians: 0 });
+    nearRig.systems.enemyAttackPort.requestAttack(
+      attackRequest('atk-near', { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }),
+    );
+    for (let i = 0; i < 60 * 4; i += 1) nearRig.systems.update(1 / 60);
+    check(
+      '[COMBAT] C4 near 판정은 near 피해 1회 (direct 아님)',
+      nearRig.damageCalls.length === 1 &&
+        nearRig.damageCalls[0]?.proximity === 'near' &&
+        nearRig.damageCalls[0]?.rawDamage === DEPTH_CHARGE_FIXTURE.nearDamage,
+      `피해=${nearRig.damageCalls.length}, 근접도=${String(nearRig.damageCalls[0]?.proximity)}`,
+    );
+
+    // 범위 밖 — 폭발해도 피해 없음
+    const missRig = makeSurvivalRig(params);
+    missRig.systems.enemyAttack.attachDamageParams(DEPTH_CHARGE_FIXTURE);
+    missRig.systems.depthCharges.attachCombatParams({ damageParams: DEPTH_CHARGE_FIXTURE });
+    missRig.systems.depthCharges.drop({
+      attackerEntityId: 1300,
+      targetEntityId: PLAYER_ENTITY_ID,
+      worldX: 1000,
+      worldY: 0,
+      worldZ: 1000,
+      correlationId: 'miss',
+    });
+    for (let i = 0; i < 60 * 4; i += 1) missRig.systems.update(1 / 60);
+    check(
+      '[COMBAT] C4 범위 밖 폭발은 피해 0 (outOfRange)',
+      missRig.damageCalls.length === 0 &&
+        missRig.systems.depthCharges.lastDetonationOutcome === 'outOfRange',
+      `피해=${missRig.damageCalls.length}, 결과=${String(missRig.systems.depthCharges.lastDetonationOutcome)}`,
+    );
+
+    // 피해 params null — 폭발은 하되 피해 unwired
+    const unwiredRig = makeSurvivalRig(params);
+    unwiredRig.systems.depthCharges.drop({
+      attackerEntityId: 1300,
+      targetEntityId: PLAYER_ENTITY_ID,
+      worldX: 0,
+      worldY: 0,
+      worldZ: 0,
+      correlationId: 'unwired',
+    });
+    for (let i = 0; i < 60 * 4; i += 1) unwiredRig.systems.update(1 / 60);
+    check(
+      '[COMBAT] C4 피해 params null → 폭발 상태는 진행하되 피해 unwired',
+      unwiredRig.damageCalls.length === 0 &&
+        !unwiredRig.systems.depthCharges.damageWired &&
+        unwiredRig.systems.depthCharges.lastDetonationOutcome === 'damageUnwired',
+      `피해=${unwiredRig.damageCalls.length}, 결과=${String(unwiredRig.systems.depthCharges.lastDetonationOutcome)}`,
+    );
+  }
+
+  // 68. [COMBAT] C4 모든 피해가 DamageReceiverPort를 통과 + 중복 차단
+  {
+    const rig = makeSurvivalRig(params);
+    rig.systems.depthCharges.attachCombatParams({ damageParams: DEPTH_CHARGE_FIXTURE });
+    // 같은 상관 id로 두 발 투하 → 폭발 2회여도 피해는 1회
+    for (const chargeIndex of [0, 1]) {
+      rig.systems.depthCharges.drop({
+        attackerEntityId: 1300,
+        targetEntityId: PLAYER_ENTITY_ID,
+        worldX: chargeIndex * 0.1,
+        worldY: 0,
+        worldZ: 0,
+        correlationId: 'same-attack',
+      });
+    }
+    for (let i = 0; i < 60 * 4; i += 1) rig.systems.update(1 / 60);
+    check(
+      '[COMBAT] C4 같은 폭발 상관 id의 중복 피해 차단 (2발 투하 → 피해 1회)',
+      rig.damageCalls.length === 1 && rig.damageCalls[0]?.correlationId === 'same-attack',
+      `피해=${rig.damageCalls.length}`,
+    );
+    check(
+      '[COMBAT] C4 모든 피해가 applyDamage 단일 창구 경유 + 고유 id·상관 id 보유',
+      rig.damageCalls.every(
+        (call) =>
+          typeof call.damageEventId === 'string' &&
+          call.damageEventId.length > 0 &&
+          typeof call.correlationId === 'string' &&
+          call.sourceType === 'enemyWeapon' &&
+          call.targetEntityId === PLAYER_ENTITY_ID,
+      ),
+      `호출=${rig.damageCalls.length}, id=${String(rig.damageCalls[0]?.damageEventId)}`,
+    );
+
+    // 게임플레이 계층에 자체 체력 상태가 없다 (표면 검사)
+    const systemsSurface = Object.getOwnPropertyNames(
+      Object.getPrototypeOf(rig.systems),
+    );
+    check(
+      '[COMBAT] C4 게임플레이 자체 player HP·hull 상태 0 — 수신 미연결이면 unwired',
+      !systemsSurface.some((name) => /currentHull|playerHp|hullState/i.test(name)) &&
+        rig.systems.damageReceiverWired,
+      `표면=${systemsSurface.filter((n) => /hull|hp/i.test(n)).join(',') || '없음'}`,
+    );
+  }
+
   return results;
 }
+
+/**
+ * 검증 전용 탐지 수치 **픽스처** — production params가 아니다.
+ * 공식 `params/combat.json`에 거리 감쇠·감소율이 도착하면 그 값이 쓰이며,
+ * 이 상수는 production 경로로 import되지 않는다.
+ */
+const DETECTION_TUNING_FIXTURE = Object.freeze({
+  distanceFalloff: Object.freeze({ fullEffectMeters: 50, zeroEffectMeters: 200 }),
+  gaugeDecayPerSecond: 0.2,
+});
+
+/**
+ * 검증 전용 폭뢰 수치 **픽스처** — production params가 아니다.
+ * 공식 combat.json에 direct/near 반경·피해·쿨다운이 도착하면 그 값이 쓰인다.
+ */
+const DEPTH_CHARGE_FIXTURE = Object.freeze({
+  directRadiusMeters: 5,
+  nearRadiusMeters: 15,
+  directDamage: 30,
+  nearDamage: 10,
+  dropCooldownSeconds: 10,
+});
+
+/** 검증용 공격 요청 — 계약 형태 그대로 (수치는 픽스처) */
+function attackRequest(
+  attackId: string,
+  attackerPosition: { x: number; y: number; z: number },
+  targetPosition: { x: number; y: number; z: number },
+): EnemyAttackRequest {
+  return {
+    attackId,
+    attackerEntityId: 1300,
+    targetEntityId: PLAYER_ENTITY_ID,
+    attackerPosition,
+    targetPosition,
+    correlationId: attackId,
+    requestedAt: 0,
+  };
+}
+
+/**
+ * 생존·전투 검증 rig — 피해 수신 창구를 **기록용 더블**로 연결한다.
+ * 더블은 검증 전용이며 production 경로에 들어가지 않는다(조립부는 리드
+ * `PlayerHullSystem`을 연결한다).
+ */
+function makeSurvivalRig(
+  params: GameParams,
+  options: { readonly fuseSeconds?: number } = {},
+): {
+  systems: GameplaySystems;
+  damageCalls: DamageRequest[];
+} {
+  const bus = new EventBus();
+  const systems = new GameplaySystems(
+    bus,
+    params,
+    undefined,
+    STARTING_CANYON_LAYOUT,
+    testOfficialParams(),
+  );
+  if (options.fuseSeconds !== undefined) {
+    systems.depthCharges.attachCombatParams({ fuseSeconds: options.fuseSeconds });
+  }
+  const damageCalls: DamageRequest[] = [];
+  systems.attachDamageReceiver({
+    applyDamage: (request) => {
+      damageCalls.push(request);
+      return {
+        outcome: 'applied' as const,
+        appliedDamage: request.rawDamage,
+        hull: UNWIRED_HULL_FIXTURE,
+      };
+    },
+  });
+  return { systems, damageCalls };
+}
+
+/** 검증용 선체 상태 픽스처 — 게임플레이는 선체 상태를 갖지 않는다 */
+const UNWIRED_HULL_FIXTURE: PlayerHullState = Object.freeze({
+  currentHull: 0,
+  maxHull: 0,
+  hullRatio: null,
+  floodingLevel: 0,
+  floodingRate: 0,
+  survivalState: 'stable',
+  isDestroyed: false,
+  lastDamageSource: null,
+  lastDamageAmount: 0,
+  lastDamageAt: null,
+  recoverable: true,
+  sortieFailurePending: false,
+  unwired: true,
+});
 
 /** 검증용 경비 스폰 config — production과 같은 계약 형태 (수치는 픽스처) */
 function guardConfig(
