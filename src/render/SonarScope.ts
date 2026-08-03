@@ -60,12 +60,13 @@ export class SonarScope {
   constructor(host: HTMLElement) {
     this.rootElement = document.createElement('div');
     this.rootElement.setAttribute('data-render-sonar-scope', '');
-    // 좌측 배치 — 상단은 조작 안내·성능 오버레이·fixture 배지가 차지하므로
-    // 하단 모서리를 쓴다 (침수 HUD는 중앙 하단, 버튼은 우하단 — 충돌 없음)
+    // 좌측 상단 (16차 결의 — 함내 계기판 다이제틱, 화면 높이 18% 이하).
+    // production에서 이 구석은 비어 있다 — 조작 안내(약 33vh~)와 겹치지 않고,
+    // dev 전용 성능 오버레이·QA 배지와의 겹침은 개발 모드 한정이다.
     this.rootElement.style.cssText = [
       'position:absolute',
       'left:0.75rem',
-      'bottom:4.5rem',
+      'top:0.75rem',
       // 화면 높이 18% 이하 (연출값 소유: sonarScope.sizeViewportHeightRatio)
       `width:${SCOPE.sizeViewportHeightRatio * 100}vh`,
       `height:${SCOPE.sizeViewportHeightRatio * 100}vh`,
