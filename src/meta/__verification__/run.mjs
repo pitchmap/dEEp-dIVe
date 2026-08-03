@@ -241,6 +241,34 @@ try {
     });
   }
 
+  // ③-0 이중 정산 방지 (INT-CORE-015 §병행 정산 경로): 정산 정본은
+  //    MetaLoop.settleSortie 하나다. EconomySystem.settleDefeat/settleReturn·
+  //    RunEconomy.settleSortie는 production 호출자가 없어야 하며(삭제는
+  //    게임플레이 소유 — INT-GAME 처리 대기), composition·core는 이 병행
+  //    경로를 호출하지 않는다.
+  {
+    const parallelCallers = sourceFiles.filter((file) => {
+      if (file === 'src/systems/economy/EconomySystem.ts') return false; // 정의 파일
+      if (file === 'src/systems/economy/RunEconomy.ts') return false; // 정의 파일
+      const body = read(file);
+      return /\.settleDefeat\(|\.settleReturn\(/.test(body);
+    });
+    const canonicalCallers = sourceFiles.filter((file) => {
+      if (file === 'src/meta/MetaLoop.ts') return false; // 정의 파일
+      return /\.settleSortie\(\{/.test(read(file));
+    });
+    const allowedCanonical = new Set(['src/core/Game.ts', 'src/core/SortieFailureCoordinator.ts']);
+    const unexpectedCanonical = canonicalCallers.filter((file) => !allowedCanonical.has(file));
+    const passed = parallelCallers.length === 0 && unexpectedCanonical.length === 0;
+    results.push({
+      name: 'C 이중 정산 방지: 병행 정산 호출 0건 · MetaLoop.settleSortie 호출자는 조립부·실패 조정자뿐',
+      passed,
+      detail: passed
+        ? '통과'
+        : `병행 호출: ${parallelCallers.join(', ') || '없음'} / 예상 밖 정산 호출: ${unexpectedCanonical.join(', ') || '없음'}`,
+    });
+  }
+
   // ③ C 수치 발명 금지 — 생존 코어에 밸런스 상수 리터럴이 없어야 한다.
   //    (선체 기준값·피해량·침수 속도·압력은 C9 [COMBAT] params 이관 대상)
   {
@@ -249,7 +277,8 @@ try {
       'src/core/FloodingCore.ts',
       'src/core/SortieFailureCoordinator.ts',
     ];
-    const numericLiteral = /(?:^|[^\w.])(?!0\b|1\b)\d+(?:\.\d+)?\s*(?:;|,|\)|\})/;
+    // 0·1은 경계값, 2는 사다리꼴 적분(평균)의 수학 상수 — 밸런스 수치가 아니다.
+    const numericLiteral = /(?:^|[^\w.])(?!0\b|1\b|2\b)\d+(?:\.\d+)?\s*(?:;|,|\)|\})/;
     const offenders = [];
     for (const file of coreFiles) {
       const body = read(file)

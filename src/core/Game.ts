@@ -49,6 +49,7 @@ import {
   GuardSpawnBridge,
   GuardSpawnCoordinator,
   NeutralIncidentBoundary,
+  DebriefStateTracker,
   SaveBridge,
   SortieEconomyBridge,
   SortieSalvageSpawner,
@@ -113,6 +114,8 @@ export class Game {
   private floodingCore: FloodingCore | null = null;
   /** 출항 실패 조정자 — 파괴 1회 = 정산 1회 */
   private sortieFailure: SortieFailureCoordinator | null = null;
+  /** DEBRIEF 읽기 모델 — 정산·실패 화면의 유일한 데이터 소스 (C6·C7) */
+  private debriefState: DebriefStateTracker | null = null;
   /** 조립부가 건 EventBus 구독 해제 함수 — stop()에서 전부 해제한다 */
   private readonly unsubscribes: Array<() => void> = [];
 
@@ -212,6 +215,7 @@ export class Game {
         salvageSpawner: this.salvageSpawner,
         guardAdapter: this.guardAdapter,
         playerHull: this.playerHull,
+        debrief: this.debriefState,
         flooding: this.floodingCore,
         sortieFailure: this.sortieFailure,
         guardSpawn: this.guardSpawn,
@@ -499,6 +503,11 @@ export class Game {
     // hullIntegrity 업그레이드 소비 — 배율은 공식 승인값, 기준값은 대기.
     playerHull.applyHullIntegrityModifier(this.upgrades?.modifiers.hullIntegrity ?? 0);
     this.registry.register(playerHull);
+    //     [배선 대기 — 게임플레이 attach API] PatrolShipFleet의
+    //     isTargetAlive(PLAYER_ENTITY_ID)는 현재 항상 true다. 게임플레이가
+    //     attachPlayerAliveSource(source: PlayerAliveSource)를 제공하면
+    //     여기서 `gameplay.attachPlayerAliveSource(playerHull)` 1줄로 연결한다
+    //     — 파괴 후 추적·공격 요청이 멈춘다 (INT-CORE-015 §PlayerAliveSource).
 
     // ①-c 업그레이드 구매 판정 시스템 (게임플레이 소유 — 조립부가 공식
     //     카탈로그와 실지갑 읽기 단면을 주입한다). **단계의 단일 저장소** —
@@ -579,6 +588,15 @@ export class Game {
     this.sortieFailure = sortieFailure;
     this.registry.register(sortieFailure);
 
+    // ②-c2 DEBRIEF 읽기 모델 (INT-CORE-015 — C6·C7 화면 분리). 그래픽스
+    //     정산·실패 화면은 isDestroyed 추측이 아니라 이 모델만 소비한다:
+    //     kind('returned'/'aborted'/'destroyed')·settlement·failure·
+    //     saveStatus·canRetrySave. 재시도 명령은 sortieFailure.retrySave를
+    //     조립부가 command로 감싸 제공한다(모델은 읽기 전용).
+    const debriefState = new DebriefStateTracker(sortieFailure, saveBridge);
+    this.debriefState = debriefState;
+    this.registry.register(debriefState);
+
     // ②-c production 기지 경제 조립 (INT-CORE-010) — 저장 책임 단일화.
     //     savePort: 명령당 호출 횟수 계측 가능 (CountingSavePort.callCount).
     const savePort = new CountingSavePort({
@@ -604,6 +622,10 @@ export class Game {
       // 장비 배율·외형 단계. UpgradeState는 파생 뷰로만 동기화한다.
       onPurchaseCommitted: () => {
         upgrades.setLevels(upgradePurchase.levelSnapshot);
+        // hullIntegrity 구매 반영 [INT-CORE-015 정책]: 최대치만 재계산 —
+        // 진행 중 출항의 currentHull은 회복시키지 않으며, 효과는 다음 출항
+        // 초기화(currentHull=maxHull)에서 적용된다.
+        this.playerHull?.applyHullIntegrityModifier(upgrades.modifiers.hullIntegrity ?? 0);
         this.effectiveParams = deriveEffectiveParams(params, upgrades.modifiers);
         gameplay.equipment.setUpgradeModifiers({
           torpedoSpeedBonus: 0,
