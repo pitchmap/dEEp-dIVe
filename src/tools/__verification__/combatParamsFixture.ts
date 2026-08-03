@@ -22,6 +22,8 @@ export function allNullCombatFixture(): Record<string, unknown> {
       directDamage: wrap(),
       nearDamage: wrap(),
       dropCooldownSeconds: wrap(),
+      directFloodingContribution: wrap(),
+      nearFloodingContribution: wrap(),
     },
     flooding: {
       minorThreshold: wrap(),
@@ -52,6 +54,8 @@ export function fullyDefinedCombatFixture(): Record<string, unknown> {
       directDamage: wrap(40),
       nearDamage: wrap(15),
       dropCooldownSeconds: wrap(6),
+      directFloodingContribution: wrap(0.5),
+      nearFloodingContribution: wrap(0.2),
     },
     flooding: {
       minorThreshold: wrap(0.2),

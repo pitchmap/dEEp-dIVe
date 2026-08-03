@@ -207,10 +207,18 @@ if (locked === 'game-canvas') {
     document.querySelector('.hud-buttons')?.classList.contains('hud-buttons-dimmed'),
   );
 
-  // ── 8) 재장전 완료 대기 — 정확히 1발만 소모
-  const remainingReload = Math.max(0, 21000 - (Date.now() - fireTime));
-  await sleep(remainingReload);
+  // ── 8) 재장전 완료 대기 — 정확히 1발만 소모.
+  // 고정 대기(발사 후 21초)가 아니라 **완료 폴링**이다: 소프트웨어 렌더 등
+  // 저속 환경에서는 프레임 델타 상한(GameLoop 0.1s) 때문에 게임 시간이
+  // 벽시계보다 느리게 흘러 재장전 완료가 21초를 넘길 수 있다. 판정 의도는
+  // 그대로 유지된다 — 중복 발사(잔량 1발)면 마감까지 절대 '2발'이 되지
+  // 않으므로 통과할 수 없다.
+  const reloadDeadline = fireTime + 60000;
   fs = await fireState();
+  while (!(fs.label.includes('2발') && !fs.disabled) && Date.now() < reloadDeadline) {
+    await sleep(500);
+    fs = await fireState();
+  }
   results['재장전 완료 → 잔량 2발 (중복 발사 없음)'] = fs.label.includes('2발') && !fs.disabled;
   results['비활성 중 클릭은 발사 요청도 없음'] =
     (await metrics()).buttonFireRequestCount === buttonFireAfterDisabled;

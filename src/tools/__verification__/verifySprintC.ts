@@ -293,10 +293,10 @@ export function runSprintCVerification(input: SprintCRunInput): SprintCRunOutput
 
   let combat: CombatParamsResult | null = null;
 
-  check('C9-schema', 'combat.json C9 공식 필드 존재 — 계약 필드명 1:1 (15종)', () => {
+  check('C9-schema', 'combat.json C9 공식 필드 존재 — 계약 필드명 1:1 (17종 — v0.1.1 침수 기여 2종 포함)', () => {
     combat = validateCombatParams(input.combatJson);
     const expected = HULL_FIELDS.length + DEPTH_CHARGE_FIELDS.length + FLOODING_FIELDS.length + DETECTION_TUNING_FIELDS.length;
-    assert(expected === 15, `필드 15종 기대 (계약 정본 합계 ${expected})`);
+    assert(expected === 17, `필드 17종 기대 — v0.1.1 침수 기여 2종 포함 (계약 정본 합계 ${expected})`);
     return `선체 ${HULL_FIELDS.length} · 폭뢰 ${DEPTH_CHARGE_FIELDS.length} · 침수 ${FLOODING_FIELDS.length} · 탐지 ${DETECTION_TUNING_FIELDS.length} = ${expected}종`;
   });
 
@@ -312,8 +312,8 @@ export function runSprintCVerification(input: SprintCRunInput): SprintCRunOutput
     }
     // 전 null 픽스처도 같은 결과여야 한다.
     const fromFixture = validateCombatParams(allNullCombatFixture());
-    assert(fromFixture.hull === null && fromFixture.pendingFields.length === 15, '전 null 픽스처 결과 불일치');
-    return `미확정 ${eco.pendingFields.length}/15 · 블록 주입 0개 (0 치환 없음)`;
+    assert(fromFixture.hull === null && fromFixture.pendingFields.length === 17, '전 null 픽스처 결과 불일치');
+    return `미확정 ${eco.pendingFields.length}/17 · 블록 주입 0개 (0 치환 없음)`;
   });
 
   check('C9-reject', '스키마 거부 규칙 — NaN·Infinity·문자열 숫자·음수·누락·관계 위반', () => {
@@ -473,7 +473,7 @@ export function runSprintCVerification(input: SprintCRunInput): SprintCRunOutput
   }
   if (!paramsDefined) {
     blockers.push(
-      `C9_PARAMS_PENDING:${combatResult ? combatResult.pendingFields.length : '?'}/15 (공식 수치 미도착 — 발명 금지)`,
+      `C9_PARAMS_PENDING:${combatResult ? combatResult.pendingFields.length : '?'}/17 (공식 수치 미도착 — 발명 금지)`,
     );
   }
   if (!gameplayPresent) blockers.push('GAMEPLAY_NOT_MERGED:PlayerAliveSource attach 호출 0건');

@@ -58,6 +58,9 @@ export const DEPTH_CHARGE_FIELDS = [
   'directDamage',
   'nearDamage',
   'dropCooldownSeconds',
+  // C9 v0.1.1 확장 — 피격 근접도별 침수 기여량 (정규화 flooding level ratio)
+  'directFloodingContribution',
+  'nearFloodingContribution',
 ] as const;
 
 export const FLOODING_FIELDS = [
@@ -222,6 +225,8 @@ export function validateCombatParams(raw: unknown): CombatParamsResult {
   const directDamage = readNumberOrNull(dcBlock, 'depthCharge', 'directDamage');
   const nearDamage = readNumberOrNull(dcBlock, 'depthCharge', 'nearDamage');
   const dropCooldownSeconds = readNumberOrNull(dcBlock, 'depthCharge', 'dropCooldownSeconds');
+  const directFloodingContribution = readNumberOrNull(dcBlock, 'depthCharge', 'directFloodingContribution');
+  const nearFloodingContribution = readNumberOrNull(dcBlock, 'depthCharge', 'nearFloodingContribution');
   for (const field of DEPTH_CHARGE_FIELDS) {
     track(`depthCharge.${field}`, readWrapped(dcBlock, 'depthCharge', field));
   }
@@ -236,6 +241,30 @@ export function validateCombatParams(raw: unknown): CombatParamsResult {
       );
     }
   }
+  // C9 v0.1.1 침수 기여 관계: 0 < near < direct ≤ 1 (존재하는 값에만 적용).
+  for (const [field, value] of [
+    ['directFloodingContribution', directFloodingContribution],
+    ['nearFloodingContribution', nearFloodingContribution],
+  ] as const) {
+    if (value !== null && !(value > 0 && value <= 1)) {
+      throw new ParamValidationError(
+        COMBAT_FILE,
+        `depthCharge.${field}.value`,
+        `0 초과 1 이하의 정규화 침수 비율이어야 합니다 (받은 값: ${value})`,
+      );
+    }
+  }
+  if (
+    directFloodingContribution !== null &&
+    nearFloodingContribution !== null &&
+    !(nearFloodingContribution < directFloodingContribution)
+  ) {
+    throw new ParamValidationError(
+      COMBAT_FILE,
+      'depthCharge',
+      `nearFloodingContribution(${nearFloodingContribution})은 directFloodingContribution(${directFloodingContribution})보다 작아야 합니다 [계약 DepthChargeDamageParams]`,
+    );
+  }
 
   // 계약이 필드별 null을 허용하므로 부분 확정을 그대로 전달한다.
   // 전 필드가 null이면 블록 자체를 null로 둬 '미주입'과 구분한다.
@@ -244,10 +273,20 @@ export function validateCombatParams(raw: unknown): CombatParamsResult {
     nearRadiusMeters === null &&
     directDamage === null &&
     nearDamage === null &&
-    dropCooldownSeconds === null;
+    dropCooldownSeconds === null &&
+    directFloodingContribution === null &&
+    nearFloodingContribution === null;
   const depthCharge: DepthChargeDamageParams | null = depthChargeAllNull
     ? null
-    : { directRadiusMeters, nearRadiusMeters, directDamage, nearDamage, dropCooldownSeconds };
+    : {
+        directRadiusMeters,
+        nearRadiusMeters,
+        directDamage,
+        nearDamage,
+        dropCooldownSeconds,
+        directFloodingContribution,
+        nearFloodingContribution,
+      };
 
   /* ── 침수 ─────────────────────────────────────────────── */
   const floodBlock = requireBlock(raw, 'flooding');

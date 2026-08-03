@@ -50,7 +50,11 @@
 - `SubmarineVisual.ts` — 잠수함 + 외형 단계 어댑터(선체·주무장 각 3단계,
   visualTier 주입만). 최종 에셋 교체 지점 2함수 격리. **어뢰관 앵커·조준
   카메라 소켓**(13차 결의 2): `torpedoTubeAnchorLocal`(모델 정의 단일 지점)
-  + `aimCameraSocket`(앵커 정위치·전방축 -Z 동일 — 소비 측 독자 오프셋 금지)
+  + `aimCameraSocket`(앵커 정위치·전방축 -Z 동일 — 소비 측 독자 오프셋 금지).
+  기본형은 다중 뷰 레퍼런스 시트 대응: 이중 도장(로컬 Y 셰이더 분할 —
+  `artDirection.hullTwoTone`)·갑판 스트립·함교 스커트·선수 조타면·선미 십자
+  안정판·덕트형 단일 프로펠러·하드포인트 패드. 재질군 3개(도장/철/액센트),
+  재질별 지오메트리 병합으로 기본형 메시 3개 (드로우 최소화)
 - 조준 카메라(CanyonScene): 조준 중 `aimCameraSocket` 월드 위치·방향 그대로
   사용(전 심도 동일 — 심도 카메라 전환 없음, 발사 후 유지), 미세 조준각은
   `attachAimAngleSource`(게임플레이 소스, 부재 시 0), 자기 선체는 **layer 1
@@ -58,6 +62,45 @@
   보존), 해제 시 layer 복원 + `CameraRig.beginReturnFrom` 자연 복귀
 - `BaseSceneView.ts` — 기지 화면 경량 3D 배경 — 메타 시각 상태 소비 전용
   (상점·구매·저장 판정 없음, INT-RENDER-007 배선 대기)
+- `DriftParticles.ts` — 부유물(마린 스노우) — `THREE.Points` 1드로우, 결정적
+  분포·카메라 상자 되감기(생성·소멸 0)·코드 생성 도트 텍스처. 수중 전용
+  (수면 위 숨김), 판정 무관 순수 연출. 심도 그레이딩이 불투명 배율 조정
+- `RockShell.ts` — 협곡 암벽 시각 셸 + 해저 굴곡 지면 (렌더 전용 —
+  충돌은 계약 blocks 그대로): 서브디비전 박스 + 위치 기반 결정적 변위
+  (crack 없음), 기울어진 상단(아래 방향만)·잘린 모서리·층리 선반,
+  변형 패밀리 4종, 시각 오차 ≤0.7m. 블록당 메시 1(드로우 불변)·재질 공유
+- `PropellerWake.ts` — 프로펠러 기포·수류: InstancedMesh 풀 1드로우,
+  발생률·후방 속도·수명(wake 길이) 전부 계약 속도 비례, 후진 시 사출 반전.
+  풀 상한은 품질 단계 소유
+- 선수 탐조등(SubmarineVisual.mountHeadlight): 실광원 SpotLight 1개(§12.2
+  예약 슬롯, 그림자 없음) + 렌즈 Points + 가산 빔 콘 2개(꼭짓점 색 페이드).
+  기본 opt-in — 협곡 장면만 켠다. QA `?headlight=0`
+- 심도 그레이딩(`artDirection.depthGrading`): 정규화 심도(수면 0→해저 1)
+  stops 선형 보간 — 안개 색·거리, 방향광·반구광 감광, 부유물 불투명.
+  구간(수면/중간/심해/최심부)은 렌더 전용 — 게임플레이 심도 층 3층 계약 무관
+- `renderQuality.ts` — 저사양 fallback 사다리(`?quality=low`): 부유물 개수
+  축소·림라이트 off·항법등 글로우 off·텍스처 512 상한. 값은
+  `renderVisualParams.json` `artDirection.lowSpec` 소유 — 안개·재질
+  기본색·HUD는 품질 무관 동일
+- `sceneTextures.ts` — base color 텍스처 공유 로더(`public/textures/` WebP):
+  암벽(협곡 벽)·퇴적물(해저)·산업 금속(잠수함·선박·기지 공통) 3종 —
+  종류당 GPU 업로드 1회, 소비 재질은 map만 지연 장착(드로우 콜 증가 0),
+  로딩 실패 시 기존 단색 유지. 에셋은 오프라인 중립화 albedo(평균 224)라
+  최종 색은 material.color(아트 팔레트)가 결정한다. UV 규약: 협곡 벽/바닥은
+  **월드 미터 UV**(`scaleBoxUvsToWorldMeters`) + repeat=1/tileMeters, 금속은
+  0..1 UV × repeat. KTX2/Basis·normal/roughness 미도입(§12·로우폴리 문법)
+- `factionMarks.ts` — 세력 마크 형태 언어 단일 정본(사각=neutral · 삼각=
+  hostile · 마름모=patrol): 좌표 → DOM CSS mask data URI + WebGL 아틀라스
+  UV 셀(`markAtlasCell`). 에셋(`public/marks/*.svg·png`,
+  `public/textures/faction_marks_512.webp`)은 같은 좌표에서 생성.
+  미식별은 마크를 쓰지 않는다(◇ 규칙 유지). 원거리(작은 표시 크기)는
+  솔리드 실루엣(`artDirection.factionMarks.solidBeyondMeters`)
+- 아트 디렉션(`renderVisualParams.json artDirection`): 연속 심도 안개
+  (수면↔해저 보간 — 전경·중경·후경 명도 분리), HemisphereLight 보조 환경광
+  (조명 예산 2등 불변 — AmbientLight 재도입 금지), 벽/바닥/선체 팔레트+미세
+  emissive, 프레넬 림라이트(Lambert onBeforeCompile — 추가 광원·드로우 0),
+  항법등 가산 글로우(주황 식별색), ACES 톤 매핑(Renderer — 후처리 패스 0).
+  실제 스크린 스페이스 bloom은 §12 예산상 미도입(emissive·가산으로 대체)
 - `boss/` — 보스 분절 애니 스파이크(강체 5분절 계층 트랜스폼 + 사인파,
   스켈레탈·스키닝·관절 물리 없음, 충돌은 게임플레이 단일 캡슐 전제).
   A안 `SegmentedSwimMotion` / B안 `BossMotionFallback`(기본 비활성) —

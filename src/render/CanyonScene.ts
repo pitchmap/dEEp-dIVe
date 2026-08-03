@@ -24,6 +24,7 @@
  */
 
 import * as THREE from 'three';
+import visualParams from './renderVisualParams.json';
 import { loadParams, onParamsReloaded } from '../config/ParamLoader';
 import type { GameEvents } from '../contracts/events';
 import type { CanyonLayout } from '../contracts/layout';
@@ -61,6 +62,11 @@ import { IdentificationTags } from './IdentificationTags';
 import type { ShipIdentificationSource } from '../contracts/identification';
 import type { SalvageStateSource } from './SalvageVisuals';
 import { SalvageVisuals } from './SalvageVisuals';
+import { DriftParticles } from './DriftParticles';
+import { PropellerWake } from './PropellerWake';
+import { buildRockShellGeometry, buildSeabedGeometry } from './RockShell';
+import { parseRenderQuality, type RenderQuality } from './renderQuality';
+import { initSceneTextures, onSceneTexture } from './sceneTextures';
 import { SubmarineVisual } from './SubmarineVisual';
 import type { TorpedoStateSource } from './TorpedoVisuals';
 import { TorpedoVisuals } from './TorpedoVisuals';
@@ -71,26 +77,41 @@ import {
   parseSprintBFixtureFlag,
   type SprintBFixture,
 } from './sprintBRenderFixture';
+import { SprintCUiFixture, parseSprintCFixtureFlag } from '../ui/sprintCUiFixture';
 
-/** 수중 배경·포그 톤 — 임시 색상. 심도별 그라데이션·아트 색은 D13 이후 (§3.1) */
-const WATER_COLOR = 0x0e3140;
-const FOG_NEAR = 12;
-const FOG_FAR = 95;
+/**
+ * 수중 배경·포그·조명 — 아트 디렉션 심도 그레이딩
+ * (renderVisualParams.json artDirection.depthGrading).
+ * '밝음(수면)→어둠(심해)' 공식 문법(§3.1)을 **구간 stops의 연속 보간**으로
+ * 구현한다: 수면(0~20%)·중간(20~55%)·심해(55~85%)·최심부(85~100%)는 렌더
+ * 표현 전용 구간이며(게임플레이 심도 층 3층 계약과 무관), stops 사이가
+ * 선형 보간이라 경계에서 색이 급변하지 않는다. 완전 검정은 틈·최원경
+ * 안개 끝에서만 나타난다.
+ */
+const ART = visualParams.artDirection;
+const GRADING_STOPS = ART.depthGrading.stops.map((stop) => ({
+  at: stop.at,
+  color: new THREE.Color(stop.color),
+  near: stop.near,
+  far: stop.far,
+  sunScale: stop.sunScale,
+  hemiScale: stop.hemiScale,
+  driftScale: stop.driftScale,
+}));
 
-/** 수면 위 배경·포그 — '밝음(수면)→어둠(심해)' 공식 문법의 수면 위 끝단 (§3.1) */
+/** 수면 위 배경·포그 — 수면 위 끝단 (§3.1). 아트 패스 대상 아님 — 기존 유지 */
 const SKY_COLOR = 0x9cc4d4;
 const ABOVE_FOG_NEAR = 60;
 const ABOVE_FOG_FAR = 280;
-
-/** 회색 박스 팔레트 (최종 아트 아님) */
-const FLOOR_COLOR = 0x3d474d;
-const WALL_COLOR = 0x59646c;
 
 /** 포즈 미주입 시 기본 수직 위치 — 스폰 관례(y=0, 순항 구간)와 동일 */
 const DEFAULT_SUBMARINE_Y = 0;
 
 /** 조준 카메라 lookAt 재사용 벡터 (프레임당 할당 방지) */
 const AIM_LOOK_TARGET = new THREE.Vector3();
+/** 프로펠러 wake 재사용 벡터 (프레임당 할당 방지) */
+const WAKE_ORIGIN = new THREE.Vector3();
+const WAKE_DIRECTION = new THREE.Vector3();
 
 /**
  * 자기 선체 전용 렌더 레이어 (13차 결의 3) — 조준 카메라에서 **레이어
@@ -117,8 +138,17 @@ export class CanyonScene implements ManagedScene {
   private readonly layout: CanyonLayout;
   private readonly rig: CameraRig;
   private readonly blobShadow: BlobShadow;
-  private readonly submarine = new SubmarineVisual();
-  private readonly propeller = new Propeller();
+  /** 저사양 fallback 사다리 (?quality=low) — 연출 단계 축소만 담당 */
+  private readonly quality: RenderQuality;
+  private readonly submarine: SubmarineVisual;
+  /** 부유물 파티클 — Points 1드로우, 개수는 quality가 결정 (0이면 미장착) */
+  private readonly drift: DriftParticles;
+  /** 프로펠러 기포·수류 — InstancedMesh 풀 1드로우, 속도 연동 */
+  private readonly propWake: PropellerWake;
+  private readonly propeller: Propeller;
+  /** 심도 그레이딩 대상 조명 — 기본 강도 × 심도 배율로 매 프레임 조정 */
+  private readonly sunLight: THREE.DirectionalLight;
+  private readonly hemiLight: THREE.HemisphereLight;
   private readonly seaSurface: SeaSurface;
   private readonly torpedoVisuals = new TorpedoVisuals();
   private readonly leadIndicator = new LeadShotIndicator();
@@ -169,6 +199,8 @@ export class CanyonScene implements ManagedScene {
   private econDemo: EconomyUiQaDemo | null = null;
   // 스프린트 B 표시 규칙 UI 단위 검증 fixture(?bdemo=1) — production 아님
   private bFixture: SprintBFixture | null = null;
+  // 스프린트 C HUD 표시 규칙 fixture(?cdemo=1) — production 아님
+  private cFixture: SprintCUiFixture | null = null;
   /**
    * `?bdemo` 검수 중에는 fixture 표본이 우선한다 — 이후 조립부의 production
    * 주입(현재 식별·호위는 미구현, 경비는 빈 목록)이 표본을 덮어쓰지 않게
@@ -187,6 +219,10 @@ export class CanyonScene implements ManagedScene {
   private unsubscribeTorpedoHit: Unsubscribe | null = null;
   // aimModeChanged 구독 — 조준경 표현은 게임플레이 상태만 소비 (5차 결의 3)
   private unsubscribeAimMode: Unsubscribe | null = null;
+  // floodingChanged 구독 — X-ray 침수 표시 구동 (C5, severity 매핑만)
+  private unsubscribeFlooding: Unsubscribe | null = null;
+  /** 침수 X-ray 인스턴스 — severity > 0 최초 수신 시 잠수함에 지연 장착 */
+  private floodingXray: XrayFloodingSpike | null = null;
 
   // 수면 위/아래 포그 전환 상태
   private cameraAboveSurface = false;
@@ -208,15 +244,44 @@ export class CanyonScene implements ManagedScene {
       this.movementParams = params.movement;
     });
 
-    this.scene.background = new THREE.Color(WATER_COLOR);
-    this.scene.fog = new THREE.Fog(WATER_COLOR, FOG_NEAR, FOG_FAR);
+    const surfaceStop = GRADING_STOPS[0]!;
+    this.scene.background = new THREE.Color(surfaceStop.color);
+    this.scene.fog = new THREE.Fog(surfaceStop.color.getHex(), surfaceStop.near, surfaceStop.far);
 
-    // 조명 예산 [확정 §12.2]: 실시간 조명 최대 2개 — 태양 방향광 1개만 사용.
-    // 남은 1개는 서치라이트/폭발 겸용으로 비워 둔다. 환경광은 보조 베이스.
-    const sun = new THREE.DirectionalLight(0xbfe3f2, 2.0);
-    sun.position.set(4, 12, 3);
-    this.scene.add(sun);
-    this.scene.add(new THREE.AmbientLight(0x1d3a47, 1.4));
+    // 조명 예산 [확정 §12.2]: 실시간 조명 최대 2개 — 태양 방향광 1 + 선수
+    // 탐조등 SpotLight 1(예약 슬롯 사용, 그림자 없음 — SubmarineVisual 장착).
+    // 보조 환경광(HemisphereLight)은 기존 회계대로 예산 외 보조 베이스다.
+    // 기본 강도는 심도 그레이딩이 매 프레임 배율 조정한다 (심해 감광).
+    this.sunLight = new THREE.DirectionalLight(ART.lights.sunColor, ART.lights.sunIntensity);
+    this.sunLight.position.set(4, 12, 3);
+    this.scene.add(this.sunLight);
+    this.hemiLight = new THREE.HemisphereLight(
+      ART.lights.skyColor,
+      ART.lights.groundColor,
+      ART.lights.hemisphereIntensity,
+    );
+    this.scene.add(this.hemiLight);
+
+    this.quality = parseRenderQuality(window.location.search);
+    if (this.quality.tier !== 'medium') {
+      console.info(`[CanyonScene] 품질 단계 ${this.quality.tier} (?quality=${this.quality.tier}).`);
+    }
+    // base color 텍스처 로딩 시작 (멱등) — 실패 시 아래 단색 재질이 그대로 유지된다
+    initSceneTextures(this.renderer.webgl.capabilities.getMaxAnisotropy());
+    // `?headlight=0` — 탐조등 렌더 QA 토글 (기본 켜짐, 게임 규칙 아님)
+    const headlightEnabled =
+      new URLSearchParams(window.location.search).get('headlight') !== '0';
+    this.submarine = new SubmarineVisual({
+      rimEnabled: this.quality.rimEnabled,
+      navGlowEnabled: this.quality.navGlowEnabled,
+      headlightEnabled,
+      headlightBeamsEnabled: this.quality.headlightBeamsEnabled,
+    });
+    this.propeller = new Propeller(this.quality.propDiscBlurEnabled);
+    this.drift = new DriftParticles(this.quality.driftCount);
+    this.scene.add(this.drift.points);
+    this.propWake = new PropellerWake(this.quality.wakeMaxBubbles, this.quality.wakeLifeScale);
+    this.scene.add(this.propWake.mesh);
 
     this.buildCanyonFromLayout();
     this.mountSubmarine();
@@ -224,6 +289,9 @@ export class CanyonScene implements ManagedScene {
     // 자기 선체(프로펠러·조준 소켓 포함 서브트리)를 전용 레이어에만 둔다.
     // 3인칭 카메라는 이 레이어를 켠 채 시작 — 조준 중에만 끈다 (13차 결의 3).
     this.submarine.root.traverse((node) => node.layers.set(SELF_HULL_LAYER));
+    // 탐조등 실광원은 전 레이어 활성 — 조준 카메라(레이어 1 제외)에서도
+    // 조명은 유지된다 (렌즈·빔 콘 시각물은 자기 선체와 함께 제외 — 의도).
+    this.submarine.headlight?.layers.enableAll();
     this.renderer.camera.layers.enable(SELF_HULL_LAYER);
 
     this.blobShadow = new BlobShadow(this.layout.floorY);
@@ -250,6 +318,11 @@ export class CanyonScene implements ManagedScene {
     this.mountBaseViewIfRequested();
     this.mountEconDemoIfRequested();
     this.mountSprintBFixtureIfRequested();
+    if (parseSprintCFixtureFlag(window.location.search)) {
+      const host = this.renderer.webgl.domElement.parentElement ?? document.body;
+      this.cFixture = new SprintCUiFixture(host);
+      console.info('[CanyonScene] 스프린트 C fixture 장착 (?cdemo=1 — UI 단위 검증 전용).');
+    }
 
     // `?aimdemo=1` — 어뢰 조준경 **표시 고정** QA 플래그: 조준경·조준 카메라·
     // 선체 레이어 제외를 임의 심도에서 정지 검수한다. 게임플레이 조준 판정
@@ -514,6 +587,12 @@ export class CanyonScene implements ManagedScene {
     this.unsubscribeTorpedoHit = bus.on('torpedoHit', (payload) =>
       this.onTorpedoHit(payload),
     );
+    // X-ray 침수 표시 (C5 — 보호 목록): floodingChanged severity만 매핑한다.
+    // 렌더 자체 침수 타이머 없음 — 심각도 0이면 다시 투명해진다.
+    this.unsubscribeFlooding?.();
+    this.unsubscribeFlooding = bus.on('floodingChanged', (payload) => {
+      this.applyFloodingSeverity(payload.severity);
+    });
     // 조준경: 게임플레이가 발행한 조준 상태만 소비 — 렌더 독자 전환 없음
     this.unsubscribeAimMode?.();
     this.unsubscribeAimMode = bus.on('aimModeChanged', (payload) => {
@@ -555,6 +634,30 @@ export class CanyonScene implements ManagedScene {
    * 스프린트 B 오버레이 지연 생성 — 조준경과 같은 host에 겹친다.
    * 소스가 이미 주입돼 있으면 생성 시점에 연결한다 (주입 순서 무관).
    */
+  /**
+   * 침수 심각도 → X-ray 반투명 표시 (C5). severity 값 매핑만 한다 —
+   * 침수량·속도 판정은 PlayerHullSystem·FloodingCore 소유다.
+   * 잠수함 자식이므로 자기 선체 레이어를 따라 조준 카메라에서는 함께
+   * 제외된다 (레이어 마스크 규약 유지).
+   */
+  private applyFloodingSeverity(severity: number): void {
+    if (!this.floodingXray && severity <= 0) return;
+    if (!this.floodingXray) {
+      try {
+        this.floodingXray = new XrayFloodingSpike(false); // 자동 데모 없음
+        this.floodingXray.root.position.set(0, 0.2, 0);
+        this.floodingXray.root.traverse((node) => node.layers.set(SELF_HULL_LAYER));
+        this.submarine.root.add(this.floodingXray.root);
+      } catch (error) {
+        this.floodingXray = null;
+        console.warn('[CanyonScene] 침수 X-ray 장착 실패 — HUD 침수 표시는 유지된다.', error);
+        return;
+      }
+    }
+    // 단일 'hull' 구획 심각도를 모든 X-ray 구획에 동일 매핑 (표현만)
+    for (let i = 0; i < 4; i += 1) this.floodingXray.setSeverity(i, severity);
+  }
+
   private ensureBOverlays(): void {
     const host = this.renderer.webgl.domElement.parentElement ?? document.body;
     if (!this.identificationTags) {
@@ -589,6 +692,7 @@ export class CanyonScene implements ManagedScene {
   update(deltaSeconds: number): void {
     // 경제 UI QA 데모 — 장면과 무관한 DOM 갱신 (기지 미리보기와도 병행)
     this.econDemo?.update();
+    this.cFixture?.update(deltaSeconds);
     // 기지 화면 미리보기(?base=1) — 협곡 장면 대신 기지 장면만 갱신 (QA 경로)
     if (this.baseView) {
       this.baseView.update(deltaSeconds);
@@ -624,10 +728,20 @@ export class CanyonScene implements ManagedScene {
 
     // 프로펠러: 계약 forwardSpeedMetersPerSecond(+선수/−선미)만 사용 —
     // 위치 차분 재계산 금지. A/D 단독 선회는 이 값에 영향이 없다.
-    this.propeller.update(
+    const signedSpeed = this.poseSource?.forwardSpeedMetersPerSecond ?? 0;
+    this.propeller.update(deltaSeconds, signedSpeed, this.movementParams);
+
+    // 프로펠러 기포·수류 — 원판 중심에서 로컬 후방(후진 시 전방)으로 사출.
+    // 발생률·사출 속도·wake 길이는 |속도|/최고 속력 비례 (계약 값만 소비).
+    this.submarine.root.updateMatrixWorld();
+    this.propeller.root.getWorldPosition(WAKE_ORIGIN);
+    WAKE_DIRECTION.set(0, 0, signedSpeed >= 0 ? 1 : -1)
+      .applyQuaternion(this.submarine.root.quaternion);
+    this.propWake.update(
       deltaSeconds,
-      this.poseSource?.forwardSpeedMetersPerSecond ?? 0,
-      this.movementParams,
+      WAKE_ORIGIN,
+      WAKE_DIRECTION,
+      Math.abs(signedSpeed) / Math.max(this.movementParams.maxSpeedMetersPerSecond.value, 1e-3),
     );
 
     this.seaSurface.update(deltaSeconds);
@@ -636,12 +750,20 @@ export class CanyonScene implements ManagedScene {
     this.salvageVisuals.update(deltaSeconds);
     this.periscope?.update(deltaSeconds);
     // 스프린트 B 오버레이 — 계약 read model → 화면 좌표 매핑만 (판정 없음)
+    this.floodingXray?.update(deltaSeconds);
     this.identificationTags?.update(this.renderer.camera);
     this.convoyVisuals?.update(this.renderer.camera);
     this.guardDirection?.update(deltaSeconds, this.renderer.camera);
     this.updateLeadIndicator();
     this.updateCargoShip(deltaSeconds);
     this.updateFogByCameraDepth();
+    // 부유물은 최종 카메라 위치 기준으로 되감는다 (조준 시점 포함)
+    this.drift.update(
+      deltaSeconds,
+      this.renderer.camera.position.x,
+      this.renderer.camera.position.y,
+      this.renderer.camera.position.z,
+    );
     this.xraySpike?.update(deltaSeconds);
     this.bossSpike?.update(deltaSeconds);
   }
@@ -704,24 +826,62 @@ export class CanyonScene implements ManagedScene {
     );
   }
 
-  /** 수면 위/아래에 따른 배경·포그 전환 (반사·굴절 없음 — 색·포그 차이만) */
+  /**
+   * 카메라 심도에 따른 배경·포그 (반사·굴절 없음 — 색·포그 차이만).
+   *  - 수면 위: 기존 하늘 톤 고정 (아트 패스 대상 아님).
+   *  - 수중: 수면(밝고 긴 가시거리)→해저(어둡고 짧은 가시거리) **연속 보간**
+   *    — 전경·중경·후경 명도 분리와 '하강할수록 어두워지는' 공식 문법.
+   *    보간 축은 레이아웃의 seaSurfaceY↔floorY라 협곡 데이터와 함께 움직인다
+   *    (렌더 독자 심도 수치 없음).
+   */
   private updateFogByCameraDepth(): void {
-    const above = this.renderer.camera.position.y > this.layout.seaSurfaceY;
-    if (above === this.cameraAboveSurface) return;
-    this.cameraAboveSurface = above;
-
+    const camera = this.renderer.camera;
+    const above = camera.position.y > this.layout.seaSurfaceY;
     const fog = this.scene.fog as THREE.Fog;
+    const background = this.scene.background as THREE.Color;
+    // 부유물(마린 스노우)은 수중 전용 — 수면 위에서는 감춘다
+    this.drift.points.visible = !above && this.quality.driftCount > 0;
+
     if (above) {
-      (this.scene.background as THREE.Color).set(SKY_COLOR);
+      if (this.cameraAboveSurface) return; // 수면 위 값은 고정 — 전환 시 1회만
+      this.cameraAboveSurface = true;
+      background.set(SKY_COLOR);
       fog.color.set(SKY_COLOR);
       fog.near = ABOVE_FOG_NEAR;
       fog.far = ABOVE_FOG_FAR;
-    } else {
-      (this.scene.background as THREE.Color).set(WATER_COLOR);
-      fog.color.set(WATER_COLOR);
-      fog.near = FOG_NEAR;
-      fog.far = FOG_FAR;
+      this.sunLight.intensity = ART.lights.sunIntensity;
+      this.hemiLight.intensity = ART.lights.hemisphereIntensity;
+      return;
     }
+    this.cameraAboveSurface = false;
+
+    // 정규화 심도(0=수면, 1=해저) → 그레이딩 stops 구간 선형 보간
+    const depthRange = this.layout.seaSurfaceY - this.layout.floorY;
+    const depth =
+      depthRange > 0
+        ? THREE.MathUtils.clamp(
+            (this.layout.seaSurfaceY - camera.position.y) / depthRange,
+            0,
+            1,
+          )
+        : 1;
+    let upper = 1;
+    while (upper < GRADING_STOPS.length - 1 && GRADING_STOPS[upper]!.at < depth) upper += 1;
+    const a = GRADING_STOPS[upper - 1]!;
+    const b = GRADING_STOPS[upper]!;
+    const t = THREE.MathUtils.clamp((depth - a.at) / Math.max(b.at - a.at, 1e-6), 0, 1);
+
+    fog.color.copy(a.color).lerp(b.color, t);
+    background.copy(fog.color);
+    fog.near = THREE.MathUtils.lerp(a.near, b.near, t);
+    fog.far = THREE.MathUtils.lerp(a.far, b.far, t);
+    // 심해 감광 — 기본 조명이 약해지며 탐조등의 상대 영향이 커진다
+    // (탐조등 자체 증폭 없음). 부유물은 깊을수록 조금 더 또렷해진다.
+    this.sunLight.intensity =
+      ART.lights.sunIntensity * THREE.MathUtils.lerp(a.sunScale, b.sunScale, t);
+    this.hemiLight.intensity =
+      ART.lights.hemisphereIntensity * THREE.MathUtils.lerp(a.hemiScale, b.hemiScale, t);
+    this.drift.setOpacityScale(THREE.MathUtils.lerp(a.driftScale, b.driftScale, t));
   }
 
   render(): void {
@@ -747,10 +907,16 @@ export class CanyonScene implements ManagedScene {
     this.unsubscribeTorpedoHit = null;
     this.unsubscribeAimMode?.();
     this.unsubscribeAimMode = null;
+    this.unsubscribeFlooding?.();
+    this.unsubscribeFlooding = null;
+    this.floodingXray?.dispose();
+    this.floodingXray = null;
     this.baseView?.dispose();
     this.baseView = null;
     this.econDemo?.dispose();
     this.econDemo = null;
+    this.cFixture?.dispose();
+    this.cFixture = null;
     this.bossSpike?.dispose();
     this.bossSpike = null;
     this.periscope?.dispose();
@@ -765,6 +931,9 @@ export class CanyonScene implements ManagedScene {
     this.xraySpike = null;
     this.cargoShip?.removeAndDispose();
     this.cargoShip = null;
+    this.drift.points.removeFromParent();
+    this.drift.dispose();
+    this.propWake.dispose();
     this.torpedoVisuals.dispose();
     this.salvageVisuals.dispose();
     this.leadIndicator.dispose();
@@ -786,31 +955,51 @@ export class CanyonScene implements ManagedScene {
    * 렌더 메시와 충돌 위치가 정의상 일치한다. 렌더 자체 수식 없음.
    */
   private buildCanyonFromLayout(): void {
-    const floorGeometry = new THREE.BoxGeometry(240, 1, 240);
+    // 해저 바닥 — 완만한 굴곡의 시각 전용 지면 (충돌 무관, RockShell 참조).
+    // UV = 월드 미터 (텍스처 repeat = 1/tileMeters — sceneTextures 규약).
+    // 미세한 emissive는 안개 속 최원경이 완전 검정으로 뭉개지는 것을 막는다.
+    const floorGeometry = buildSeabedGeometry(240);
     const floorMaterial = new THREE.MeshLambertMaterial({
-      color: FLOOR_COLOR,
+      color: ART.materials.floorColor,
+      emissive: ART.materials.floorEmissive,
       flatShading: true,
     });
     this.disposables.push(floorGeometry, floorMaterial);
     const floor = new THREE.Mesh(floorGeometry, floorMaterial);
-    floor.position.y = this.layout.floorY - 0.5;
+    floor.position.y = this.layout.floorY;
     this.scene.add(floor);
 
-    const unitBox = new THREE.BoxGeometry(1, 1, 1);
     const wallMaterial = new THREE.MeshLambertMaterial({
-      color: WALL_COLOR,
+      color: ART.materials.wallColor,
+      emissive: ART.materials.wallEmissive,
       flatShading: true,
     });
-    this.disposables.push(unitBox, wallMaterial);
+    this.disposables.push(wallMaterial);
 
-    for (const block of this.layout.blocks) {
-      const mesh = new THREE.Mesh(unitBox, wallMaterial);
-      mesh.scale.set(block.sizeX, block.sizeY, block.sizeZ);
+    for (let i = 0; i < this.layout.blocks.length; i += 1) {
+      const block = this.layout.blocks[i]!;
+      // 암벽 시각 셸 — 충돌 박스(계약 blocks)를 감싸는 렌더 전용 저폴리
+      // 암벽 형태 (기울어진 상단·잘린 모서리·층리 선반 — RockShell 참조).
+      // **배치·회전·충돌 데이터는 계약 blocks 그대로** (블록당 메시 1개,
+      // 드로우 수 불변 · 재질 공유 1개).
+      const blockGeometry = buildRockShellGeometry(block, i);
+      this.disposables.push(blockGeometry);
+      const mesh = new THREE.Mesh(blockGeometry, wallMaterial);
       // 계약 규약: 블록 바닥이 floorY — 중심 Y = floorY + sizeY/2
       mesh.position.set(block.x, this.layout.floorY + block.sizeY / 2, block.z);
       mesh.rotation.y = block.rotationY;
       this.scene.add(mesh);
     }
+
+    // 텍스처 도착 시 map 장착 — 실패하면 위 단색이 그대로 남는다 (fallback)
+    onSceneTexture('wall', (texture) => {
+      wallMaterial.map = texture;
+      wallMaterial.needsUpdate = true;
+    });
+    onSceneTexture('floor', (texture) => {
+      floorMaterial.map = texture;
+      floorMaterial.needsUpdate = true;
+    });
   }
 
   /**

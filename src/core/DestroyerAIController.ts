@@ -29,6 +29,7 @@
 import type { DestroyerAI } from '../contracts/systems';
 import type { FactionId } from '../contracts/faction';
 import type { SurfaceShipMotionPort } from '../contracts/guard';
+import type { EnemyAttackOutcome, EnemyAttackPort } from '../contracts/survival';
 
 export type DestroyerAIState = DestroyerAI['state'];
 
@@ -40,6 +41,12 @@ export interface DestroyerAIControllerOptions {
   /** 사건 지점 = 최초의 '마지막 확인 위치' */
   readonly lastKnownPosition: { readonly x: number; readonly z: number };
   readonly motion: SurfaceShipMotionPort;
+  /**
+   * 공격 요청 포트 (게임플레이 EnemyAttackCoordinator — INT-GAME-014).
+   * null이면 공격 요청을 만들지 않는다(이동·추적만). AI는 요청만 생성하며
+   * 사거리·쿨다운·피해량·반경·신관은 전부 포트·params 소유다.
+   */
+  readonly attackPort?: EnemyAttackPort | null;
   /** 초기 태도 — 초기 표적을 알고 스폰되면 'alert' */
   readonly initialState?: DestroyerAIState;
 }
@@ -49,7 +56,13 @@ export class DestroyerAIController implements DestroyerAI {
   readonly faction: FactionId;
 
   private readonly motion: SurfaceShipMotionPort;
+  private readonly attackPort: EnemyAttackPort | null;
   private targetEntityId: number;
+  /** 공격 요청 id 채번 — 개체 내 단조 증가 (시계·난수 없음) */
+  private attackSequence = 0;
+  /** 결정적 경과 시간(초) — requestedAt 입력 (프레임 시계 대용) */
+  private elapsedSeconds = 0;
+  private lastAttackOutcomeValue: EnemyAttackOutcome | null = null;
   private lastKnownX: number;
   private lastKnownZ: number;
   private hasLastKnown = true;
@@ -61,6 +74,7 @@ export class DestroyerAIController implements DestroyerAI {
     this.entityId = options.entityId;
     this.faction = options.faction;
     this.motion = options.motion;
+    this.attackPort = options.attackPort ?? null;
     this.targetEntityId = options.initialTargetEntityId;
     this.lastKnownX = options.lastKnownPosition.x;
     this.lastKnownZ = options.lastKnownPosition.z;
@@ -78,6 +92,11 @@ export class DestroyerAIController implements DestroyerAI {
 
   get currentTargetEntityId(): number {
     return this.targetEntityId;
+  }
+
+  /** 마지막 공격 요청 결과 (검증·디버깅용 읽기 전용 — AI는 결과로 판단하지 않는다) */
+  get lastAttackOutcome(): EnemyAttackOutcome | null {
+    return this.lastAttackOutcomeValue;
   }
 
   /**
@@ -100,6 +119,7 @@ export class DestroyerAIController implements DestroyerAI {
   update(deltaSeconds: number): void {
     if (this.disposed) return;
     if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0) return;
+    this.elapsedSeconds += deltaSeconds;
 
     // 수상함은 항상 해수면 고도를 유지한다 (높이 값은 포트 구현 소유).
     this.motion.maintainSurfaceHeight();
@@ -107,12 +127,37 @@ export class DestroyerAIController implements DestroyerAI {
     const goal = this.resolveGoal();
     if (!goal) {
       // 표적 무효 + 마지막 확인 위치 없음 = 안전한 정지(idle).
-      // 무장·탐지가 없으므로 제자리 유지가 가장 안전한 동작이다.
+      // 무장 판정이 없으므로 제자리 유지가 가장 안전한 동작이다.
       this.currentState = 'lost';
       return;
     }
 
     this.motion.turnToward(goal.x, goal.z, deltaSeconds);
+
+    // attack 상태에서만 공격 **요청**을 만든다 (INT-CORE-016, C4 경로).
+    // attack은 resolveGoal에서 '표적 생존 + 위치 관측 가능'일 때만 성립하므로
+    // 파괴된 표적·위치 미확인 상태에서는 여기 도달하지 않는다. 탐지 게이트는
+    // 게임플레이 motion 포트(getTargetPosition = stage detected일 때만)가
+    // 소유한다 — 컨트롤러가 stage를 재판정하지 않는다(이중 판정 금지).
+    // 실제 투하·피해 여부는 포트(사거리·쿨다운·params)가 결정하며,
+    // params null이면 결과는 unwired이고 폭뢰는 떨어지지 않는다.
+    if (this.currentState === 'attack' && this.attackPort && goal.kind === 'observed') {
+      this.attackSequence += 1;
+      const attackId = `attack:${this.entityId}:${this.attackSequence}`;
+      const attackerPosition = this.motion.getPosition();
+      this.lastAttackOutcomeValue = this.attackPort.requestAttack({
+        attackId,
+        attackerEntityId: this.entityId,
+        targetEntityId: this.targetEntityId,
+        attackerPosition,
+        // 관측된 3D 위치를 그대로 고정한다 (INT-CORE-019 — 임의 y 채움 금지).
+        // attack 상태는 resolveGoal에서 3D 관측 성공일 때만 성립한다.
+        // 명중 판정은 계속 게임플레이 소유.
+        targetPosition: { x: goal.x, y: goal.observedY, z: goal.z },
+        correlationId: attackId,
+        requestedAt: this.elapsedSeconds,
+      });
+    }
 
     // 월드 경계 이탈 방지 — 이번 프레임 전진의 도착 예정 지점이 경계 밖이면
     // 전진하지 않는다(경계 좌표는 포트 구현 소유, AI는 수치를 모른다).
@@ -127,12 +172,17 @@ export class DestroyerAIController implements DestroyerAI {
 
   /**
    * 이번 프레임의 목표 지점.
-   *  - 표적이 살아 있고 위치를 읽을 수 있으면 그 위치(= 'attack'),
-   *    동시에 마지막 확인 위치를 갱신한다.
-   *  - 아니면 마지막 확인 위치로 접근(= 'alert').
+   *  - 표적이 살아 있고 3D 위치를 관측할 수 있으면 그 위치(= 'attack') —
+   *    observedY는 관측 순간의 실제 심도이며 공격 요청에 그대로 고정된다
+   *    (INT-CORE-019: 임의 y 채움·투하 후 재추적 금지). 동시에 마지막 확인
+   *    수평 위치를 갱신한다.
+   *  - 아니면 마지막 확인 위치로 접근(= 'alert' — 관측이 아니므로 y 없음).
    *  - 둘 다 없으면 null(= 'lost' → 정지).
    */
-  private resolveGoal(): { x: number; z: number } | null {
+  private resolveGoal():
+    | { x: number; z: number; observedY: number; kind: 'observed' }
+    | { x: number; z: number; kind: 'lastKnown' }
+    | null {
     if (this.motion.isTargetAlive(this.targetEntityId)) {
       const targetPosition = this.motion.getTargetPosition(this.targetEntityId);
       if (targetPosition) {
@@ -140,12 +190,17 @@ export class DestroyerAIController implements DestroyerAI {
         this.lastKnownZ = targetPosition.z;
         this.hasLastKnown = true;
         this.currentState = 'attack';
-        return { x: targetPosition.x, z: targetPosition.z };
+        return {
+          x: targetPosition.x,
+          z: targetPosition.z,
+          observedY: targetPosition.y,
+          kind: 'observed',
+        };
       }
     }
     if (this.hasLastKnown) {
       this.currentState = 'alert';
-      return { x: this.lastKnownX, z: this.lastKnownZ };
+      return { x: this.lastKnownX, z: this.lastKnownZ, kind: 'lastKnown' };
     }
     return null;
   }

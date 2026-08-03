@@ -6,7 +6,9 @@
  *    (손실률은 `params/economy.json creditLossOnDestroyedRatio`)
  *  - 저장 = MetaLoop이 발행하는 기존 `saveRequested('settlement')` → SaveBridge.
  *    **코디네이터는 SavePort를 직접 호출하지 않는다**(저장 책임 표 A-12 유지).
- *  - 기지 복귀 = `MetaLoop.completeDebrief()` (허용 전환표 DEBRIEF→BASE)
+ *  - 기지 복귀 = **사용자 확인 command**(`DebriefConfirmCommand`) 경유의
+ *    `MetaLoop.completeDebrief()` [INT-CORE-016 개정 — 저장 성공이 BASE
+ *    전환을 자동으로 일으키지 않는다. 이 코디네이터는 전환하지 않는다]
  *
  * 상태 규약: `MetaState`를 확장하지 않는다 — 파괴 사실은
  * `PlayerHullState.isDestroyed`가 소유하고 메타는 `DEBRIEF`를 쓴다.
@@ -14,7 +16,7 @@
  * 저장 실패 정책:
  *  - 정산은 이미 지갑에 반영됐으므로 **재정산하지 않는다**(중복 정산 금지)
  *  - `DEBRIEF`에 머문다 — 기지로 넘어가지 않는다
- *  - `retrySave()`로 저장만 재시도하고, 성공 시 `BASE`로 전환한다
+ *  - `retrySave()`로 저장만 재시도하고, 성공 시 확인 command가 활성화된다
  *  - 저장 실패를 성공으로 보고하지 않는다
  */
 
@@ -125,11 +127,12 @@ export class SortieFailureCoordinator implements GameSystem, SortieFailurePort, 
       nextState: 'DEBRIEF',
     };
 
-    const finalReport = saveStatus === 'saved' ? this.returnToBase(report) : report;
-    this.lastReportValue = finalReport;
+    // [INT-CORE-016] 저장 성공이어도 자동 전환하지 않는다 — nextState는
+    // DEBRIEF로 남고, BASE 복귀는 확인 command(DebriefConfirmCommand) 소유.
+    this.lastReportValue = report;
     this.onSettled?.();
-    this.bus?.emit('sortieFailed', { report: finalReport });
-    return finalReport;
+    this.bus?.emit('sortieFailed', { report });
+    return report;
   }
 
   /**
@@ -141,13 +144,13 @@ export class SortieFailureCoordinator implements GameSystem, SortieFailurePort, 
     if (!previous || previous.saveStatus === 'saved') return null;
 
     const succeeded = retrySave();
+    // 재정산 없음 · 자동 전환 없음 — 성공 시 확인 command가 활성화된다.
     const report: SortieFailureReport = {
       ...previous,
       saveStatus: succeeded ? 'saved' : 'saveFailed',
     };
-    const finalReport = succeeded ? this.returnToBase(report) : report;
-    this.lastReportValue = finalReport;
-    return finalReport;
+    this.lastReportValue = report;
+    return report;
   }
 
   update(_deltaSeconds: number): void {}
@@ -162,17 +165,6 @@ export class SortieFailureCoordinator implements GameSystem, SortieFailurePort, 
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.bus = null;
-  }
-
-  private returnToBase(report: SortieFailureReport): SortieFailureReport {
-    try {
-      this.meta.completeDebrief();
-    } catch (error) {
-      // 허용 전환표 밖이면 상태를 유지한다 (내부 예외는 밖으로 흘리지 않는다).
-      console.error('[SortieFailure] 기지 복귀 전환 실패 — DEBRIEF 유지', error);
-      return { ...report, nextState: 'DEBRIEF' };
-    }
-    return { ...report, nextState: 'BASE' };
   }
 
   private currentSaveStatus(): FailureSaveStatus {

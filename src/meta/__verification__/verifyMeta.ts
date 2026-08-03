@@ -5,6 +5,7 @@
  * 실제 EventBus·MetaLoop·순수 함수를 그대로 사용한다 — 난수·시간 의존 없음.
  */
 
+import { validateCombatParams } from '../../tools/combatParams';
 import { EventBus } from '../../core/EventBus';
 import type { SystemContext } from '../../core/GameSystem';
 import type { GameStateMachine } from '../../core/GameStateMachine';
@@ -61,7 +62,12 @@ import type {
 import { PlayerHullSystem } from '../../core/PlayerHullSystem';
 import { FloodingCore } from '../../core/FloodingCore';
 import { SortieFailureCoordinator } from '../../core/SortieFailureCoordinator';
-import { DebriefStateTracker } from '../../core/PveIntegration';
+import {
+  DebriefConfirmCommand,
+  DebriefStateTracker,
+  EnemyAttackPortBinding,
+} from '../../core/PveIntegration';
+import type { EnemyAttackPort, EnemyAttackRequest } from '../../contracts/survival';
 import type {
   DamageRequest,
   FloodingParams,
@@ -1288,7 +1294,7 @@ export function runMetaVerification(): VerificationResult[] {
       const buildMotion = (
         options: {
           targetAlive?: boolean;
-          targetPosition?: { x: number; z: number } | null;
+          targetPosition?: { x: number; y: number; z: number } | null;
           withinBounds?: boolean;
         } = {},
       ): { port: SurfaceShipMotionPort; log: MotionLog } => {
@@ -1306,7 +1312,7 @@ export function runMetaVerification(): VerificationResult[] {
           isWithinWorldBounds: () => options.withinBounds !== false,
           isTargetAlive: () => options.targetAlive !== false,
           getTargetPosition: () =>
-            options.targetPosition === undefined ? { x: 50, z: 60 } : options.targetPosition,
+            options.targetPosition === undefined ? { x: 50, y: -2, z: 60 } : options.targetPosition,
         };
         return { port, log };
       };
@@ -1736,7 +1742,7 @@ export function runMetaVerification(): VerificationResult[] {
       const settlementSaves = ctx.events.filter((e) => e === 'save:settlement').length;
       const endedCount = ctx.events.filter((e) => e.startsWith('ended:')).length;
       check(
-        'C 실패: 파괴 1회 → 실패 1회 → 정산 1회 → 저장 1회 → BASE (중복 실패·중복 정산 없음)',
+        'C 실패: 파괴 1회 → 실패 1회 → 정산 1회 → 저장 1회, DEBRIEF 유지 (자동 BASE 전환 0)',
         report !== null &&
           report.reason === 'hullDestroyed' &&
           report.pendingCredits === 100 &&
@@ -1745,13 +1751,24 @@ export function runMetaVerification(): VerificationResult[] {
           report.securedRareParts === 1 &&
           report.finalRareParts === 1 &&
           report.saveStatus === 'saved' &&
-          report.nextState === 'BASE' &&
-          ctx.loop.metaState === 'BASE' &&
+          report.nextState === 'DEBRIEF' &&
+          ctx.loop.metaState === 'DEBRIEF' &&
           settlementSaves === 1 &&
           endedCount === 1 &&
           second === null &&
           ctx.failures.length === 1,
-        `report=${JSON.stringify(report)}, saves=${settlementSaves}, ended=${endedCount}`,
+        `report=${JSON.stringify(report)}, saves=${settlementSaves}, ended=${endedCount}, state=${ctx.loop.metaState}`,
+      );
+      // 확인 command — 저장 성공 후에만, 확인 1회당 BASE 전환 1회
+      const tracker = new DebriefStateTracker(ctx.coordinator, null, ctx.loop);
+      tracker.initialize(verificationContext(ctx.bus));
+      const confirmCommand = new DebriefConfirmCommand(ctx.loop, tracker);
+      const first = confirmCommand.confirm();
+      const duplicate = confirmCommand.confirm();
+      check(
+        'C 확인: confirm 후 BASE 전환 1회 · 중복 confirm 거부 (invalidState)',
+        first === 'confirmed' && ctx.loop.metaState === 'BASE' && duplicate === 'invalidState',
+        `first=${first}, dup=${duplicate}, state=${ctx.loop.metaState}`,
       );
     }
     {
@@ -1761,28 +1778,42 @@ export function runMetaVerification(): VerificationResult[] {
       const failed = ctx.coordinator.lastReport;
       const stateAfterFail = ctx.loop.metaState;
       const creditsAfterFail = ctx.loop.wallet.credits;
+      const tracker = new DebriefStateTracker(ctx.coordinator, null, ctx.loop);
+      tracker.initialize(verificationContext(ctx.bus));
+      const confirmCommand = new DebriefConfirmCommand(ctx.loop, tracker);
+      // 저장 미완료 상태의 confirm은 거부된다
+      const rejectedConfirm = confirmCommand.confirm();
       ctx.saveOk.value = true;
       const retried = ctx.coordinator.retrySave(() => true);
+      const stateAfterRetry = ctx.loop.metaState;
+      const confirmed = confirmCommand.confirm();
       const settlementSaves = ctx.events.filter((e) => e === 'save:settlement').length;
       const endedCount = ctx.events.filter((e) => e.startsWith('ended:')).length;
       check(
-        'C 저장 실패: 성공으로 위장 없음 · DEBRIEF 유지 · 재시도는 재정산 없이 BASE 전환',
+        'C 저장 실패: 위장 없음 · confirm 거부(saveIncomplete) · retry 재정산 0 · retry 후에도 confirm 전 DEBRIEF · confirm 후 BASE',
         failed?.saveStatus === 'saveFailed' &&
           failed.nextState === 'DEBRIEF' &&
           stateAfterFail === 'DEBRIEF' &&
+          rejectedConfirm === 'saveIncomplete' &&
           retried?.saveStatus === 'saved' &&
-          retried.nextState === 'BASE' &&
+          retried.nextState === 'DEBRIEF' &&
+          stateAfterRetry === 'DEBRIEF' &&
+          confirmed === 'confirmed' &&
           ctx.loop.metaState === 'BASE' &&
           ctx.loop.wallet.credits === creditsAfterFail &&
           settlementSaves === 1 &&
           endedCount === 1,
-        `failed=${failed?.saveStatus}/${failed?.nextState}, retried=${retried?.saveStatus}/${retried?.nextState}, saves=${settlementSaves}`,
+        `failed=${failed?.saveStatus}, reject=${rejectedConfirm}, retried=${retried?.saveStatus}/${stateAfterRetry}, confirm=${confirmed}, saves=${settlementSaves}`,
       );
     }
     {
       // 다음 출항: 초기화 후 다시 실패를 처리할 수 있어야 한다
       const ctx = buildFailure();
       ctx.hull.applyDamage(damage({ rawDamage: 200 }));
+      // 개정 정책: BASE 복귀는 확인 command 경유
+      const nextTracker = new DebriefStateTracker(ctx.coordinator, null, ctx.loop);
+      nextTracker.initialize(verificationContext(ctx.bus));
+      new DebriefConfirmCommand(ctx.loop, nextTracker).confirm();
       ctx.hull.resetForNewSortie();
       ctx.coordinator.resetForNewSortie();
       ctx.loop.beginSortiePrep();
@@ -1790,8 +1821,8 @@ export function runMetaVerification(): VerificationResult[] {
       ctx.hull.applyDamage(damage({ damageEventId: 'dmg-next', correlationId: 'atk-next', rawDamage: 200 }));
       const endedCount = ctx.events.filter((e) => e.startsWith('ended:')).length;
       check(
-        'C 다음 출항: reset 후 정상 상태로 재시작 · 두 번째 실패도 1회 정산',
-        endedCount === 2 && ctx.failures.length === 2 && ctx.loop.metaState === 'BASE',
+        'C 다음 출항: reset 후 정상 상태로 재시작 · 두 번째 실패도 1회 정산 (confirm 전 DEBRIEF)',
+        endedCount === 2 && ctx.failures.length === 2 && ctx.loop.metaState === 'DEBRIEF',
         `ended=${endedCount}, failures=${ctx.failures.length}, state=${ctx.loop.metaState}`,
       );
     }
@@ -1845,26 +1876,86 @@ export function runMetaVerification(): VerificationResult[] {
       );
     }
     {
+      // C9 v0.1.1 — 피격 근접도별 침수 기여 누적: direct 1회 + near 1회가
+      // 각자의 기여만큼 정확히 더해진다 (값은 요청이 싣고 온 params 파생분).
+      const { hull } = buildHull();
+      hull.applyDamage(
+        damage({ damageEventId: 'fd', correlationId: 'fd', rawDamage: 10, causesFlooding: true, floodingContribution: 0.35 }),
+      );
+      const afterDirect = hull.snapshot().floodingLevel;
+      hull.applyDamage(
+        damage({ damageEventId: 'fn', correlationId: 'fn', rawDamage: 5, causesFlooding: true, floodingContribution: 0.1 }),
+      );
+      const afterNear = hull.snapshot().floodingLevel;
+      check(
+        'C9 v0.1.1 침수 기여 누적: direct(0.35) + near(0.10) = 0.45 (정확 가산)',
+        Math.abs(afterDirect - 0.35) < 1e-9 && Math.abs(afterNear - 0.45) < 1e-9,
+        `direct후=${afterDirect}, near후=${afterNear}`,
+      );
+    }
+    {
+      // C9 v0.1.1 — 중복 DamageEvent는 선체 피해와 침수 기여 **모두** 1회만
+      const { hull } = buildHull();
+      const request = damage({ damageEventId: 'dup', correlationId: 'dup', rawDamage: 10, causesFlooding: true, floodingContribution: 0.35 });
+      hull.applyDamage(request);
+      const first = hull.snapshot();
+      const second = hull.applyDamage(request);
+      const after = hull.snapshot();
+      check(
+        'C9 v0.1.1 중복 event: 선체·침수 기여 둘 다 1회 (ignoredDuplicate)',
+        second.outcome === 'ignoredDuplicate' &&
+          after.currentHull === first.currentHull &&
+          Math.abs(after.floodingLevel - 0.35) < 1e-9,
+        `outcome=${second.outcome}, flood=${after.floodingLevel}`,
+      );
+    }
+    {
+      // C9 v0.1.1 — 누적 침수는 1에서 clamp (기여 합이 1을 넘어도)
+      const { hull } = buildHull();
+      for (let i = 0; i < 4; i += 1) {
+        hull.applyDamage(
+          damage({ damageEventId: `cl-${i}`, correlationId: `cl-${i}`, rawDamage: 1, causesFlooding: true, floodingContribution: 0.35 }),
+        );
+      }
+      check(
+        'C9 v0.1.1 침수 상한: 기여 합 1.4 → level 1.0 clamp',
+        hull.snapshot().floodingLevel === 1,
+        `level=${hull.snapshot().floodingLevel}`,
+      );
+    }
+    {
       // DEBRIEF 읽기 모델 — 정상 귀환
       const ctx = buildFailure();
-      const tracker = new DebriefStateTracker(ctx.coordinator, {
-        get lastSaveSucceeded() {
-          return ctx.saveOk.value;
+      const tracker = new DebriefStateTracker(
+        ctx.coordinator,
+        {
+          get lastSaveSucceeded() {
+            return ctx.saveOk.value;
+          },
         },
-      });
+        ctx.loop,
+      );
       tracker.initialize(verificationContext(ctx.bus));
       const beforeEnd = tracker.readModel();
       ctx.loop.settleSortie({ outcome: 'returned' });
       const returned = tracker.readModel();
+      // 정상 귀환도 동일 confirm 정책 — 자동 BASE 전환 없음
+      const stateBeforeConfirm = ctx.loop.metaState;
+      const confirmCommand = new DebriefConfirmCommand(ctx.loop, tracker);
+      const confirmed = confirmCommand.confirm();
       check(
-        'C DEBRIEF 모델: 정산 전 none → 정상 귀환 returned + settlement (실패 화면 데이터 없음)',
+        'C DEBRIEF 모델: 정상 귀환도 동일 confirm 정책 — returned·canConfirm → confirm 후 BASE (자동 전환 0)',
         beforeEnd.kind === 'none' &&
           returned.kind === 'returned' &&
           returned.settlement !== null &&
           returned.failure === null &&
           returned.saveStatus === 'saved' &&
-          !returned.canRetrySave,
-        `before=${beforeEnd.kind}, after=${returned.kind}/${returned.saveStatus}`,
+          !returned.canRetrySave &&
+          returned.canConfirm &&
+          stateBeforeConfirm === 'DEBRIEF' &&
+          confirmed === 'confirmed' &&
+          ctx.loop.metaState === 'BASE',
+        `before=${beforeEnd.kind}, after=${returned.kind}/${returned.saveStatus}/${returned.canConfirm}, confirm=${confirmed}`,
       );
     }
     {
@@ -1883,21 +1974,26 @@ export function runMetaVerification(): VerificationResult[] {
       const retried = tracker.readModel();
       // 같은 성공 이후 중복 재시도 — 정산·전환이 다시 일어나지 않는다
       const duplicate = ctx.coordinator.retrySave(() => true);
+      const confirmCommand = new DebriefConfirmCommand(ctx.loop, tracker);
+      const confirmed = confirmCommand.confirm();
       const settlementSaves = ctx.events.filter((e) => e === 'save:settlement').length;
       const endedCount = ctx.events.filter((e) => e.startsWith('ended:')).length;
       check(
-        'C DEBRIEF 모델: 파괴+저장 실패 = destroyed·canRetrySave → 재시도 후 saved·BASE 1회 (중복 수신 무시)',
+        'C DEBRIEF 모델: 파괴+저장 실패 = canRetrySave·canConfirm=false → 재시도 후 canConfirm → confirm으로만 BASE',
         failed.kind === 'destroyed' &&
           failed.failure?.reason === 'hullDestroyed' &&
           failed.saveStatus === 'saveFailed' &&
           failed.canRetrySave &&
+          !failed.canConfirm &&
           retried.saveStatus === 'saved' &&
           !retried.canRetrySave &&
+          retried.canConfirm &&
           duplicate === null &&
+          confirmed === 'confirmed' &&
           ctx.loop.metaState === 'BASE' &&
           settlementSaves === 1 &&
           endedCount === 1,
-        `failed=${failed.kind}/${failed.saveStatus}, retried=${retried.saveStatus}, dup=${duplicate === null ? 'null' : 'report'}, saves=${settlementSaves}`,
+        `failed=${failed.saveStatus}/${failed.canConfirm}, retried=${retried.saveStatus}/${retried.canConfirm}, confirm=${confirmed}, saves=${settlementSaves}`,
       );
     }
     {
@@ -1912,6 +2008,277 @@ export function runMetaVerification(): VerificationResult[] {
         'C DEBRIEF 모델: 그래픽스가 값을 바꿀 수 없음 (스냅샷 — 다음 조회 불변)',
         tracker.readModel().kind === 'aborted',
         `after-write=${tracker.readModel().kind}`,
+      );
+    }
+    {
+      // ── INT-CORE-016: AI 공격 요청 생성 (C4) ──
+      const buildAttackAi = (
+        options: {
+          targetAlive?: boolean;
+          targetPosition?: { x: number; y: number; z: number } | null;
+          port?: EnemyAttackPort | null;
+        } = {},
+      ): { ai: DestroyerAIController; requests: EnemyAttackRequest[] } => {
+        const requests: EnemyAttackRequest[] = [];
+        const recordingPort: EnemyAttackPort = {
+          requestAttack: (request) => {
+            requests.push(request);
+            return 'delivered';
+          },
+        };
+        const motion: SurfaceShipMotionPort = {
+          getPosition: () => ({ x: 10, y: 0, z: 10 }),
+          getForward: () => ({ x: 0, z: -1 }),
+          turnToward: () => {},
+          moveForward: () => {},
+          maintainSurfaceHeight: () => {},
+          isWithinWorldBounds: () => true,
+          isTargetAlive: () => options.targetAlive !== false,
+          getTargetPosition: () =>
+            options.targetPosition === undefined ? { x: 50, y: -2, z: 60 } : options.targetPosition,
+        };
+        const ai = new DestroyerAIController({
+          entityId: 8000,
+          faction: 'patrol',
+          initialTargetEntityId: PLAYER_ENTITY_ID,
+          lastKnownPosition: { x: 3, z: -4 },
+          motion,
+          attackPort: options.port === undefined ? recordingPort : options.port,
+          initialState: 'alert',
+        });
+        return { ai, requests };
+      };
+
+      {
+        const { ai, requests } = buildAttackAi();
+        ai.update(0.5);
+        ai.update(0.5);
+        const request = requests[0];
+        check(
+          'C4 AI 공격: attack 상태에서 EnemyAttackRequest 생성 — 요청만, id 단조·표적/좌표 관측값',
+          ai.state === 'attack' &&
+            requests.length === 2 &&
+            request?.attackerEntityId === 8000 &&
+            request.targetEntityId === PLAYER_ENTITY_ID &&
+            request.targetPosition.x === 50 &&
+            request.attackId === 'attack:8000:1' &&
+            requests[1]?.attackId === 'attack:8000:2' &&
+            requests[1].requestedAt > request.requestedAt,
+          `state=${ai.state}, requests=${requests.length}, first=${request?.attackId}`,
+        );
+      }
+      {
+        // 표적 파괴(destroyed) → alert(마지막 확인 위치 접근) — 요청 0건
+        const { ai, requests } = buildAttackAi({ targetAlive: false });
+        ai.update(0.5);
+        ai.update(0.5);
+        check(
+          'C4 AI 공격: 표적 destroyed = alert 접근·공격 요청 0건',
+          ai.state === 'alert' && requests.length === 0,
+          `state=${ai.state}, requests=${requests.length}`,
+        );
+      }
+      {
+        // 위치 미확인(탐지 게이트가 null) → alert — 요청 0건
+        const { ai, requests } = buildAttackAi({ targetPosition: null });
+        ai.update(0.5);
+        check(
+          'C4 AI 공격: target 위치 미확인 = 요청 0건 (탐지 게이트는 게임플레이 포트 소유)',
+          ai.state === 'alert' && requests.length === 0,
+          `state=${ai.state}, requests=${requests.length}`,
+        );
+      }
+      {
+        // lost 상태(마지막 위치까지 상실) — 요청 0건
+        const { ai, requests } = buildAttackAi({ targetAlive: false });
+        ai.dispose();
+        ai.update(0.5);
+        check(
+          'C4 AI 공격: lost·dispose 후 공격 요청 0건',
+          requests.length === 0,
+          `requests=${requests.length}`,
+        );
+      }
+      {
+        // 포트 미연결 — attack 상태여도 요청 자체를 만들지 않는다 (즉시 피해 없음)
+        const { ai, requests } = buildAttackAi({ port: null });
+        ai.update(0.5);
+        check(
+          'C4 AI 공격: 포트 미연결 = attack이어도 요청 0건 (대체 피해 경로 없음)',
+          ai.state === 'attack' && requests.length === 0,
+          `state=${ai.state}, requests=${requests.length}`,
+        );
+      }
+      {
+        // 바인딩 미연결 = unwired — 폭뢰·피해 0건 보장 (composition 기본 상태)
+        const binding = new EnemyAttackPortBinding();
+        const outcome = binding.requestAttack({
+          attackId: 'a-1',
+          attackerEntityId: 8000,
+          targetEntityId: PLAYER_ENTITY_ID,
+          attackerPosition: { x: 0, y: 0, z: 0 },
+          targetPosition: { x: 1, y: 0, z: 1 },
+          correlationId: 'a-1',
+          requestedAt: 1,
+        });
+        let delivered = 0;
+        binding.attach({
+          requestAttack: () => {
+            delivered += 1;
+            return 'delivered';
+          },
+        });
+        const afterAttach = binding.requestAttack({
+          attackId: 'a-2',
+          attackerEntityId: 8000,
+          targetEntityId: PLAYER_ENTITY_ID,
+          attackerPosition: { x: 0, y: 0, z: 0 },
+          targetPosition: { x: 1, y: 0, z: 1 },
+          correlationId: 'a-2',
+          requestedAt: 2,
+        });
+        check(
+          'C4 바인딩: 미연결 = unwired(투하·피해 0) → attach 1줄 후 게임플레이 포트로 전달',
+          outcome === 'unwired' && !new EnemyAttackPortBinding().wired && afterAttach === 'delivered' && delivered === 1,
+          `before=${outcome}, after=${afterAttach}`,
+        );
+      }
+      {
+        // TrackingStateSource — 어댑터가 AI 상태·마지막 확인 위치 스냅샷 제공
+        const { ai } = buildAttackAi();
+        ai.update(0.5);
+        const adapter = new GuardShipAdapter({ create: () => ai });
+        adapter.spawn('req-t', {
+          entityId: 8000,
+          faction: 'patrol',
+          spawnReason: 'neutralAttack',
+          initialTargetEntityId: PLAYER_ENTITY_ID,
+          initialTargetPosition: { x: 3, z: -4 },
+          spawnPosition: { x: 23, z: -4 },
+          displayLabelId: 'faction.patrol',
+        });
+        const tracked = adapter.trackedShips[0];
+        check(
+          'C3 추적 소스: 어댑터가 TrackingStateView 스냅샷 제공 (entityId·state·lastKnown)',
+          adapter.trackedShips.length === 1 &&
+            tracked?.entityId === 8000 &&
+            tracked.state === 'attack' &&
+            tracked.lastKnownPosition !== null,
+          `tracked=${JSON.stringify(tracked)}`,
+        );
+      }
+    }
+    {
+      // ── INT-CORE-017: combat params 정규화 (중첩 로더 → 평면 gameplay 입력) ──
+      const wrap = (value: number | null): { value: number | null } => ({ value });
+      const nested = {
+        hull: {
+          baseMaxHull: wrap(100),
+          damagedRatioThreshold: wrap(0.6),
+          criticalRatioThreshold: wrap(0.25),
+        },
+        depthCharge: {
+          directRadiusMeters: wrap(3),
+          nearRadiusMeters: wrap(9),
+          directDamage: wrap(40),
+          nearDamage: wrap(15),
+          dropCooldownSeconds: wrap(6),
+          directFloodingContribution: wrap(0.5),
+          nearFloodingContribution: wrap(0.2),
+        },
+        flooding: {
+          minorThreshold: wrap(0.2),
+          majorThreshold: wrap(0.5),
+          catastrophicThreshold: wrap(0.8),
+          hullDamagePerSecondAtFull: wrap(4),
+          spreadPerSecond: wrap(0.02),
+        },
+        detection: {
+          distanceFalloff: { value: { fullEffectMeters: 30, zeroEffectMeters: 120 } },
+          gaugeDecayPerSecond: wrap(0.08),
+        },
+      };
+      const result = validateCombatParams(nested);
+      // 필드 교환·단위 변환 오류 검사 — 서로 다른 값이 정확한 자리에 도착한다
+      check(
+        'C9 정규화: 중첩 로더 결과가 정확한 평면 계약 블록으로 변환 (필드 교환 0)',
+        result.hull?.baseMaxHull === 100 &&
+          result.hull.damagedRatioThreshold === 0.6 &&
+          result.hull.criticalRatioThreshold === 0.25 &&
+          result.depthCharge?.directRadiusMeters === 3 &&
+          result.depthCharge.nearRadiusMeters === 9 &&
+          result.depthCharge.directDamage === 40 &&
+          result.depthCharge.nearDamage === 15 &&
+          result.depthCharge.dropCooldownSeconds === 6 &&
+          result.depthCharge.directFloodingContribution === 0.5 &&
+          result.depthCharge.nearFloodingContribution === 0.2 &&
+          result.flooding?.spreadPerSecond === 0.02 &&
+          result.flooding.hullDamagePerSecondAtFull === 4 &&
+          result.detectionTuning?.distanceFalloff?.fullEffectMeters === 30 &&
+          result.detectionTuning.distanceFalloff.zeroEffectMeters === 120 &&
+          result.detectionTuning.gaugeDecayPerSecond === 0.08 &&
+          result.pendingFields.length === 0,
+        JSON.stringify(result.pendingFields),
+      );
+      // null 보존 + 미확정 목록
+      const partial = validateCombatParams({
+        ...nested,
+        hull: {
+          baseMaxHull: wrap(null),
+          damagedRatioThreshold: wrap(0.6),
+          criticalRatioThreshold: wrap(0.25),
+        },
+      });
+      check(
+        'C9 정규화: null은 null로 보존 — 부분 확정 시 hull 블록 미주입(unwired)·pending 보고',
+        partial.hull === null && partial.pendingFields.includes('hull.baseMaxHull'),
+        `hull=${partial.hull === null ? 'null' : 'set'}, pending=${partial.pendingFields.join(',')}`,
+      );
+      // NaN·음수 거부 — 필드명 포함 명시적 실패
+      let nanMessage = '';
+      try {
+        validateCombatParams({
+          ...nested,
+          depthCharge: { ...nested.depthCharge, directDamage: wrap(Number.NaN) },
+        });
+      } catch (error) {
+        nanMessage = error instanceof Error ? error.message : '';
+      }
+      let negativeMessage = '';
+      try {
+        validateCombatParams({
+          ...nested,
+          flooding: { ...nested.flooding, spreadPerSecond: wrap(-1) },
+        });
+      } catch (error) {
+        negativeMessage = error instanceof Error ? error.message : '';
+      }
+      check(
+        'C9 정규화: NaN·음수 = 필드명 포함 명시적 검증 실패 (조용한 보정 없음)',
+        nanMessage.includes('directDamage') && negativeMessage.includes('spreadPerSecond'),
+        `nan=${nanMessage.slice(0, 60)} / neg=${negativeMessage.slice(0, 60)}`,
+      );
+      // C9 v0.1.1 침수 기여 관계: 0 < near < direct ≤ 1 — 위반 3형 거부
+      const rejects = (block: Record<string, unknown>): string => {
+        try {
+          validateCombatParams({ ...nested, depthCharge: { ...nested.depthCharge, ...block } });
+          return '';
+        } catch (error) {
+          return error instanceof Error ? error.message : '';
+        }
+      };
+      const overOne = rejects({ directFloodingContribution: wrap(1.5) });
+      const zeroNear = rejects({ nearFloodingContribution: wrap(0) });
+      const inverted = rejects({
+        directFloodingContribution: wrap(0.2),
+        nearFloodingContribution: wrap(0.5),
+      });
+      check(
+        'C9 v0.1.1 침수 기여 관계 검증: 1 초과·0·near≥direct 전부 필드명 포함 거부',
+        overOne.includes('directFloodingContribution') &&
+          zeroNear.includes('nearFloodingContribution') &&
+          inverted.includes('nearFloodingContribution'),
+        `over=${overOne.slice(0, 50)} / zero=${zeroNear.slice(0, 50)} / inv=${inverted.slice(0, 60)}`,
       );
     }
     {

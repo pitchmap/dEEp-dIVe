@@ -15,6 +15,7 @@
 import * as THREE from 'three';
 import type { ManagedScene } from '../core/SceneManager';
 import type { Renderer } from './Renderer';
+import { initSceneTextures, onSceneTexture } from './sceneTextures';
 import { SubmarineVisual } from './SubmarineVisual';
 
 /** 리드 메타 루프가 제공할 시각 상태의 렌더 소비 형태 (판정·수치 없음) */
@@ -35,6 +36,8 @@ export class BaseSceneView implements ManagedScene {
   private elapsed = 0;
 
   constructor(private readonly renderer: Renderer) {
+    // 협곡 장면 없이 단독 생성돼도 텍스처 로딩이 시작되게 한다 (멱등)
+    initSceneTextures(this.renderer.webgl.capabilities.getMaxAnisotropy());
     this.scene.background = new THREE.Color(BASE_BACKGROUND);
     this.scene.fog = new THREE.Fog(BASE_BACKGROUND, 18, 70);
 
@@ -77,6 +80,15 @@ export class BaseSceneView implements ManagedScene {
       flatShading: true,
     });
     this.disposables.push(dockMaterial, wallMaterial, waterMaterial);
+    // 기지 구조물 = 산업 금속 공통 텍스처 재사용 (잠수함·선박과 GPU 1장 공유).
+    // 기지 박스는 0..1 UV 그대로라 대형 슬래브에서는 완만한 명암 변화로만
+    // 읽힌다 (금속 텍스처가 평활해 늘어남이 드러나지 않음 — 의도된 트레이드오프)
+    onSceneTexture('metal', (texture) => {
+      dockMaterial.map = texture;
+      dockMaterial.needsUpdate = true;
+      wallMaterial.map = texture;
+      wallMaterial.needsUpdate = true;
+    });
 
     // 정박 수면 스트립 + 양측 부두 슬래브
     const waterGeometry = new THREE.BoxGeometry(10, 0.2, 40);
