@@ -71,6 +71,7 @@ import {
   parseSprintBFixtureFlag,
   type SprintBFixture,
 } from './sprintBRenderFixture';
+import { SprintCUiFixture, parseSprintCFixtureFlag } from '../ui/sprintCUiFixture';
 
 /** 수중 배경·포그 톤 — 임시 색상. 심도별 그라데이션·아트 색은 D13 이후 (§3.1) */
 const WATER_COLOR = 0x0e3140;
@@ -169,6 +170,8 @@ export class CanyonScene implements ManagedScene {
   private econDemo: EconomyUiQaDemo | null = null;
   // 스프린트 B 표시 규칙 UI 단위 검증 fixture(?bdemo=1) — production 아님
   private bFixture: SprintBFixture | null = null;
+  // 스프린트 C HUD 표시 규칙 fixture(?cdemo=1) — production 아님
+  private cFixture: SprintCUiFixture | null = null;
   /**
    * `?bdemo` 검수 중에는 fixture 표본이 우선한다 — 이후 조립부의 production
    * 주입(현재 식별·호위는 미구현, 경비는 빈 목록)이 표본을 덮어쓰지 않게
@@ -187,6 +190,10 @@ export class CanyonScene implements ManagedScene {
   private unsubscribeTorpedoHit: Unsubscribe | null = null;
   // aimModeChanged 구독 — 조준경 표현은 게임플레이 상태만 소비 (5차 결의 3)
   private unsubscribeAimMode: Unsubscribe | null = null;
+  // floodingChanged 구독 — X-ray 침수 표시 구동 (C5, severity 매핑만)
+  private unsubscribeFlooding: Unsubscribe | null = null;
+  /** 침수 X-ray 인스턴스 — severity > 0 최초 수신 시 잠수함에 지연 장착 */
+  private floodingXray: XrayFloodingSpike | null = null;
 
   // 수면 위/아래 포그 전환 상태
   private cameraAboveSurface = false;
@@ -250,6 +257,11 @@ export class CanyonScene implements ManagedScene {
     this.mountBaseViewIfRequested();
     this.mountEconDemoIfRequested();
     this.mountSprintBFixtureIfRequested();
+    if (parseSprintCFixtureFlag(window.location.search)) {
+      const host = this.renderer.webgl.domElement.parentElement ?? document.body;
+      this.cFixture = new SprintCUiFixture(host);
+      console.info('[CanyonScene] 스프린트 C fixture 장착 (?cdemo=1 — UI 단위 검증 전용).');
+    }
 
     // `?aimdemo=1` — 어뢰 조준경 **표시 고정** QA 플래그: 조준경·조준 카메라·
     // 선체 레이어 제외를 임의 심도에서 정지 검수한다. 게임플레이 조준 판정
@@ -514,6 +526,12 @@ export class CanyonScene implements ManagedScene {
     this.unsubscribeTorpedoHit = bus.on('torpedoHit', (payload) =>
       this.onTorpedoHit(payload),
     );
+    // X-ray 침수 표시 (C5 — 보호 목록): floodingChanged severity만 매핑한다.
+    // 렌더 자체 침수 타이머 없음 — 심각도 0이면 다시 투명해진다.
+    this.unsubscribeFlooding?.();
+    this.unsubscribeFlooding = bus.on('floodingChanged', (payload) => {
+      this.applyFloodingSeverity(payload.severity);
+    });
     // 조준경: 게임플레이가 발행한 조준 상태만 소비 — 렌더 독자 전환 없음
     this.unsubscribeAimMode?.();
     this.unsubscribeAimMode = bus.on('aimModeChanged', (payload) => {
@@ -555,6 +573,30 @@ export class CanyonScene implements ManagedScene {
    * 스프린트 B 오버레이 지연 생성 — 조준경과 같은 host에 겹친다.
    * 소스가 이미 주입돼 있으면 생성 시점에 연결한다 (주입 순서 무관).
    */
+  /**
+   * 침수 심각도 → X-ray 반투명 표시 (C5). severity 값 매핑만 한다 —
+   * 침수량·속도 판정은 PlayerHullSystem·FloodingCore 소유다.
+   * 잠수함 자식이므로 자기 선체 레이어를 따라 조준 카메라에서는 함께
+   * 제외된다 (레이어 마스크 규약 유지).
+   */
+  private applyFloodingSeverity(severity: number): void {
+    if (!this.floodingXray && severity <= 0) return;
+    if (!this.floodingXray) {
+      try {
+        this.floodingXray = new XrayFloodingSpike(false); // 자동 데모 없음
+        this.floodingXray.root.position.set(0, 0.2, 0);
+        this.floodingXray.root.traverse((node) => node.layers.set(SELF_HULL_LAYER));
+        this.submarine.root.add(this.floodingXray.root);
+      } catch (error) {
+        this.floodingXray = null;
+        console.warn('[CanyonScene] 침수 X-ray 장착 실패 — HUD 침수 표시는 유지된다.', error);
+        return;
+      }
+    }
+    // 단일 'hull' 구획 심각도를 모든 X-ray 구획에 동일 매핑 (표현만)
+    for (let i = 0; i < 4; i += 1) this.floodingXray.setSeverity(i, severity);
+  }
+
   private ensureBOverlays(): void {
     const host = this.renderer.webgl.domElement.parentElement ?? document.body;
     if (!this.identificationTags) {
@@ -589,6 +631,7 @@ export class CanyonScene implements ManagedScene {
   update(deltaSeconds: number): void {
     // 경제 UI QA 데모 — 장면과 무관한 DOM 갱신 (기지 미리보기와도 병행)
     this.econDemo?.update();
+    this.cFixture?.update(deltaSeconds);
     // 기지 화면 미리보기(?base=1) — 협곡 장면 대신 기지 장면만 갱신 (QA 경로)
     if (this.baseView) {
       this.baseView.update(deltaSeconds);
@@ -636,6 +679,7 @@ export class CanyonScene implements ManagedScene {
     this.salvageVisuals.update(deltaSeconds);
     this.periscope?.update(deltaSeconds);
     // 스프린트 B 오버레이 — 계약 read model → 화면 좌표 매핑만 (판정 없음)
+    this.floodingXray?.update(deltaSeconds);
     this.identificationTags?.update(this.renderer.camera);
     this.convoyVisuals?.update(this.renderer.camera);
     this.guardDirection?.update(deltaSeconds, this.renderer.camera);
@@ -747,10 +791,16 @@ export class CanyonScene implements ManagedScene {
     this.unsubscribeTorpedoHit = null;
     this.unsubscribeAimMode?.();
     this.unsubscribeAimMode = null;
+    this.unsubscribeFlooding?.();
+    this.unsubscribeFlooding = null;
+    this.floodingXray?.dispose();
+    this.floodingXray = null;
     this.baseView?.dispose();
     this.baseView = null;
     this.econDemo?.dispose();
     this.econDemo = null;
+    this.cFixture?.dispose();
+    this.cFixture = null;
     this.bossSpike?.dispose();
     this.bossSpike = null;
     this.periscope?.dispose();
