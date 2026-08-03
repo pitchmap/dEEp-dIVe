@@ -90,6 +90,22 @@
 
 ## 제안 목록
 
+### INT-CORE-015 — 스프린트 C 선행 계약 마감: 탐지·추적(C1~C3)·폭뢰 경로(C4)·침수 단일 창구·DEBRIEF 모델
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (C 병렬 착수 게이트 마감 — 상세 인계는 `docs/SPRINT_C_HANDOFF.md`) |
+| 대상 시스템 | `src/contracts/detection.ts`(신규), `src/contracts/survival.ts`(폭뢰 params·DebriefReadModel), `src/core/FloodingCore.ts`·`PlayerHullSystem.ts`(침수 단일 창구), `src/core/PveIntegration.ts`(DebriefStateTracker), `src/core/Game.ts`(배선) |
+| 확정 정책 | ① 선체 손상·침수 = **출항 단위 상태** — 새 출항 시 maxHull 재계산 + currentHull=maxHull ② 영구 손상·수리비·수리 시간 = 후속 스프린트 이관 ③ 구매 순간 currentHull 회복 없음(최대치만 갱신, 다음 출항 반영) ④ **압력 피해 = C1~C9 핵심 범위 제외** — DepthPressure 계약은 확장 경계로 유지·production unwired, 압력 수치를 C9 필수 params·verify:sprint-c 게이트·C 완료 조건에 불포함 |
+| 필요한 변경 | ① C1~C3: 게이지 정본=게임플레이 DetectionSystem(기존 계약 유지), DetectionEnvironmentSource(은신·심도 입력)·DetectionTuningParams(거리 감쇠·감소율 — 공식 문서에 없어 null/unwired)·DetectionHudView·DetectionStageSource(AI는 stage만 — 수치 재계산 금지)·TrackingStateSource. 추적 전이 소유=리드, 상태 어휘는 기존 patrol/alert/attack/lost, 경비함·호위함·적대함 공유. alert 발화 지점 = 기존 detectionChanged(새 이벤트 없음) ② C4: 정본 경로(탐지 → AI 요청 → EnemyAttackPort → DepthChargeSystem → direct/near → applyDamage) + DepthChargeDamageParams(전부 null 허용 — 미확정 시 피해 unwired) ③ 침수 지속 피해도 applyDamage 단일 창구 경유 — tick별 damageEventId=flood:<단조 카운터>, FloodingCore는 닫힌 적분식(dt 분할 무관 총 피해 동일) ④ DebriefReadModel + DebriefStateTracker — 그래픽스가 isDestroyed 추측 없이 귀환/실패 화면 분기 ⑤ 이중 정산 방지 정적 검사(병행 호출 0·정산 호출자 화이트리스트) |
+| 관련 게이트 | C1·C2·C3·C4·C5·C6·C7 (+공통 저장·정산 규칙) |
+| 하위 호환 여부 | 추가·내부 경로 변경만 — 계약 소비자 깨짐 없음. hullDamaged 발행 형태 유지(침수는 near 보고) |
+| 개발 리드 결정 | 승인 — **C_ROLE_HANDOFF_READY=true.** 역할별 인계·수정 가능/금지 파일·acceptance는 SPRINT_C_HANDOFF.md가 정본 |
+| 적용 커밋 | d28f503·8024f1a·ffa8252·0b3a879 (+문서 커밋) |
+
+**병행 정산 경로 현황 (게임플레이 처리 요청):** `EconomySystem.settleDefeat`(:251)·`settleReturn`(:256)·`RunEconomy.settleSortie`(:94) — production 호출자 **0건**(정의만 잔존, 재확인 완료). 정산 정본은 `MetaLoop.settleSortie`(호출자: Game 세션 포트 'aborted'·SortieFailureCoordinator 'destroyed'뿐 — 정적 검사로 고정). 게임플레이가 세 정의를 삭제하고 검증 전용 사용처를 정리한다. acceptance: verify:meta '이중 정산 방지' 검사 통과 유지.
+
+
 ### INT-CORE-014 — 스프린트 C 선행 계약: 선체·피해·침수·심도 압력·실패 정산
 
 | 필드 | 내용 |

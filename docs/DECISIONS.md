@@ -70,6 +70,9 @@
 | C-3 | **실패 정산은 기존 경로 재사용**: 손실률·지갑·상태 전이는 `MetaLoop.settleSortie({outcome:'destroyed'})`, 저장은 기존 `saveRequested('settlement')`. 실패 코디네이터는 SavePort를 직접 호출하지 않는다(A-12 유지). 저장 실패 시 DEBRIEF 유지·재정산 없이 저장만 재시도, 성공 시 BASE. C에서 별도 지갑 구현 금지 | [확정 — INT-CORE-014, C7·C8] |
 | C-4 | **전투 수치 발명 금지**: 선체 기준값·피해량·침수 속도·압력은 C9 [COMBAT] params 이관 대상이며 도착 전까지 시스템은 `unwired`(피해 미적용·UI 위장 금지). 침수 누적은 프레임률 독립(dt 비례), 침수 단계는 level에서 파생(이중 저장 금지) | [확정 — INT-CORE-014, C5·C9] |
 | C-5 | **압력 피해·수리 미도입**: 압력 피해는 공식 종료 조건 C1~C9에 없고 기준값도 없어 `DepthPressurePort` 계약과 `maxDepth` 소비 경계만 둔다. 수리 미니게임·침수로 인한 조작 불능도 근거 없음 → 구현 금지. 선체 영구 손상 여부·구매 직후 현재 선체 처리도 **결정 요청** 상태 | [확정(경계) — INT-CORE-014, 결정 대기 3건] |
+| C-6 | **선체 손상·침수 = 출항 단위 상태**: 새 출항 시작 시 업그레이드 반영 maxHull 재계산 + currentHull=maxHull 초기화. 기지까지 이어지는 영구 손상·수리비·수리 시간은 후속 스프린트 이관 | [확정 — INT-CORE-015] |
+| C-7 | **구매 순간 회복 없음**: 선체 업그레이드 구매 시 진행 중 출항의 currentHull을 회복시키지 않는다 — 최대치만 갱신, 효과는 다음 출항 초기화에서 적용 (C-5의 결정 요청 1건 해소) | [확정 — INT-CORE-015] |
+| C-8 | **압력 피해 = C 핵심 범위 제외**: DepthPressure 계약·maxDepth 소비 경계는 확장 지점으로 유지하되 production runtime은 unwired. 압력 수치를 C9 필수 combat params·verify:sprint-c 게이트·C 완료 조건에 포함하지 않는다 (C-5의 결정 요청 1건 해소). 침수 지속 피해 포함 **모든 선체 피해는 applyDamage 단일 창구 경유** — tick별 고유 id, dt 분할 무관 총 피해 동일(닫힌 적분) | [확정 — INT-CORE-015] |
 
 ## 버티컬 슬라이스 트랙 유효 결정 (구현 기준 — PvE에서 이월·재편)
 

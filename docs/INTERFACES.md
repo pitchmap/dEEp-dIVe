@@ -89,6 +89,22 @@
 | 귀환 정산 확정 | MetaLoop → `saveRequested('settlement')` | SaveBridge 구독 기록 |
 | 희귀 부품 획득 즉시 | MetaLoop → `saveRequested('rarePart')` | SaveBridge 구독 기록 |
 
+## 2h. 탐지·추적 계약 (INT-CORE-015 — contracts/detection.ts, C1~C3)
+
+> 게이지 정본 = 게임플레이 `DetectionSystem`(기존 계약 유지). 추적 상태
+> 전이 정본 = 리드 `DestroyerAIController`(상태 어휘 patrol/alert/attack/lost
+> 그대로 — 새 상태명 금지, 경비함·호위함·일반 적대함 공유). 렌더·AI는
+> 탐지 수치를 **자체 계산하지 않는다.**
+
+| 계약 | 내용 | 소유 |
+|---|---|---|
+| `DetectionEnvironmentSource` | 은신·심도 입력 — noiseLevel·depthLayer·silentRunning | 게임플레이 (공급) |
+| `DetectionTuningParams` | 거리 감쇠·게이지 감소율 — **공식 문서에 없음** → null 계약. 미확정이면 unwired(게이지 0·safe 고정, 전이 없음) | 기획·툴링 (수치) |
+| `DetectionHudView` | gauge·stage·unwired — HUD 표시 전용(작동 위장 금지) | 게임플레이 (모델) / 그래픽스 (표시) |
+| `DetectionStageSource` | AI 소비 — stage + lastExposedPosition뿐(게이지 수치·계산식 접근 금지). 전역 단일 게이지(결의 4) | 게임플레이 (공급) / 리드 AI (소비) |
+| `TrackingState`·`TrackingStateSource` | 전이 규칙 5종 명시(patrol→alert→attack→alert→lost→alert), 시간 임계값 필요 시 params 소유. 어뢰 캠 alert 발화 지점 = 기존 `detectionChanged` 전이(새 이벤트 없음) | 리드 (전이) |
+| reset 경계 | 게이지·stage·노출 위치·추적 상태 = 출항 한정, 기지에서 증가 없음 | 각 구현 (`SortieResettable`) |
+
 ## 2g. 스프린트 C 생존 계약 (INT-CORE-014 — contracts/survival.ts)
 
 > 흐름 정본: 피해 source(게임플레이) → `DamageReceiverPort.applyDamage`
@@ -110,6 +126,9 @@
 | `SurvivalReadModel` | HUD 소비 전용 — hull·flooding·state·lastHitDirection·damageFlashRequested·warningIds(키만)·failureCountdown·isDestroyed. 문구·색·이펙트 없음 | 리드(모델) / 그래픽스(표현) |
 | `SortieFailureReport` / `SortieFailurePort` | failureId·reason 4종·pendingCredits·securedRareParts·appliedLoss·final*·saveStatus·nextState. 정산·손실률·지갑은 MetaLoop 소유(별도 지갑 금지), 저장은 기존 `saveRequested` 경로 | 리드 |
 | `PlayerAliveSource` | 파괴 후 적 AI·표적 판정이 소비하는 생사 소스(중복 상태 금지) | 리드(상태) / 게임플레이(소비) |
+| `DepthChargeDamageParams` | C4 폭뢰 — 직격/근접 반경·피해·쿨다운 (전부 null 허용 — 미확정 시 폭발해도 피해 unwired). 정본 경로: 탐지 → AI 요청 → EnemyAttackPort → DepthChargeSystem → direct/near → **applyDamage 단일 창구** | 리드(계약) / 게임플레이(판정) / 기획·툴링(수치) |
+| `DebriefReadModel` (+`DebriefStateTracker`) | C6·C7 — kind(returned/aborted/destroyed)·settlement·failure·saveStatus·canRetrySave. 그래픽스는 isDestroyed 추측 없이 이 모델로만 화면 분기, 읽기 전용(스냅샷) | 리드 |
+| 침수 피해 경로 | FloodingCore → 지속 피해 DamageRequest(tick별 `flood:<n>` id) → applyDamage — 선체 직접 수정 없음, dt 분할 무관 총 피해 동일(닫힌 적분) | 리드 |
 | `SortieResettable` | 출항 한정 상태 초기화: 선체·침수·마지막 피해·파괴 플래그·중복 원장·적 공격·실패 코디네이터·경비 사건·salvage. **영구**: 지갑·업그레이드·loadout. 선체 영구 손상은 근거 없음 → 결정 요청 | 리드 |
 
 ## 2f. 스프린트 B 세력·식별·경비 계약 (INT-CORE-012 — 선행개발, B 미발효)

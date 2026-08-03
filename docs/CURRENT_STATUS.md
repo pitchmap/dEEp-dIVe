@@ -274,7 +274,14 @@ B 선행개발          = 가능 (선행개발 상태로만)
     - **선행 계약 (커밋 `d048c40`)** — `contracts/survival.ts`: PlayerHullState(+unwired)·DamageEvent/Request·DamageSourceType(기존 DamageCause는 폭뢰 근접도로 병존)·DamageReceiverPort(결과 7종)·FloodingParams/Snapshot·DepthPressureParams/Port·HullUpgradeConsumer·EnemyAttackPort·SurvivalReadModel·SortieFailureReport/Port·PlayerAliveSource·SortieResettable. events: `playerDestroyed`·`sortieFailed`(실패 화면 — 귀환 `sortieEnded`와 분리, C7)
     - **구현 (`c3367a4`·`b52d437`·`2e7c788`·`59b4bfe`)** — `core/PlayerHullSystem`(피해 수신 단일 창구·중복 원장·전이·파괴 1회·읽기 모델·출항 초기화), `core/FloodingCore`(dt 비례 결정적 누적·단계 파생), `core/SortieFailureCoordinator`(파괴 1회 → MetaLoop 정산 1회 → 기존 저장 경로 → BASE, 저장 실패 시 DEBRIEF 유지·재정산 없는 재시도). Game 조립: FloodingCore → PlayerHullSystem(② 판정) → SaveBridge → SortieFailureCoordinator, 출항 시작 시 생존 상태 초기화. 결정적 검증 **103/103**(C 16항목 신규 + 정적 2 개정)
     - **수치 0**: 선체 기준값·피해량·침수 속도·압력은 **공식 params에 없음**(upgrades.json hullIntegrity·maxDepth는 배율만 승인·paramRef 없음) → 전 시스템 `unwired`, 임시 수치 생성 없음. 연결은 `attachHullParams`·`attachParams` 두 줄
-    - **업그레이드 소비 현황**: hullIntegrity = **경계 연결 완료**(기준값 대기) / maxDepth = 계약·경계만(압력 피해가 C1~C9 밖·기준값 없음 → pending) / sonarRange = **deferred 유지**(탐지 시스템 미도입) / torpedoDamage·maxSpeed·turnRate·reloadSpeed = 기존 연결 유지
+    - **C 선행 계약 마감 (INT-CORE-015 — C_ROLE_HANDOFF_READY=true):**
+    - C1~C3: `contracts/detection.ts` — 게이지 정본=게임플레이 DetectionSystem(기존 계약), 은신·심도 입력 포트, 거리 감쇠·감소율 null 계약(unwired), HUD·AI 읽기 모델 2종(AI는 stage만), 추적 전이 정본=리드(기존 상태 어휘·경비함/호위함/적대함 공유), alert 발화=기존 detectionChanged, 출항 reset 경계
+    - C4: 폭뢰 정본 경로(탐지→AI 요청→EnemyAttackPort→DepthChargeSystem→direct/near→applyDamage) + `DepthChargeDamageParams`(전부 null 허용)
+    - 침수 지속 피해도 **단일 창구 경유**(tick별 flood:<n> id·닫힌 적분 — dt 분할 무관 총 피해 동일), 파괴 경로 통합
+    - `DebriefReadModel`+`DebriefStateTracker` — 그래픽스가 isDestroyed 추측 없이 귀환/실패 화면 분기(C6·C7), 저장 재시도 상태 노출
+    - 정책 확정(DECISIONS C-6~C-8): 선체·침수=출항 단위·구매 순간 회복 없음·영구 손상 후속 이관·**압력 피해 C 핵심 범위 제외**(계약만 유지·production unwired·게이트 불포함)
+    - 이중 정산 방지 정적 검사 + 결정적 검증 **110/110**. 역할별 인계 정본: `docs/SPRINT_C_HANDOFF.md`
+  - **업그레이드 소비 현황**: hullIntegrity = **경계 연결 완료**(기준값 대기) / maxDepth = 계약·경계만(압력 피해가 C1~C9 밖·기준값 없음 → pending) / sonarRange = **deferred 유지**(탐지 시스템 미도입) / torpedoDamage·maxSpeed·turnRate·reloadSpeed = 기존 연결 유지
   - **스프린트 B 선행개발 (INT-CORE-012 — B 공식 발효 전, dev/main·통합 병합 금지):**
     - **선행 계약 (커밋 `afd5c71`)** — `contracts/faction.ts`(FACTION_RULES 규칙표·`patrol` 정본 유지·guard 별칭 미추가·`CombatTargetClass` 승격·`rewardDropTableIdFor`), `contracts/identification.ts`(B2 식별 read model — 미식별 시 라벨 null / B7 로깅 8항목·결과 분류 5종), `contracts/guard.ts`(중립 유효 피격·경비 요청 payload·GuardSpawnPort 결과 5종·GuardShipAdapterConfig·DestroyerAIFactory·B6 호위 계약·PLAYER_ENTITY_ID), `events.ts`(neutralShipHit 신설·guardShipRequested **payload v2**·transportAttacked)
     - **구현 (커밋 `d1577d5`·`b43c906`)** — `core/GuardShipAdapter`(기존 DestroyerAI 계약에 주입+수명주기 전달만, **신규 경비 AI 코어 0**), PveIntegration `GuardIncidentLedger`(중복 방지 **단일 저장소** — 상관 id·요청 id 공용, 출항 경계 리셋)·`NeutralIncidentBoundary`·`GuardSpawnCoordinator`(GuardSpawnPort)·`GuardSpawnBridge`. Game 조립: 경제 브리지 → 사건 경계 → 스폰 브리지 → 어댑터(③ AI 그룹) 등록. 결정적 검증 **77/77**(B 18항목 신규 — 중복 방지·세력 판정·스폰 결과 5종·어댑터 위임·B6 분리·B2 모델·B7 로깅 + 정적 검사 2: 신규 경비 AI 파일 0개·C 범위 구현 파일 미생성)
@@ -311,7 +318,7 @@ B 선행개발          = 가능 (선행개발 상태로만)
   - **[INT-CORE-014 적용 요청 — 그래픽스]** `SurvivalReadModel`만 소비(내부 객체 비노출·값 변경 불가). **실패 화면=`sortieFailed` / 귀환 화면=`sortieEnded`** 로 데이터·화면 완전 분리(C7). 침수량·피해량을 결정하지 않으며 경고는 `warningIds` 키로만 온다
   - **[INT-CORE-014 적용 요청 — 빌드·툴]** `params/combat.json` C9 [COMBAT] 확장: 선체 기준값·survivalState 경계 2종·폭뢰 direct/near 피해·침수 3단계 경계/확산율/피해율·(도입 시)압력 4종. **전부 미확정이며 임의 수치 금지.** `verify:sprint-c` 신설은 툴링 몫 — 리드는 없는 script를 실행하지 않았다
   - **계층 경계 [확정]:** 상위(src/meta)가 하위 세션 내부 상태를 읽는 코드, 하위가 메타 상태를 참조하는 코드는 리뷰 반려 대상 — 통신은 SortieSessionPort + 이벤트 3종뿐
-- **마지막 업데이트:** 스프린트 C 착수 — 생존 루프 공용 코어 (INT-CORE-014 — 계약 `d048c40` + 코어 3종·조립·검증 103/103)
+- **마지막 업데이트:** C 선행 계약 마감 (INT-CORE-015 — C1~C4·침수 경로·DEBRIEF 모델·handoff. **C_ROLE_HANDOFF_READY=true**, 인계 정본 SPRINT_C_HANDOFF.md)
 - **담당 브랜치:** `claude/deep-dive-core-lead-uyg77p` (리드 세션 — A_STACK 기준 `85ec32b` / 통합 tip `8f40117` 머지 완료)
 
 ## 게임플레이
