@@ -49,7 +49,9 @@ import {
   GuardSpawnBridge,
   GuardSpawnCoordinator,
   NeutralIncidentBoundary,
+  DebriefConfirmCommand,
   DebriefStateTracker,
+  EnemyAttackPortBinding,
   SaveBridge,
   SortieEconomyBridge,
   SortieSalvageSpawner,
@@ -116,6 +118,10 @@ export class Game {
   private sortieFailure: SortieFailureCoordinator | null = null;
   /** DEBRIEF 읽기 모델 — 정산·실패 화면의 유일한 데이터 소스 (C6·C7) */
   private debriefState: DebriefStateTracker | null = null;
+  /** DEBRIEF 확인 command — BASE 복귀의 유일한 진입점 (INT-CORE-016) */
+  private debriefConfirm: DebriefConfirmCommand | null = null;
+  /** 적 공격 포트 바인딩 — 게임플레이 EnemyAttackCoordinator 연결 지점 */
+  private enemyAttackBinding: EnemyAttackPortBinding | null = null;
   /** 조립부가 건 EventBus 구독 해제 함수 — stop()에서 전부 해제한다 */
   private readonly unsubscribes: Array<() => void> = [];
 
@@ -216,6 +222,9 @@ export class Game {
         guardAdapter: this.guardAdapter,
         playerHull: this.playerHull,
         debrief: this.debriefState,
+        debriefConfirm: this.debriefConfirm,
+        enemyAttackBinding: this.enemyAttackBinding,
+        gameplay,
         flooding: this.floodingCore,
         sortieFailure: this.sortieFailure,
         guardSpawn: this.guardSpawn,
@@ -457,7 +466,15 @@ export class Game {
     //     (pose 정본 = 게임플레이 entity 하나).
     const surfaceMotionPorts: SurfaceShipMotionPortFactory =
       gameplay.surfaceShipMotionPortFactory;
-    guardAdapter.attachFactory(createProductionDestroyerAIFactory(surfaceMotionPorts));
+    //     적 공격 포트 바인딩 (INT-CORE-016 — C4). AI는 attack 상태에서 이
+    //     바인딩으로 **요청만** 넣는다. 게임플레이 C 브랜치 병합 시
+    //     `enemyAttackBinding.attach(gameplay.enemyAttackPort)` 1줄로 연결되며,
+    //     그 전까지 모든 요청은 unwired — 폭뢰 투하·피해 0건(즉시 피해 금지).
+    const enemyAttackBinding = new EnemyAttackPortBinding();
+    this.enemyAttackBinding = enemyAttackBinding;
+    guardAdapter.attachFactory(
+      createProductionDestroyerAIFactory(surfaceMotionPorts, enemyAttackBinding),
+    );
     //     경비함 등장 방향 표시(B5) — **실제 스폰 결과만** 렌더에 넘긴다.
     //     스폰이 차단된 동안(위치 전략·AI 팩토리 미연결) 목록은 비어 있고
     //     마커도 뜨지 않는다: 존재하지 않는 경비함을 가리키지 않는다.
@@ -593,9 +610,14 @@ export class Game {
     //     kind('returned'/'aborted'/'destroyed')·settlement·failure·
     //     saveStatus·canRetrySave. 재시도 명령은 sortieFailure.retrySave를
     //     조립부가 command로 감싸 제공한다(모델은 읽기 전용).
-    const debriefState = new DebriefStateTracker(sortieFailure, saveBridge);
+    const debriefState = new DebriefStateTracker(sortieFailure, saveBridge, metaLoop);
     this.debriefState = debriefState;
     this.registry.register(debriefState);
+    //     확인 command (INT-CORE-016 — 개정 DEBRIEF 종료 정책): 저장 성공이
+    //     BASE 전환을 자동으로 일으키지 않는다. 귀환·실패 화면의 '확인'
+    //     버튼이 이 command를 호출하며, 저장 미완료·중복 확인은 거부된다.
+    //     정상 귀환·실패 양쪽 동일 정책.
+    this.debriefConfirm = new DebriefConfirmCommand(metaLoop, debriefState);
 
     // ②-c production 기지 경제 조립 (INT-CORE-010) — 저장 책임 단일화.
     //     savePort: 명령당 호출 횟수 계측 가능 (CountingSavePort.callCount).
