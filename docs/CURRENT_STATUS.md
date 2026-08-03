@@ -332,6 +332,11 @@ B 선행개발          = 가능 (선행개발 상태로만)
     - **AI 공격 요청**: `DestroyerAIController`가 attack 상태에서만 `EnemyAttackRequest` 생성(요청만 — 피해·반경·쿨다운·신관 비소유, id 단조·결정적). destroyed·위치 미확인·lost·포트 미연결 = 요청 0건. `EnemyAttackPortBinding` 미연결 = unwired(투하·피해 0) — 병합 시 `attach(gameplay.enemyAttackPort)` 1줄
     - **DEBRIEF confirm 정책 개정**: 저장 성공이 BASE 전환을 자동으로 일으키지 않음 — `canConfirm` → `DebriefConfirmCommand.confirm()`만이 BASE 진입점(정상 귀환·실패 동일, 저장 미완료·중복 confirm 거부). DECISIONS C-9
     - **통합 patch 확정**: SPRINT_C_HANDOFF §통합 composition patch — 게임플레이 4+1줄·그래픽스 2줄+confirm 교체·Game.ts 충돌 표·B5 검토 5항목·consumeDamageFlash 허용 판정. `GuardShipAdapter`가 `TrackingStateSource` 구현(추적 표시 소스 정본). 결정적 검증 **119/119**
+  - **C 런타임 마감 준비 (INT-CORE-017 — 브랜치 `claude/sprint-c-runtime-closeout`, 기준 `bd87828`. C_RUNTIME_CLOSEOUT_STRUCTURE_READY=true):**
+    - **combat params 전달 계약 정상화** (통합 blocker §5 해소): 정규화 소유자 = 공인 로더(`tools/combatParams.validateCombatParams`) **한 곳**. 게임플레이 구 평면 리더 2종 제거(중첩 스키마와 불일치하던 이중 정규화), `attachCombatParams(params: NormalizedCombatParams)` 타입화, 조립부가 `loadCombatParams()` 결과의 게임플레이 단면(`detectionTuning`·`depthCharge`)을 슬라이스 전달. raw combat.json import 0건(정적 검사 — 허용 2곳: combatParamsLoader·A 시절 ParamLoader), null 블록은 null 그대로(unwired 유지·부분 wired 금지). DECISIONS C-10
+    - **실패 화면 confirm 경유** (통합 blocker §11-3 해소): `SortieFailureScreen.attach` 3-인자화 — '확인 (기지로)' = `debriefConfirm.confirm()` guarded command, 성공 시에만 화면 닫힘(DOM 숨김 전용 경로 제거), 버튼 노출 근거는 `canConfirm` 하나. 정상 귀환·실패 동일 정책 완결. DECISIONS C-11
+    - **검증**: `verify:meta` +5(정규화 필드 교환 0·null 보존·NaN/음수 거부 + 정적 검사 2) → **124/124**, `verify:gameplay` 실경로 주입으로 교체 → **238/238**
+    - **상태 구분 (DECISIONS C-12)**: 구조 배선 완료(wired 경로 존재) ✅ / C9 수치 확정 ❌(15필드 전량 null — 결정표는 **PROPOSED**로 보고서 제출, 기획 승인 대기, production·params 숫자 미입력) / 브라우저 실측 ❌ / C 최종 완료 ❌. 플래그: C_COMBAT_PARAMS_DEFINED=false · C_RUNTIME_WIRED=false · C_BROWSER_EMPIRICAL_COMPLETE=false · C_FINAL_COMPLETE=false 유지
   - **C 선행 계약 마감 (INT-CORE-015 — C_ROLE_HANDOFF_READY=true):**
     - C1~C3: `contracts/detection.ts` — 게이지 정본=게임플레이 DetectionSystem(기존 계약), 은신·심도 입력 포트, 거리 감쇠·감소율 null 계약(unwired), HUD·AI 읽기 모델 2종(AI는 stage만), 추적 전이 정본=리드(기존 상태 어휘·경비함/호위함/적대함 공유), alert 발화=기존 detectionChanged, 출항 reset 경계
     - C4: 폭뢰 정본 경로(탐지→AI 요청→EnemyAttackPort→DepthChargeSystem→direct/near→applyDamage) + `DepthChargeDamageParams`(전부 null 허용)
@@ -376,8 +381,8 @@ B 선행개발          = 가능 (선행개발 상태로만)
   - **[INT-CORE-014 적용 요청 — 그래픽스]** `SurvivalReadModel`만 소비(내부 객체 비노출·값 변경 불가). **실패 화면=`sortieFailed` / 귀환 화면=`sortieEnded`** 로 데이터·화면 완전 분리(C7). 침수량·피해량을 결정하지 않으며 경고는 `warningIds` 키로만 온다
   - **[INT-CORE-014 적용 요청 — 빌드·툴]** `params/combat.json` C9 [COMBAT] 확장: 선체 기준값·survivalState 경계 2종·폭뢰 direct/near 피해·침수 3단계 경계/확산율/피해율·(도입 시)압력 4종. **전부 미확정이며 임의 수치 금지.** `verify:sprint-c` 신설은 툴링 몫 — 리드는 없는 script를 실행하지 않았다
   - **계층 경계 [확정]:** 상위(src/meta)가 하위 세션 내부 상태를 읽는 코드, 하위가 메타 상태를 참조하는 코드는 리뷰 반려 대상 — 통신은 SortieSessionPort + 이벤트 3종뿐
-- **마지막 업데이트:** C 통합 blocker 마감 (INT-CORE-016 — AI 공격 요청·DEBRIEF confirm 정책·통합 patch. **C_INTEGRATION_HANDOFF_READY=true**)
-- **담당 브랜치:** `claude/deep-dive-core-lead-uyg77p` (리드 세션 — A_STACK 기준 `85ec32b` / 통합 tip `8f40117` 머지 완료)
+- **마지막 업데이트:** C 런타임 마감 준비 (INT-CORE-017 — combat params 정규화 단일 소유·실패 화면 confirm 경유·C9 결정표 PROPOSED. **C_RUNTIME_CLOSEOUT_STRUCTURE_READY=true · C9_PROPOSAL_READY=true**, 수치·실측·최종 완료 플래그는 전부 false 유지)
+- **담당 브랜치:** `claude/sprint-c-runtime-closeout` (통합 tip `bd87828` 정확 기준 — 이전 리드 세션: `claude/deep-dive-core-lead-uyg77p`)
 
 ## 게임플레이
 

@@ -143,7 +143,7 @@
 |---|---|---|
 | 1 | `gameplay.attachPlayerAliveSource(playerHull);` | `playerHull` 등록 직후 — '배선 대기' 주석 자리 |
 | 2 | `gameplay.attachDamageReceiver(playerHull);` | 위와 같은 블록 (피해 단일 창구 연결) |
-| 3 | `gameplay.attachCombatParams(combatJson);` | `official` 로드 직후 — `params/combat.json` **원본**을 그대로(툴링 C9 4블록 포함, null 유지). import 1줄 필요 |
+| 3 | ~~`gameplay.attachCombatParams(combatJson);`~~ → **`gameplay.attachCombatParams({ detectionTuning: combat.detectionTuning, depthCharge: combat.depthCharge });`** (INT-CORE-017 개정) | `loadCombatParams()` 결과(`combat`) 사용 자리 — 원안의 'raw 원본 그대로'는 툴링 C9-loaderSingleSource 검사(공인 로더 밖 combat.json import 금지)·게임플레이 구 평면 리더(중첩 스키마와 불일치)와 3중 충돌해 폐기. 정규화 소유자는 공인 로더 하나이며 게임플레이는 계약 타입 단면(`NormalizedCombatParams`)만 받는다. raw import 0줄, null 블록은 null 그대로(unwired 유지) |
 | 4 | `enemyAttackBinding.attach(gameplay.enemyAttackPort);` | `enemyAttackBinding` 생성 직후 — **이 줄이 C4 공격 사슬의 마지막 연결**이다 |
 | 5 | (선택) `scene.attachShipWorldSource(gameplay.shipWorldSource); scene.attachShipIdentificationSource(gameplay.shipIdentification);` | 기존 scene attach 클러스터 |
 
@@ -292,9 +292,17 @@ scene attach 클러스터 (pose·cargo·shipWorld·identification·convoy·salva
 | Survival HUD | ✅ `SurvivalReadModel`만 소비 |
 | 실패/귀환 화면 | ✅ `DebriefReadModel.kind`만 소비 · `isDestroyed` 분기 **0건** |
 | DEBRIEF confirm | ✅ `debriefConfirm.confirm()` guarded command |
-| **`attachCombatParams`** | ❌ **미배선 — blocker** (§5) |
+| **`attachCombatParams`** | ~~❌ 미배선 — blocker (§5)~~ → ✅ **해소 (INT-CORE-017)** — 공인 로더 결과의 게임플레이 단면(`NormalizedCombatParams`) 전달로 배선. 15필드 null이라 런타임 동작 무변화(구조 배선만) |
 
-## 5. Blocker — `gameplay.attachCombatParams` 전송 형태 충돌
+## 5. Blocker — `gameplay.attachCombatParams` 전송 형태 충돌 → **해소 (INT-CORE-017, `claude/sprint-c-runtime-closeout`)**
+
+> **해소 기록**: 리드가 전송 규약을 결정했다 — 정규화 소유자는 공인 로더
+> (`tools/combatParams.validateCombatParams`) **한 곳**이고, 게임플레이의 구
+> 평면 리더 2종은 제거됐다(이중 정규화 원인 제거). `attachCombatParams`는
+> 계약 타입 단면 `NormalizedCombatParams{detectionTuning, depthCharge}`를
+> 받으며 조립부가 `loadCombatParams()` 결과를 슬라이스해 넘긴다. raw
+> combat.json import 0건(정적 검사 강제), null 블록은 null 그대로 전달
+> (unwired 유지 — 부분 wired 금지). 아래는 당시 충돌 기록 원문이다.
 
 인계표 §① 3번은 `params/combat.json` **원본**을 그대로 넘기라고 지정했으나,
 병합 후 실제 코드가 두 가지로 어긋난다.
@@ -471,13 +479,13 @@ C_BROWSER_EMPIRICAL_COMPLETE = false
 
 1. **C9 공식 수치 미도착** — 15/15 미확정. 발명 금지 원칙에 따라 null 유지.
    해소 입력은 기획 전투 수치표 하나뿐이다.
-2. **`attachCombatParams` 전송 형태 충돌** (§5) — 수치 도착 **전에** 게임플레이·
-   툴링·리드 합의 필요. 지금 고치지 않으면 값이 들어와도 C1·C4가 unwired로 남는다.
-3. **실패 화면 confirm 경로 부재** — `SortieFailureScreen`의 '확인 (기지로)'
-   버튼은 화면만 숨기고 `debriefConfirm.confirm()`을 호출하지 않는다
-   (`attach(model, retryCommand)` — confirm command 파라미터 자체가 없다).
-   인계표 §⑦은 **정상 귀환·실패 양쪽 동일 confirm 정책**을 요구하므로 실패
-   경로에도 confirm이 필요하다. 그래픽스 컴포넌트 시그니처 변경이라 통합 창이
-   임의로 만들지 않았다. **현재 production에서는 도달 불가**(params null →
-   파괴 없음)이며 fixture 경로에서만 재현된다. 소유: 그래픽스 + 리드 정책.
+2. ~~**`attachCombatParams` 전송 형태 충돌** (§5)~~ → **해소 (INT-CORE-017)** —
+   정규화 소유 단일화(공인 로더) + `NormalizedCombatParams` 단면 전달로 배선
+   완료. 값이 도착하면 같은 경로로 자동 구동된다(코드 변경 불필요).
+3. ~~**실패 화면 confirm 경로 부재**~~ → **해소 (INT-CORE-017)** —
+   `SortieFailureScreen.attach` 3-인자화(confirmCommand 추가). '확인 (기지로)'
+   클릭 = `debriefConfirm.confirm()` guarded command 호출이며 성공(BASE 전환)
+   시에만 화면이 닫힌다. DOM 숨김 전용 경로 제거, 버튼 노출 근거는
+   `canConfirm` 하나. 정상 귀환·실패 양쪽 동일 정책(§⑦) 충족 — 정적 검사
+   (`verify:meta` ③-3)로 회귀를 막는다.
 4. **B7 실측** (B 병렬 슬롯) — C와 무관, 혼합하지 않았다.

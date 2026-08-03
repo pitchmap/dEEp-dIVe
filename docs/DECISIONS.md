@@ -74,6 +74,9 @@
 | C-7 | **구매 순간 회복 없음**: 선체 업그레이드 구매 시 진행 중 출항의 currentHull을 회복시키지 않는다 — 최대치만 갱신, 효과는 다음 출항 초기화에서 적용 (C-5의 결정 요청 1건 해소) | [확정 — INT-CORE-015] |
 | C-8 | **압력 피해 = C 핵심 범위 제외**: DepthPressure 계약·maxDepth 소비 경계는 확장 지점으로 유지하되 production runtime은 unwired. 압력 수치를 C9 필수 combat params·verify:sprint-c 게이트·C 완료 조건에 포함하지 않는다 (C-5의 결정 요청 1건 해소). 침수 지속 피해 포함 **모든 선체 피해는 applyDamage 단일 창구 경유** — tick별 고유 id, dt 분할 무관 총 피해 동일(닫힌 적분) | [확정 — INT-CORE-015] |
 | C-9 | **DEBRIEF 종료 정책 개정**: 저장 성공이 BASE 전환을 자동으로 일으키지 않는다 — `DebriefReadModel.canConfirm`(saved+DEBRIEF) → 사용자 확인(`DebriefConfirmCommand.confirm()`) → `completeDebrief()` → BASE. 정상 귀환·실패 양쪽 동일 정책. 저장 미완료 confirm 거부, 중복 confirm 거부(전환 1회), retrySave는 재정산 없이 저장만. C-3의 '저장 성공 시 BASE' 문구는 본 결정으로 개정 | [개정 확정 — INT-CORE-016, 그래픽스 INT-RENDER-012 요청 승인] |
+| C-10 | **combat params 정규화 소유 단일화**: `params/combat.json` 중첩 스키마의 해석·검증은 공인 로더(`tools/combatParams.validateCombatParams`) **한 곳**만 수행한다. 게임플레이 구 평면 리더(이중 정규화)는 제거됐고 재도입 금지, `attachCombatParams`는 계약 타입 단면(`NormalizedCombatParams`)만 받는다. 공인 로더 밖 combat.json import 금지(허용 2곳: `combatParamsLoader`·A 시절 `ParamLoader`), null 블록·필드는 그대로 전달(unwired 유지 — null→0·fallback·부분 wired 금지) — 정적 검사 강제 | [확정 — INT-CORE-017] |
+| C-11 | **실패 화면 종료도 confirm command 경유**: `SortieFailureScreen`의 '확인 (기지로)'는 `DebriefConfirmCommand.confirm()` guarded command를 호출하며 성공(BASE 전환)했을 때만 화면을 닫는다. DOM 숨김 전용 종료 금지, 버튼 노출 근거는 `canConfirm` 하나. C-9 정책의 실패 화면 측 완결 — UI의 `completeDebrief` 직접 호출 0건(정적 검사 강제) | [확정 — INT-CORE-017] |
+| C-12 | **C9 수치 상태 구분**: C9 15필드 결정표는 **PROPOSED**(리드 제안 — 코드 수식·플레이 목표 기반)이며 기획 승인 전까지 APPROVED가 아니다. production 코드·`params/combat.json`에 숫자 미입력(전량 null 유지), 승인 후에만 툴링 경로로 입력한다. 구조 배선 완료(wired 경로 존재) ≠ 수치 확정 ≠ 실측 완료 ≠ C 최종 완료 — 네 상태를 문서·보고에서 항상 구분한다 | [확정 — INT-CORE-017] |
 
 ## 버티컬 슬라이스 트랙 유효 결정 (구현 기준 — PvE에서 이월·재편)
 

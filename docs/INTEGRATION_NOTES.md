@@ -105,6 +105,19 @@
 | 개발 리드 결정 | 승인 — **C_INTEGRATION_HANDOFF_READY=true.** 그래픽스 Game.ts의 `completeDebrief` 직접 호출은 병합 시 `debriefConfirm.confirm()`으로 교체할 것(저장 미완료 가드 우회 방지) |
 | 적용 커밋 | 2dacea4(AI 공격 요청)·fd5574b(confirm 정책·바인딩)·223bfd8(검증 119) + 문서 커밋 |
 
+### INT-CORE-017 — C 런타임 마감 준비: combat params 정규화 단일 소유 · 실패 화면 confirm 경유 (구조 blocker 2건 해소)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (통합 실행 결과 보고의 blocker §5·§11-3 해소 — 브랜치 `claude/sprint-c-runtime-closeout`, 기준 `bd87828`) |
+| 대상 시스템 | `src/systems/combat/officialCombatParams.ts`(평면 리더 제거·`NormalizedCombatParams` 단면), `src/systems/GameplaySystems.ts`(`attachCombatParams` 타입화), `src/ui/SortieFailureScreen.ts`(attach 3-인자·confirm 경유), `src/core/Game.ts`(배선 2곳), 검증(`verifyGameplay`·`verifyMeta`·`run.mjs`) |
+| 해소 1 — 전송 형태 충돌 | **정규화 소유자는 공인 로더 한 곳**(`tools/combatParams.validateCombatParams` → `combatParamsLoader.loadCombatParams`)이다. 게임플레이 구 평면 리더 2종(root 평면 키 해석 — 중첩 스키마와 불일치해 값이 도착해도 읽히지 않던 이중 정규화) 제거. `attachCombatParams(params: NormalizedCombatParams)` — 조립부가 로더 결과의 게임플레이 단면(`detectionTuning`·`depthCharge`)을 슬라이스 전달. raw combat.json import 0건(공인 로더 2곳 외 금지 — 정적 검사), null 블록·null 필드는 그대로 전달(unwired 유지, null→0·fallback·부분 wired 금지). 선체·침수 블록은 기존대로 리드 코어 생성자 직접 주입(무변경) |
+| 해소 2 — 실패 화면 confirm | `SortieFailureScreen.attach(model, retryCommand, confirmCommand)` 3-인자화. '확인 (기지로)' = `debriefConfirm.confirm()` guarded command 호출, 성공(`'confirmed'`)일 때만 화면 닫힘 — DOM 숨김 전용 경로 제거. 버튼 노출 근거는 `DebriefReadModel.canConfirm` 하나. 정상 귀환 화면과 동일 정책(INT-CORE-016 §⑦의 실패 화면 측 완결). fixture(`?cdemo=1`)도 동일 정책 표본으로 갱신 |
+| 검증 | `verify:meta` +5(정규화 필드 교환 0·null 보존·NaN/음수 거부 3건 + 정적 검사 ③-2 정규화 단일 소유·③-3 confirm 경유 2건) → 124/124. `verify:gameplay` 주입 경로를 실경로(validateCombatParams 경유)로 교체 → 238/238 |
+| 하위 호환 여부 | `attachCombatParams` 시그니처 변경(unknown → `NormalizedCombatParams`) — production 호출자는 조립부 1곳뿐. `SortieFailureScreen.attach` 3-인자화 — 호출자는 조립부·fixture 2곳뿐. 15필드 전량 null 유지라 **런타임 동작 변화 0**(탐지 safe 고정·공격 unwired·폭뢰 피해 0) |
+| 개발 리드 결정 | 승인 — 구조 blocker 2건 해소. **C9 수치는 별도 트랙**: 결정표는 PROPOSED(기획 승인 대기)로만 보고하며 production·params에 숫자 미입력. `C_COMBAT_PARAMS_DEFINED=false`·`C_RUNTIME_WIRED=false`·`C_BROWSER_EMPIRICAL_COMPLETE=false`·`C_FINAL_COMPLETE=false` 유지 |
+| 적용 커밋 | 400373a(정규화)·c7c36f4(confirm)·da683c4(검증) + 문서 커밋 |
+
 ### INT-GAME-014 — C1~C4 게임플레이 구현 완료 + production 배선 4줄 요청 (조립부)
 
 | 필드 | 내용 |
