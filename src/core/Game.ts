@@ -324,13 +324,10 @@ export class Game {
         // 잔탄·드롭이 이월되지 않게). 초회 출항에서는 갓 생성된 상태라 무해.
         const gameplay = this.gameplay;
         if (gameplay) gameplay.resetSortieSession(this.effectiveParams ?? params);
-        // 탐지 소음 **기준 입력** 공급 (INT-CORE-018). 공식 만충 시간
-        // (`gaugeFillSecondsAtPeriscope` — '잠망경 심도 기준 만충 8s')의 정의
-        // 자체가 정상 항행을 기준 조건으로 한다 — 기준 입력 1은 그 정의의
-        // 항등원이지 새 밸런스 수치가 아니다. 속도 의존 소음 곡선·침묵 항행
-        // 토글은 공식 규칙 도착 시 이 호출을 대체한다 (게임플레이 소유).
-        // reset이 reportedNoise를 비우므로 출항 시작마다 다시 공급한다.
-        gameplay?.detection.reportNoise(1);
+        // 소음은 상시 연결된 속도 기반 소스가 공급한다 (INT-CORE-019 —
+        // 구 고정 reportNoise(1) 폐기). 소스는 무상태(현재 속도 파생)라
+        // 출항 경계에서 이월될 이전 소음 상태 자체가 없고, reset이 비운
+        // reportedNoise는 null로 남아 환경 소스 경로가 계속 쓰인다.
         // 출항 월드 초기화 — salvage 확정 배치 (INT-CORE-011 production spawn
         // 규칙: 출항당 1회, 보상=economy params·좌표=SalvagePlacementSource.
         // 배치 미연결이면 임시 좌표를 만들지 않고 unwired로 기록만 한다).
@@ -576,12 +573,29 @@ export class Game {
     //        DetectionSystem.reportTorpedoLaunch의 조립 배선). 발사 위치는
     //        게임플레이가 발행하는 torpedoFired payload 그대로다 — 조립부는
     //        수치·판정을 만들지 않고 이벤트를 계약 API에 잇기만 한다.
-    //        (소음 소스는 공식 규칙 부재로 미연결 유지 — 중립 입력 0)
+    //        소음 계산과 무관하게 항상 노출된다.
     this.registerUnsubscribe(
       this.bus.on('torpedoFired', ({ originX, originZ }) => {
         gameplay.detection.reportTorpedoLaunch(originX, originZ);
       }),
     );
+    //     ⑤ 공식 production 소음 정책 (INT-CORE-019 — 구 고정 1 폐기):
+    //        noiseLevel = clamp(|현재 속력| / 공인 최고 속력, 0, 1).
+    //        속력 = 게임플레이 PlayerController.speed(계약이 '소음 산출의
+    //        입력값'으로 지정한 비부호 속력), 최고 속력 = 업그레이드 반영
+    //        유효 params(movement 정본 파생 — 조립부 하드코딩 없음).
+    //        정지 = 0, 전속 = 1. 침묵 항행 배율(공식 0.1)은 탐지 시스템이
+    //        environment.silentRunning으로 적용하며, 대화형 침묵 조작은
+    //        미구현이라 소스 미연결 = 공식 중립값 false 유지
+    //        (C_SILENT_RUNNING_INTERACTIVE=false — 임의 토글 생성 금지).
+    const game = this;
+    gameplay.detectionEnvironment.attachNoiseSource({
+      get noiseLevel(): number {
+        const maxSpeed = (game.effectiveParams ?? params).movement.maxSpeedMetersPerSecond.value;
+        if (!(maxSpeed > 0)) return 0;
+        return Math.min(1, Math.max(0, Math.abs(gameplay.player.speed) / maxSpeed));
+      },
+    });
 
     // ①-c 업그레이드 구매 판정 시스템 (게임플레이 소유 — 조립부가 공식
     //     카탈로그와 실지갑 읽기 단면을 주입한다). **단계의 단일 저장소** —
