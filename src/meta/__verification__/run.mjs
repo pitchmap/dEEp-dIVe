@@ -145,40 +145,152 @@ try {
   };
   const sourceFiles = walk('src').filter((file) => !file.includes('__verification__'));
 
-  // ① 신규 경비함 AI 코어 파일 0개 — 경비 관련 파일은 어댑터·계약·경계뿐이고
-  //    AI 판단 로직(추적 상태 머신·공격 루틴)을 새로 만들지 않았다.
+  // ① B5 개정 판정 (INT-CORE-013) — 검사 기준이 바뀌었다:
+  //    '신규 AI 0'이 아니라 **범용 production 구현 정확히 1개 + Guard 전용 0개**.
+  //    파일 이름이 아니라 `implements DestroyerAI` 내용으로 판정한다
+  //    (이름을 바꿔 검사를 피할 수 없다).
+  const CANONICAL_DESTROYER_AI = 'src/core/DestroyerAIController.ts';
   {
-    const allowed = new Set([
-      'src/core/GuardShipAdapter.ts', // 어댑터 (주입·수명주기만)
-      'src/contracts/guard.ts', // 계약
-    ]);
-    const guardFiles = sourceFiles.filter((file) => /guard/i.test(path.basename(file)));
-    const unexpected = guardFiles.filter((file) => !allowed.has(file));
-    // 어댑터 안에 AI 판단 어휘가 없어야 한다 (기존 AI 위임만).
-    const adapter = read('src/core/GuardShipAdapter.ts');
-    const aiLogicMarkers = ['pursue', 'chase', 'searchPattern', 'attackRun', 'depthCharge', 'detectionGauge'];
-    const leaked = aiLogicMarkers.filter((marker) => adapter.includes(marker));
+    const implementers = sourceFiles.filter((file) => /implements\s+DestroyerAI\b/.test(read(file)));
+    const canonicalOnly =
+      implementers.length === 1 && implementers[0] === CANONICAL_DESTROYER_AI;
     results.push({
-      name: 'B5 신규 경비함 AI 코어 파일 0개 (어댑터·계약만 — 판단 로직 없음)',
-      passed: unexpected.length === 0 && leaked.length === 0,
-      detail:
-        unexpected.length === 0 && leaked.length === 0
-          ? `guard 파일 ${guardFiles.length}개 = 어댑터·계약`
-          : `예상 밖 파일: ${unexpected.join(', ') || '없음'} / AI 어휘: ${leaked.join(', ') || '없음'}`,
+      name: 'B5 범용 production DestroyerAI 구현체 정확히 1개 (정본 경로)',
+      passed: canonicalOnly,
+      detail: canonicalOnly ? CANONICAL_DESTROYER_AI : `구현체: ${implementers.join(', ') || '0개'}`,
+    });
+  }
+  {
+    // Guard 전용 AI 코어 금지 — 이름이 Guard*(AI|Behavior|StateMachine|Brain)이거나
+    // guard 이름 파일이 DestroyerAI를 직접 구현하면 위반이다.
+    // 렌더·UI 오버레이(src/render, src/ui)는 표시 계층이므로 허용하되,
+    // 같은 내용 검사(AI 구현·판단 어휘)를 동일하게 적용한다.
+    const guardNamed = sourceFiles.filter((file) => /guard/i.test(path.basename(file)));
+    const dedicatedAiNames = guardNamed.filter((file) =>
+      /guard.*(ai|behavior|statemachine|brain)/i.test(path.basename(file)),
+    );
+    const guardImplementers = guardNamed.filter((file) =>
+      /implements\s+DestroyerAI\b/.test(read(file)),
+    );
+    const aiLogicMarkers = ['pursue(', 'chase(', 'searchPattern', 'attackRun', 'depthCharge', 'detectionGauge'];
+    const leaked = guardNamed.filter((file) => {
+      const source = read(file);
+      return aiLogicMarkers.some((marker) => source.includes(marker));
+    });
+    const passed =
+      dedicatedAiNames.length === 0 && guardImplementers.length === 0 && leaked.length === 0;
+    results.push({
+      name: 'B5 Guard 전용 AI 코어 0개 (오버레이·어댑터·계약만 — 판단 로직 없음)',
+      passed,
+      detail: passed
+        ? `guard 이름 파일 ${guardNamed.length}개 검사 통과`
+        : `전용 AI 이름: ${dedicatedAiNames.join(', ') || '없음'} / DestroyerAI 구현: ${guardImplementers.join(', ') || '없음'} / AI 어휘: ${leaked.join(', ') || '없음'}`,
+    });
+  }
+  {
+    // 어댑터가 범용 factory 경로를 쓰는가 + 위장·더블 금지
+    const adapter = read('src/core/GuardShipAdapter.ts');
+    const factory = read('src/core/destroyerAiFactory.ts');
+    const cargo = read('src/systems/CargoShipSystem.ts');
+    const usesFactory =
+      /DestroyerAIFactory/.test(adapter) && /DestroyerAIController/.test(factory);
+    const cargoDisguised = /implements\s+DestroyerAI\b/.test(cargo) || /DestroyerAI/.test(cargo);
+    // production 코드가 검증 더블을 import하지 않는다.
+    const doubleUsers = sourceFiles.filter((file) => /from '.*__verification__/.test(read(file)));
+    const passed = usesFactory && !cargoDisguised && doubleUsers.length === 0;
+    results.push({
+      name: 'B5 어댑터가 범용 DestroyerAI factory 사용 · CargoShipSystem 위장 없음 · 검증 더블 production 미사용',
+      passed,
+      detail: passed
+        ? '통과'
+        : `factory=${usesFactory}, cargo위장=${cargoDisguised}, 더블사용=${doubleUsers.join(', ') || '없음'}`,
+    });
+  }
+  {
+    // 범용 AI에 C 범위(탐지·폭뢰·내구도·침수) 참조가 없어야 한다.
+    const ai = read(CANONICAL_DESTROYER_AI);
+    const cMarkers = ['detection', 'sonar', 'depthCharge', 'hullIntegrity', 'flooding', 'fireTorpedo'];
+    const found = cMarkers.filter((marker) => new RegExp(marker, 'i').test(ai));
+    results.push({
+      name: 'B5 범용 AI에 C 기능(탐지·소나·폭뢰·내구도·침수·발사) 참조 0건',
+      passed: found.length === 0,
+      detail: found.length === 0 ? '통과' : `발견: ${found.join(', ')}`,
     });
   }
 
-  // ② 스프린트 C 범위(탐지 게이지·소나 상태 머신·폭뢰·선체 체력·침수) 구현
-  //    파일이 B 선행개발에서 생기지 않았는지 — 계약 파일의 예약 정의는 A 이전
-  //    부터 존재하므로 구현 파일(시스템)만 검사한다.
+  // ② C 소유 경계 (INT-CORE-014 — C 공식 착수 후 개정).
+  //    C1~C9는 전 항목 공식 범위지만 **창별 소유가 다르다**: 탐지 게이지·
+  //    소나·폭뢰 판정은 게임플레이 창 소유이며 리드가 만들지 않는다.
+  //    리드 소유는 생존 공용 코어(선체·침수·실패 정산)뿐이다.
   {
-    const cScopeFiles = sourceFiles.filter((file) =>
-      /(DetectionSystem|SonarSystem|DepthCharge|HullSystem|Flooding)\.ts$/.test(path.basename(file)),
+    const leadFiles = sourceFiles.filter((file) => file.startsWith('src/core/'));
+    const forbiddenInLead = leadFiles.filter((file) =>
+      /(DetectionSystem|SonarSystem|DepthCharge|Repair)\.ts$/.test(path.basename(file)),
     );
+    // 생존 공용 코어는 정확히 이 3개 — 이름을 바꿔 늘리지 않는다.
+    const survivalCore = leadFiles.filter((file) =>
+      /(PlayerHullSystem|FloodingCore|SortieFailureCoordinator)\.ts$/.test(path.basename(file)),
+    );
+    const passed = forbiddenInLead.length === 0 && survivalCore.length === 3;
     results.push({
-      name: 'B 범위 밖(C) 구현 파일 없음 — 탐지·소나·폭뢰·내구도·침수 시스템 미생성',
-      passed: cScopeFiles.length === 0,
-      detail: cScopeFiles.length === 0 ? '통과' : `발견: ${cScopeFiles.join(', ')}`,
+      name: 'C 소유 경계: 리드는 탐지·소나·폭뢰·수리를 만들지 않음 (생존 공용 코어 3개만)',
+      passed,
+      detail: passed
+        ? '생존 코어 3개 · 게임플레이 소유 시스템 0개'
+        : `금지 파일: ${forbiddenInLead.join(', ') || '없음'} / 생존 코어 ${survivalCore.length}개`,
+    });
+  }
+
+  // ③-0 이중 정산 방지 (INT-CORE-015 §병행 정산 경로): 정산 정본은
+  //    MetaLoop.settleSortie 하나다. EconomySystem.settleDefeat/settleReturn·
+  //    RunEconomy.settleSortie는 production 호출자가 없어야 하며(삭제는
+  //    게임플레이 소유 — INT-GAME 처리 대기), composition·core는 이 병행
+  //    경로를 호출하지 않는다.
+  {
+    const parallelCallers = sourceFiles.filter((file) => {
+      if (file === 'src/systems/economy/EconomySystem.ts') return false; // 정의 파일
+      if (file === 'src/systems/economy/RunEconomy.ts') return false; // 정의 파일
+      const body = read(file);
+      return /\.settleDefeat\(|\.settleReturn\(/.test(body);
+    });
+    const canonicalCallers = sourceFiles.filter((file) => {
+      if (file === 'src/meta/MetaLoop.ts') return false; // 정의 파일
+      return /\.settleSortie\(\{/.test(read(file));
+    });
+    const allowedCanonical = new Set(['src/core/Game.ts', 'src/core/SortieFailureCoordinator.ts']);
+    const unexpectedCanonical = canonicalCallers.filter((file) => !allowedCanonical.has(file));
+    const passed = parallelCallers.length === 0 && unexpectedCanonical.length === 0;
+    results.push({
+      name: 'C 이중 정산 방지: 병행 정산 호출 0건 · MetaLoop.settleSortie 호출자는 조립부·실패 조정자뿐',
+      passed,
+      detail: passed
+        ? '통과'
+        : `병행 호출: ${parallelCallers.join(', ') || '없음'} / 예상 밖 정산 호출: ${unexpectedCanonical.join(', ') || '없음'}`,
+    });
+  }
+
+  // ③ C 수치 발명 금지 — 생존 코어에 밸런스 상수 리터럴이 없어야 한다.
+  //    (선체 기준값·피해량·침수 속도·압력은 C9 [COMBAT] params 이관 대상)
+  {
+    const coreFiles = [
+      'src/core/PlayerHullSystem.ts',
+      'src/core/FloodingCore.ts',
+      'src/core/SortieFailureCoordinator.ts',
+    ];
+    // 0·1은 경계값, 2는 사다리꼴 적분(평균)의 수학 상수 — 밸런스 수치가 아니다.
+    const numericLiteral = /(?:^|[^\w.])(?!0\b|1\b|2\b)\d+(?:\.\d+)?\s*(?:;|,|\)|\})/;
+    const offenders = [];
+    for (const file of coreFiles) {
+      const body = read(file)
+        .split('\n')
+        .filter((line) => !line.trim().startsWith('*') && !line.trim().startsWith('//'))
+        .join('\n');
+      if (numericLiteral.test(body)) offenders.push(file);
+    }
+    results.push({
+      name: 'C 수치 발명 금지: 생존 코어에 밸런스 상수 없음 (0·1 경계값 제외)',
+      passed: offenders.length === 0,
+      detail: offenders.length === 0 ? '통과' : `숫자 리터럴 발견: ${offenders.join(', ')}`,
     });
   }
 }

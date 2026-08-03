@@ -29,6 +29,8 @@
 | `neutralShipHit` | 게임플레이 유효 피해 판정 | targetEntityId, attackerEntityId, targetFaction, attackWorldPosition, damageAmount, attackCorrelationId, timestamp, firstValidNeutralHit | composition 중복 방지 경계 → guardShipRequested | 중립 선박에 **실제 피해 적용 후 1회** | 조준·발사·빗나감으로 발행 금지. 같은 attackCorrelationId·파괴 이후 재발행 금지 [INT-CORE-012] |
 | `guardShipRequested` | composition 중복 방지 경계 (리드) | requestId, sourceNeutralEntityId, attackerEntityId, incidentPosition, spawnReason, requestedFaction, correlationId | GuardSpawnPort → GuardShipAdapter → 기존 구축함 AI | 중립 유효 피격 1건당 1회 | payload v2 [INT-CORE-012] — 기존 이벤트 재사용(신규 이벤트 없음), 구 `{x,z}`는 incidentPosition으로 흡수. 같은 correlationId 중복 금지 |
 | `transportAttacked` | 게임플레이 (B6) | transportEntityId, attackerEntityId, attackWorldPosition, attackCorrelationId | 호위 교전 판정 | 고가치 수송선 유효 피격 시 | B1~B5 핵심 게이트 경로는 이 이벤트에 의존하지 않는다 |
+| `playerDestroyed` | 리드 PlayerHullSystem | reason, destroyedByEntityId, damageSource, worldPosition | SortieFailureCoordinator(실패 정산 1회), 렌더(실패 연출), 오디오 | 파괴 확정 시 **1회** | 파괴 사실의 주인은 선체 상태 하나 — MetaState 확장 금지 [INT-CORE-014] |
+| `sortieFailed` | 리드 SortieFailureCoordinator | report(SortieFailureReport) | 그래픽스 **실패 화면**(C6·C7), UI, 오디오 | 실패 정산 확정 시 1회 | 귀환 화면은 `sortieEnded` — 데이터·화면 분리(C7). 손실 계산은 MetaLoop 소유, 이 이벤트는 결과 전달만 |
 | `saveRequested` | meta/MetaLoop | cause('settlement'/'rarePart') | SaveSystem(툴링, src/meta/save) | 정산 확정·희귀 획득 즉시 | **이벤트 경로는 2종뿐** [INT-CORE-010 저장 책임 단일화] — 구매·장비·출항 저장은 트랜잭션·Departure command의 SavePort 직접 호출(동일 명령 이중 저장 금지). 구 'sortieLaunch' cause 폐기 |
 | `bossPhaseChanged` | 보스 AI (리드) | phase(1/2/3) | 렌더(단계 연출), 오디오(침묵 전환·음정 하강), UI | 단계 전환 시 | — |
 | `bossWeakPointChanged` | 게임플레이 약점 판정 | active | 렌더(발광·개방 연출), UI | 약점 활성/해제 시 | 판정=게임플레이 / 연출=렌더 경계 [소회의 결의 5] |
@@ -87,11 +89,56 @@
 | 귀환 정산 확정 | MetaLoop → `saveRequested('settlement')` | SaveBridge 구독 기록 |
 | 희귀 부품 획득 즉시 | MetaLoop → `saveRequested('rarePart')` | SaveBridge 구독 기록 |
 
+## 2h. 탐지·추적 계약 (INT-CORE-015 — contracts/detection.ts, C1~C3)
+
+> 게이지 정본 = 게임플레이 `DetectionSystem`(기존 계약 유지). 추적 상태
+> 전이 정본 = 리드 `DestroyerAIController`(상태 어휘 patrol/alert/attack/lost
+> 그대로 — 새 상태명 금지, 경비함·호위함·일반 적대함 공유). 렌더·AI는
+> 탐지 수치를 **자체 계산하지 않는다.**
+
+| 계약 | 내용 | 소유 |
+|---|---|---|
+| `DetectionEnvironmentSource` | 은신·심도 입력 — noiseLevel·depthLayer·silentRunning | 게임플레이 (공급) |
+| `DetectionTuningParams` | 거리 감쇠·게이지 감소율 — **공식 문서에 없음** → null 계약. 미확정이면 unwired(게이지 0·safe 고정, 전이 없음) | 기획·툴링 (수치) |
+| `DetectionHudView` | gauge·stage·unwired — HUD 표시 전용(작동 위장 금지) | 게임플레이 (모델) / 그래픽스 (표시) |
+| `DetectionStageSource` | AI 소비 — stage + lastExposedPosition뿐(게이지 수치·계산식 접근 금지). 전역 단일 게이지(결의 4) | 게임플레이 (공급) / 리드 AI (소비) |
+| `TrackingState`·`TrackingStateSource` | 전이 규칙 5종 명시(patrol→alert→attack→alert→lost→alert), 시간 임계값 필요 시 params 소유. 어뢰 캠 alert 발화 지점 = 기존 `detectionChanged` 전이(새 이벤트 없음) | 리드 (전이) |
+| reset 경계 | 게이지·stage·노출 위치·추적 상태 = 출항 한정, 기지에서 증가 없음 | 각 구현 (`SortieResettable`) |
+
+## 2g. 스프린트 C 생존 계약 (INT-CORE-014 — contracts/survival.ts)
+
+> 흐름 정본: 피해 source(게임플레이) → `DamageReceiverPort.applyDamage`
+> (리드 공용 코어 — 중복 방지·선체 변경·파괴 판정 한 트랜잭션) →
+> `playerDestroyed` → `SortieFailureCoordinator` → `MetaLoop.settleSortie
+> ({outcome:'destroyed'})` → `DEBRIEF` → `saveRequested('settlement')` →
+> 저장 성공 → `completeDebrief()` → `BASE`. **MetaState는 확장하지 않는다.**
+
+| 계약 | 내용 | 소유 |
+|---|---|---|
+| `PlayerHullState` | 선체 단일 읽기 모델 — currentHull·maxHull·hullRatio·floodingLevel/Rate·survivalState·isDestroyed·lastDamage*·recoverable·sortieFailurePending·**unwired** | 리드 (상태) / 게임플레이 (피해 source) |
+| `DamageEvent` / `DamageRequest` | damageEventId·correlationId·sourceType·raw/appliedDamage·worldPosition·lethal·causesFlooding·floodingContribution. 음수·NaN·Infinity·중복·파괴 후 적용 금지 | 발행=게임플레이 판정 |
+| `DamageSourceType` | enemyWeapon·pressure·collision·environment·scripted. 기존 `DamageCause`(direct/near)는 **폭뢰 근접도**로 의미가 달라 병존(중복 아님) | 리드 (계약) |
+| `DamageReceiverPort` | 결과 7종 applied·ignoredDuplicate·ignoredDestroyed·invalidDamage·targetNotFound·destroyed·**unwired**. UI·렌더는 읽기만 | 리드 (공용 코어) |
+| `FloodingParams` / `FloodingSnapshot` | 단계는 level에서 **파생**(이중 저장 금지). 프레임률 독립 누적. 이동 성능 저하·조작 불능은 공식 결정 없음 → 미구현 | 리드(코어) / 기획·툴링(수치) |
+| `DepthPressureParams` / `DepthPressurePort` | **월드 Y 좌표**(위가 +, 깊을수록 작아짐) 규약 명시. 안전 잠항 한계·피해 시작 Y·tick·즉시 파괴 여부 구분. 압력 피해는 C1~C9 목록에 없어 **구현 pending** | 리드(계약) / 게임플레이(판정) |
+| `HullUpgradeConsumer` / maxDepth | `hullIntegrity`·`maxDepth` 배율은 승인 완료(upgrades.json), **기준값 params 부재** → 소비 경계만 확정하고 production은 pending | 리드(경계) / 툴링(params) |
+| `EnemyAttackRequest` / `EnemyAttackPort` | 적 공격 → 피해 전달 경계. 무기·사거리·쿨다운 params 부재 → `unwired` 반환, 거리 무관 자동 피해·테스트용 즉시 피해 금지 | 리드(계약) / 게임플레이(판정) |
+| `SurvivalReadModel` | HUD 소비 전용 — hull·flooding·state·lastHitDirection·damageFlashRequested·warningIds(키만)·failureCountdown·isDestroyed. 문구·색·이펙트 없음 | 리드(모델) / 그래픽스(표현) |
+| `SortieFailureReport` / `SortieFailurePort` | failureId·reason 4종·pendingCredits·securedRareParts·appliedLoss·final*·saveStatus·nextState. 정산·손실률·지갑은 MetaLoop 소유(별도 지갑 금지), 저장은 기존 `saveRequested` 경로 | 리드 |
+| `PlayerAliveSource` | 파괴 후 적 AI·표적 판정이 소비하는 생사 소스(중복 상태 금지) | 리드(상태) / 게임플레이(소비) |
+| `DepthChargeDamageParams` | C4 폭뢰 — 직격/근접 반경·피해·쿨다운 (전부 null 허용 — 미확정 시 폭발해도 피해 unwired). 정본 경로: 탐지 → AI 요청 → EnemyAttackPort → DepthChargeSystem → direct/near → **applyDamage 단일 창구** | 리드(계약) / 게임플레이(판정) / 기획·툴링(수치) |
+| `DebriefReadModel` (+`DebriefStateTracker`) | C6·C7 — kind(returned/aborted/destroyed)·settlement·failure·saveStatus·canRetrySave. 그래픽스는 isDestroyed 추측 없이 이 모델로만 화면 분기, 읽기 전용(스냅샷) | 리드 |
+| 침수 피해 경로 | FloodingCore → 지속 피해 DamageRequest(tick별 `flood:<n>` id) → applyDamage — 선체 직접 수정 없음, dt 분할 무관 총 피해 동일(닫힌 적분) | 리드 |
+| `SortieResettable` | 출항 한정 상태 초기화: 선체·침수·마지막 피해·파괴 플래그·중복 원장·적 공격·실패 코디네이터·경비 사건·salvage. **영구**: 지갑·업그레이드·loadout. 선체 영구 손상은 근거 없음 → 결정 요청 | 리드 |
+
 ## 2f. 스프린트 B 세력·식별·경비 계약 (INT-CORE-012 — 선행개발, B 미발효)
 
 > 흐름 정본: 게임플레이 유효 피해 → `neutralShipHit` → **composition 중복
-> 방지 경계(정본 1곳)** → `guardShipRequested` → `GuardSpawnPort` →
-> `GuardShipAdapter` → 기존 `DestroyerAI`. 신규 경비함 AI 코어는 만들지 않는다.
+> 방지 경계(정본 1곳)** → `guardShipRequested` → `GuardSpawnLocationStrategy`
+> → `GuardSpawnPort` → `GuardShipAdapter` → production `DestroyerAIFactory`
+> → **범용 `DestroyerAIController`** → gameplay motion adapter → 월드 등록.
+> [B5 개정 INT-CORE-013] 범용 구축함 AI는 **정확히 1개**만 두고 경비함이
+> 재사용한다 — 경비 전용 AI 코어는 계속 금지.
 
 | 계약 | 내용 | 소유 |
 |---|---|---|
@@ -101,7 +148,9 @@
 | `NeutralShipHitPayload` | 유효 피해 적용 후 1회. 조준·발사·빗나감·중복·파괴 후 금지 | 게임플레이 (발행) |
 | `GuardShipRequestPayload` | requestId·sourceNeutralEntityId·attackerEntityId·incidentPosition·spawnReason·requestedFaction(`patrol`)·correlationId | composition 경계 (발행) |
 | `GuardSpawnPort` | 결과 5종 spawned/duplicateRequest/invalidRequest/noSpawnLocation/spawnFailed. 예외·내부 문자열 비노출 | 게임플레이 또는 composition |
-| `GuardShipAdapter` / `DestroyerAIFactory` | 기존 AI에 세력·초기 표적·스폰 이유·identity 주입만. AI 판단 로직 0 | 리드 |
+| `GuardShipAdapter` / `DestroyerAIFactory` | **범용** AI에 세력·초기 표적·스폰 이유·identity·entityId 주입만. 어댑터 자체의 AI 판단 로직 0. handle은 `entityId`·`spawnPosition`(계약 `GuardSpawnLocation` 재사용)을 노출 | 리드 |
+| `DestroyerAIController` | **production `DestroyerAI` 유일 구현체**(범용 — 경비함·일반 적대 구축함 공용). 표적·마지막 확인 위치·이동 명령·수면 유지·경계 이탈 방지·안전 정지. 탐지·폭뢰·내구도·발사 미포함(C) | 리드 (`src/core`) |
+| `SurfaceShipMotionPort` | AI 판단과 실제 이동의 분리 — getPosition·getForward·turnToward·moveForward·maintainSurfaceHeight·isWithinWorldBounds·isTargetAlive·getTargetPosition. **선회·속력·해수면·경계 수치는 구현측 소유**(계약에 수치 없음) | **게임플레이**(구현) / 리드(계약) |
 | 보상 규칙 `rewardDropTableIdFor` | hostile=공식 적대 테이블 / neutral=null(크레딧 0·지갑 불변) / patrol=null(수치표 전 발명 금지). 평판·도덕성 금지 | 리드(규칙) / 기획·툴링(수치) |
 | B6 호위 계약 | HighValueTransport archetype·배율 **참조 키**·EscortBinding·transportAttacked·EscortEngagementRequest — 핵심 게이트 비의존 | 리드(계약) |
 | B7 로깅 계약 | `IdentificationOpportunityLog` 8항목 + 결과 분류 5종, `IdentificationLogSink`. 집계·판정은 툴링 | 리드(계약) / 툴링(판정) |
@@ -145,3 +194,33 @@
 `params/*.json` 값의 중복 정의 금지. `propellerIdleSpinRatio`·최고 속력의 공식
 소스는 `params/movement.json` 하나이며, 렌더가 필요하면 composition root가
 검증 완료 값을 주입한다 (렌더 측 `idleSpinRatio`·`fullSpinAtSpeedMps`는 제거 대상).
+
+## 2f. 스프린트 B 계약 (세력·식별·경비함 — INT-CORE-012·013)
+
+| 계약 | 내용 | 소유 |
+|---|---|---|
+| `FactionId` | `hostile` \| `neutral` \| `patrol` **3종 고정**. `guard` 별칭 없음. 해저 재화(`object`)는 세력이 아니라 `CombatTargetClass`로 분리 | 리드 (`contracts/faction.ts`) |
+| `factionRule(faction)` | 세력별 규칙표 — 보상 드롭 테이블 참조·표시 라벨 키·AI 초기 태도. **시스템 내부 세력 분기 금지**, 판단 근거는 이 표 하나 | 리드 |
+| `neutralShipHit` | 중립 선박 **유효 피해**(damageAmount>0)에서만 발행. 조준·발사·빗나감·damage 0은 발행하지 않는다. `attackCorrelationId = "torpedo:<실제 어뢰 id>"` | 계약 = 리드 / 발행 = 게임플레이 (`CargoShipSystem`) |
+| `guardShipRequested` (v2) | `{requestId, sourceNeutralEntityId, attackerEntityId, incidentPosition, spawnReason, requestedFaction, correlationId}`. `requestId === attackCorrelationId` | 리드 |
+| `GuardIncidentLedger` | **중복 방지 단일 저장소** — 요청(`claimRequest`)과 스폰(`claimSpawn`)이 같은 원장을 공유. 시스템 내부 중복 표 금지 | 리드 (`PveIntegration`) |
+| `GuardSpawnLocationStrategy` | `resolve(request)` → 위치 또는 `null`. **원점·플레이어 위치 fallback 금지** — 자리를 못 찾으면 `noSpawnLocation` | 계약 = 리드 / 구현 = 게임플레이 (`CanyonPatrolSpawnLocation`) |
+| `GuardSpawnPort` 결과 | `spawned` \| `duplicateRequest` \| `noSpawnLocation` \| `spawnFailed` \| `invalidRequest` | 리드 |
+| `GuardShipHandle` | `{requestId, entityId, faction, spawnReason, initialTargetEntityId, spawnPosition, displayLabelId, ai}`. `spawnPosition`은 **실제 스폰 좌표** — 요청의 `incidentPosition`을 대신 쓰지 않는다 | 리드 |
+| `DestroyerAI` / `DestroyerAIController` | 범용 구축함 AI. production 구현체 **정확히 1개**. Guard 전용 AI·복사본 0 (내용 기반 정적 검사) | 리드 |
+| `SurfaceShipMotionPort(Factory)` | AI의 이동 실행부. **AI는 transform을 소유하지 않는다** — pose 정본은 게임플레이 entity 1개. `create()`는 스폰마다 독립 entity+포트를 만든다 | 계약 = 리드 / 구현 = 게임플레이 (`PatrolShipFleet`·`PatrolShipEntity`) |
+| `ShipIdentificationSource` / `ShipIdentificationView` | 식별 read model. **미식별 동안 `displayLabelId=null`** 이며 렌더는 `faction`을 표시에 쓰지 않는다(모델에는 B7 정답 대조용으로 포함). `tagDisplayable`·`isTargetable`·`isAlive`로 표시 판정 | 계약 = 리드 / 판정 = 게임플레이 / 표시 = 그래픽스 |
+| `ShipWorldSource` / `ShipWorldView` | 다중 선박 읽기 전용 **평면 스냅샷**(객체 참조 없음) — 적대·중립 화물선 + 경비함. `visualArchetype`은 원형 **키**이며 문구·색·메시는 계약에 없다 | 게임플레이 |
+| `IdentificationExposureSink` | `onTagExposure({entityId, identificationTagVisible, factionRevealed, firstShownAtMs})` — 태그 노출 사실만. **결과 분류·오인 판정은 하지 않는다**(툴링 소유) | 그래픽스 |
+| `HighValueTransportView` / `EscortBinding` | B6 read model. `rewardMultiplierRef`는 **참조 키**이며 보상 숫자를 노출하지 않는다 | 리드 계약 / 게임플레이 구현 |
+
+### B 주입 지점 (composition root 1회씩)
+
+| 대상 | 호출 | 규칙 |
+|---|---|---|
+| 스폰 위치 전략 | `guardSpawn.attachLocationStrategy(gameplay.guardSpawnLocation)` | 정확히 1회. `null`을 넘기면 미연결(스폰은 `noSpawnLocation`) |
+| AI 팩토리 | `guardAdapter.attachFactory(createProductionDestroyerAIFactory(gameplay.surfaceShipMotionPortFactory))` | 이동 포트 팩토리가 `null`을 반환하면 스폰은 `spawnFailed` — 가짜 이동·대체 AI를 만들지 않는다 |
+| 스폰 리스너 | `guardSpawn.attachSpawnListener(handle => …)` | **실제 스폰 결과만** 소비. `spawnFailed`·`noSpawnLocation`에서는 호출되지 않으므로 마커가 뜨지 않는다 |
+| 다중 선박 렌더 | `scene.attachShipWorldSource(gameplay.shipWorldSource)` | 주입 시 `attachCargoShipSource` 단일 경로를 **대체** — 중복 렌더 방지 |
+| 식별 태그 | `scene.attachIdentificationSource(gameplay.shipIdentification, sink?)` | 두 번째 인자(B7 노출 싱크)는 **선택**이며 현재 production 미주입 (사유: `docs/B7_IDENTIFICATION_STUDY.md`) |
+| 호위 표현 | `scene.attachConvoySource(gameplay.highValueTransport)` | 공식 params 미확정이라 목록이 비어 있고 배지·결속선도 표시되지 않는다 |

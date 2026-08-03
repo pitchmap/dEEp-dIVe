@@ -141,6 +141,26 @@ function newGuardAiSites() {
   return hits.map((h) => `${h.rel}:${h.line}`);
 }
 
+// ── B4: 경비 스폰 조립 배선 관측 ────────────────────────────────
+/**
+ * 배선 자체를 관측한다 (호출이 있는지 + 인자가 더미가 아닌지).
+ * `attachLocationStrategy(null)` · `create: () => null`은 미연결로 센다.
+ */
+function guardSpawnWiring() {
+  const location = scan((line) =>
+    /attachLocationStrategy\(\s*(?!null)/.test(line) && !/^\s*[/*]/.test(line),
+  );
+  const factory = scan((line) =>
+    /attachFactory\(\s*createProductionDestroyerAIFactory\(/.test(line),
+  );
+  const nullMotion = scan((line) => /create:\s*\(\)\s*=>\s*null/.test(line));
+  return {
+    locationStrategySites: location.map((h) => `${h.rel}:${h.line}`),
+    aiFactorySites: factory.map((h) => `${h.rel}:${h.line}`),
+    nullMotionFactorySites: nullMotion.map((h) => `${h.rel}:${h.line}`),
+  };
+}
+
 // ── B6: 고가치 배율 소비 지점 ───────────────────────────────────
 function highValueConsumers() {
   const hits = scan((line) => /rewardMultiplier|highValueTransport/.test(line));
@@ -161,6 +181,7 @@ try {
     destroyerAiImpls: destroyerAiImpls(),
     newGuardAiSites: newGuardAiSites(),
     highValueConsumers: highValueConsumers(),
+    guardSpawnWiring: guardSpawnWiring(),
   });
 } catch (error) {
   console.error('✖ 스프린트 B 검증 실행 자체가 실패했습니다:', error);

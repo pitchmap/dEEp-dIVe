@@ -63,8 +63,16 @@
 | A-14 | **공식 런타임 params 소비**: 공식 로더(`loadEconomyParams`+`loadAimingParams`)는 composition root에서 각 1회 — 시스템·UI의 JSON·로더 직접 호출 금지. salvage는 소유 분리(보상=economy params / 좌표=SalvagePlacementSource·월드·그래픽스)로 spawnId 결합, 누락·중복·미지 spawnId 거부(무시 금지), 출항당 1회 생성·파괴분 재생성 금지, 배치 미도착 = 명시적 unwired(임시 좌표 금지) | [확정 — INT-CORE-011, contracts/officialParams.ts] |
 | B-1 | **Faction 정본**: `FactionId`(hostile·neutral·**patrol**) 정의 정본은 `contracts/meta.ts` — 경비 세력 별칭 `guard` 추가 금지(코드의 guard 표기는 스폰 절차 이름). `'object'`는 세력이 아니라 표적 분류(`CombatTargetClass`). 규칙(공격 허용·중립 사건·드롭 참조·식별 분류·라벨 id·AI 초기 태도)은 `FACTION_RULES` 단일표 | [확정 — INT-CORE-012, 선행개발] |
 | B-2 | **중립 사건 1건 = 경비 요청 1건 = 스폰 1척**: 중복 방지 저장소는 `GuardIncidentLedger` **1곳**(상관 id·요청 id 공용, 출항 경계 리셋). `neutralShipHit`은 유효 피해 적용 후 1회 — 조준·발사·빗나감·중복·파괴 후 발행 금지. `guardShipRequested`는 기존 이벤트 재사용(payload v2) | [확정 — INT-CORE-012] |
-| B-3 | **경비함 = 기존 구축함 AI 재사용**: `GuardShipAdapter`는 주입(세력 patrol·초기 표적=공격자·스폰 이유·identity)과 수명주기 전달만 — 신규 경비 AI 코어 0. AI 팩토리 미연결 = `spawnFailed`, 위치 전략 미연결 = `noSpawnLocation`(대체 AI·임의 좌표 생성 금지) | [확정 — INT-CORE-012, B5] |
+| B-3 | **경비함 = 범용 구축함 AI 재사용** [개정]: production `DestroyerAI` 구현체가 0개였음이 확인되어 '기존 구현체 재사용/신규 AI 0'을 폐기하고, **범용 production 구현 정확히 1개**(`core/DestroyerAIController`)를 신설한다. 경비함·일반 적대 구축함이 같은 구현체를 소비하며 `GuardShipAdapter`는 주입(세력 patrol·초기 표적=공격자·스폰 이유·identity)과 수명주기 전달만 한다. 경비 전용 GuardAI·GuardBehavior·GuardStateMachine은 **계속 금지**. 이동은 게임플레이 `SurfaceShipMotionPort`(리드가 선박 transform 직접 조작 금지), 탐지·폭뢰·내구도는 미포함(C). 팩토리·이동 포트 미연결 = `spawnFailed`, 위치 전략 미연결 = `noSpawnLocation`, 검증 더블의 production 사용 금지 | [개정 확정 — INT-CORE-013, 15차 diff-only 변경. 구 규칙(INT-CORE-012 B5)은 전제 오류로 폐기] |
 | B-4 | **세력별 보상**: hostile = 공식 적대 드롭 테이블 / neutral = 보상 없음(크레딧 0·지갑 불변) / patrol = 공식 params 도착 전까지 없음(수치 발명 금지). 평판·도덕성 시스템은 스프린트 B 범위 밖 | [확정 — INT-CORE-012, B3] |
+| C-1 | **피해 수신 단일 창구**: 플레이어 피해는 `DamageReceiverPort`(리드 `PlayerHullSystem`) 한 곳으로만 들어오며 검증→중복 방지→차감→전이→파괴 판정이 한 트랜잭션이다. 같은 `damageEventId`·`correlationId` 재적용 금지, 파괴 후 피해 무시, 0·음수·NaN·Infinity 거부. 게임플레이는 자체 체력 상태를 두지 않는다 | [확정 — INT-CORE-014, C5] |
+| C-2 | **파괴 사실은 한 곳이 소유**: `PlayerHullState.isDestroyed`. `MetaState`를 확장하지 않고 기존 `SORTIE→DEBRIEF→BASE`를 쓴다. 파괴 1회 = `playerDestroyed` 1회 = 실패 1회 = 정산 1회 | [확정 — INT-CORE-014, C6] |
+| C-3 | **실패 정산은 기존 경로 재사용**: 손실률·지갑·상태 전이는 `MetaLoop.settleSortie({outcome:'destroyed'})`, 저장은 기존 `saveRequested('settlement')`. 실패 코디네이터는 SavePort를 직접 호출하지 않는다(A-12 유지). 저장 실패 시 DEBRIEF 유지·재정산 없이 저장만 재시도, 성공 시 BASE. C에서 별도 지갑 구현 금지 | [확정 — INT-CORE-014, C7·C8] |
+| C-4 | **전투 수치 발명 금지**: 선체 기준값·피해량·침수 속도·압력은 C9 [COMBAT] params 이관 대상이며 도착 전까지 시스템은 `unwired`(피해 미적용·UI 위장 금지). 침수 누적은 프레임률 독립(dt 비례), 침수 단계는 level에서 파생(이중 저장 금지) | [확정 — INT-CORE-014, C5·C9] |
+| C-5 | **압력 피해·수리 미도입**: 압력 피해는 공식 종료 조건 C1~C9에 없고 기준값도 없어 `DepthPressurePort` 계약과 `maxDepth` 소비 경계만 둔다. 수리 미니게임·침수로 인한 조작 불능도 근거 없음 → 구현 금지. 선체 영구 손상 여부·구매 직후 현재 선체 처리도 **결정 요청** 상태 | [확정(경계) — INT-CORE-014, 결정 대기 3건] |
+| C-6 | **선체 손상·침수 = 출항 단위 상태**: 새 출항 시작 시 업그레이드 반영 maxHull 재계산 + currentHull=maxHull 초기화. 기지까지 이어지는 영구 손상·수리비·수리 시간은 후속 스프린트 이관 | [확정 — INT-CORE-015] |
+| C-7 | **구매 순간 회복 없음**: 선체 업그레이드 구매 시 진행 중 출항의 currentHull을 회복시키지 않는다 — 최대치만 갱신, 효과는 다음 출항 초기화에서 적용 (C-5의 결정 요청 1건 해소) | [확정 — INT-CORE-015] |
+| C-8 | **압력 피해 = C 핵심 범위 제외**: DepthPressure 계약·maxDepth 소비 경계는 확장 지점으로 유지하되 production runtime은 unwired. 압력 수치를 C9 필수 combat params·verify:sprint-c 게이트·C 완료 조건에 포함하지 않는다 (C-5의 결정 요청 1건 해소). 침수 지속 피해 포함 **모든 선체 피해는 applyDamage 단일 창구 경유** — tick별 고유 id, dt 분할 무관 총 피해 동일(닫힌 적분) | [확정 — INT-CORE-015] |
 
 ## 버티컬 슬라이스 트랙 유효 결정 (구현 기준 — PvE에서 이월·재편)
 
@@ -121,3 +129,25 @@
 | 평판 시스템·유적 퍼즐·개별 장비 손상 | 6차 트리아지 백로그 | MVP 이후 |
 | **전 심도 조준(구 심도 전용 규칙 폐기) 조준 / 조준 진입 시 자동 부상·잠망경 심도 자동 이동** | 결의된 적 없는 사양 — 7차 결의 1로 폐기. 심도는 생존 자원이며 조준이 소모하면 안 됨 | **재도입 금지** (문서 회귀 방지 원칙 — 코드·문서·체크리스트에서 삭제) |
 | `aimReturnBehavior`(persist 선택지)·관측용 잠망경 | 미구현 선택지는 스키마에도 넣지 않음 (13차 결의 9) | persist는 정식 승인 시 구현·스키마·테스트·문서 동시 추가 / 관측 잠망경은 수면 정찰 게임플레이 필요 시 |
+
+## 스프린트 B 확정 (A+B 통합 회차에서 코드·실측으로 확인)
+
+| 결정 | 근거 | 상태 |
+|---|---|---|
+| **`FactionId` = `hostile` \| `neutral` \| `patrol` 3종 고정** | 6차 결의 3 · INT-CORE-012. 경비 세력 id는 `patrol`이며 `guard` 별칭을 만들지 않는다 | 확정 — 정적 검사로 고정 |
+| **해저 재화는 세력이 아니다** | `object`는 `CombatTargetClass`로 분리 — 세력 규칙표에 넣지 않는다 | 확정 |
+| **중립 격침 보상 = 0 (지급하지 않음)** | 12차 결의 3 B3 · 15차 결의 2 단언 테스트 | 확정 — 브라우저 실측 지갑·출항 재화·드롭 전부 불변 |
+| **`patrol` 보상 정책 = pending (null)** | 공식 수치 없음. **null을 0으로 확정 해석하지 않는다** | 미확정 — 값 대기 |
+| **경비함 = 기존 구축함 AI 재사용, 신규 AI 코드 0** | 15차 결의 2. 재사용은 복사가 아니라 **어댑터**로 | 확정 — production `implements DestroyerAI` 구현체 1개(`DestroyerAIController`), 파일명이 아니라 **내용 기준** 검사 |
+| **AI는 transform을 소유하지 않는다** | 판단(리드 AI) / 이동(게임플레이 `SurfaceShipMotionPort`) 분리. pose 정본은 게임플레이 entity 1개 | 확정 — INT-CORE-013 |
+| **중복 방지 저장소는 `GuardIncidentLedger` 하나** | 요청·스폰이 같은 원장 공유. 시스템 내부 중복 표 금지 | 확정 — 사건 1건 = 경비함 1척 실측 |
+| **스폰 위치에 fallback 없음** | 원점·플레이어 위치로 대체 금지. 자리를 못 찾으면 `noSpawnLocation` | 확정 |
+| **방향 마커는 실제 `spawnPosition`만 가리킨다** | 요청의 `incidentPosition`은 경비함 위치가 아니다 | 확정 — INT-RENDER-011 |
+| **미식별 상태에서 세력 미노출** | `displayLabelId=null`. 노출하면 B2·B7이 무의미해진다 | 확정 — 실측 확인 |
+| **세력 구분은 색 이전에 실루엣·마크 형태로** | 저해상도·원거리에서 색·마크가 사라져도 실루엣 차이가 남는다 | 확정 — 적대 삼각·포탑2 / 중립 사각·포탑0 / 경비 마름모·포탑1 |
+| **렌더는 모델·클래스 이름으로 세력을 추측하지 않는다** | 변형 선택은 `FactionId` 값만 소비 | 확정 — 정적 검사 + 런타임 대조 |
+| **B6 배율·호위 이탈 거리 = 미확정(null)** | 12차 결의 3 "배율은 튜닝표". 제안값(`SPRINT_B_B6_PROPOSAL.md`)은 승인 수치가 아니다 | 미확정 — **params에 입력하지 않음** |
+| **B7 판정은 표본 미달 시 하지 않는다** | 테스터 5명·유효 기회 50회 미만이면 `INSUFFICIENT_SAMPLE`. 참고 비율은 계산해도 **합격·실패 판정에 쓰지 않는다** | 확정 |
+| **B7 합성 fixture는 실측 결과가 아니다** | 집계 알고리즘 검증 전용 | 확정 |
+| **B 공식 발효 = A 통합 PR 병합** | 15차 결의 1 | 미충족 — B_CORE_COMPLETE=true여도 발효 아님 |
+| **C 발효 = B1~B5 통과** | 15차 결의 1. 단, A PR 미병합 상태에서는 **기술 선행개발만** 가능 | B1~B5 통과 — 선행개발 가능, 공식 발효는 불가 |

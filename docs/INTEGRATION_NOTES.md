@@ -90,6 +90,191 @@
 
 ## 제안 목록
 
+### INT-CORE-015 — 스프린트 C 선행 계약 마감: 탐지·추적(C1~C3)·폭뢰 경로(C4)·침수 단일 창구·DEBRIEF 모델
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (C 병렬 착수 게이트 마감 — 상세 인계는 `docs/SPRINT_C_HANDOFF.md`) |
+| 대상 시스템 | `src/contracts/detection.ts`(신규), `src/contracts/survival.ts`(폭뢰 params·DebriefReadModel), `src/core/FloodingCore.ts`·`PlayerHullSystem.ts`(침수 단일 창구), `src/core/PveIntegration.ts`(DebriefStateTracker), `src/core/Game.ts`(배선) |
+| 확정 정책 | ① 선체 손상·침수 = **출항 단위 상태** — 새 출항 시 maxHull 재계산 + currentHull=maxHull ② 영구 손상·수리비·수리 시간 = 후속 스프린트 이관 ③ 구매 순간 currentHull 회복 없음(최대치만 갱신, 다음 출항 반영) ④ **압력 피해 = C1~C9 핵심 범위 제외** — DepthPressure 계약은 확장 경계로 유지·production unwired, 압력 수치를 C9 필수 params·verify:sprint-c 게이트·C 완료 조건에 불포함 |
+| 필요한 변경 | ① C1~C3: 게이지 정본=게임플레이 DetectionSystem(기존 계약 유지), DetectionEnvironmentSource(은신·심도 입력)·DetectionTuningParams(거리 감쇠·감소율 — 공식 문서에 없어 null/unwired)·DetectionHudView·DetectionStageSource(AI는 stage만 — 수치 재계산 금지)·TrackingStateSource. 추적 전이 소유=리드, 상태 어휘는 기존 patrol/alert/attack/lost, 경비함·호위함·적대함 공유. alert 발화 지점 = 기존 detectionChanged(새 이벤트 없음) ② C4: 정본 경로(탐지 → AI 요청 → EnemyAttackPort → DepthChargeSystem → direct/near → applyDamage) + DepthChargeDamageParams(전부 null 허용 — 미확정 시 피해 unwired) ③ 침수 지속 피해도 applyDamage 단일 창구 경유 — tick별 damageEventId=flood:<단조 카운터>, FloodingCore는 닫힌 적분식(dt 분할 무관 총 피해 동일) ④ DebriefReadModel + DebriefStateTracker — 그래픽스가 isDestroyed 추측 없이 귀환/실패 화면 분기 ⑤ 이중 정산 방지 정적 검사(병행 호출 0·정산 호출자 화이트리스트) |
+| 관련 게이트 | C1·C2·C3·C4·C5·C6·C7 (+공통 저장·정산 규칙) |
+| 하위 호환 여부 | 추가·내부 경로 변경만 — 계약 소비자 깨짐 없음. hullDamaged 발행 형태 유지(침수는 near 보고) |
+| 개발 리드 결정 | 승인 — **C_ROLE_HANDOFF_READY=true.** 역할별 인계·수정 가능/금지 파일·acceptance는 SPRINT_C_HANDOFF.md가 정본 |
+| 적용 커밋 | d28f503·8024f1a·ffa8252·0b3a879 (+문서 커밋) |
+
+**병행 정산 경로 현황 (게임플레이 처리 요청):** `EconomySystem.settleDefeat`(:251)·`settleReturn`(:256)·`RunEconomy.settleSortie`(:94) — production 호출자 **0건**(정의만 잔존, 재확인 완료). 정산 정본은 `MetaLoop.settleSortie`(호출자: Game 세션 포트 'aborted'·SortieFailureCoordinator 'destroyed'뿐 — 정적 검사로 고정). 게임플레이가 세 정의를 삭제하고 검증 전용 사용처를 정리한다. acceptance: verify:meta '이중 정산 방지' 검사 통과 유지.
+
+
+### INT-CORE-014 — 스프린트 C 선행 계약: 선체·피해·침수·심도 압력·실패 정산
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (C 공식 착수 — A 인수 통과·B_CORE_COMPLETE·dev가 3958ce4 포함 확인) |
+| 대상 시스템 | `src/contracts/survival.ts`(신규), `src/contracts/events.ts`(playerDestroyed·sortieFailed), `src/core/PlayerHullSystem.ts`·`FloodingCore.ts`·`SortieFailureCoordinator.ts`(신규), `src/core/Game.ts`(배선) |
+| 조사 결과 (근거) | ① **플레이어 피해 시스템이 존재하지 않는다** — `HullSystem` 계약만 있고 구현 0개, `hullDamaged`·`floodingChanged` 발행·구독 0건, `DepthChargeSystem` 구현 0개 ② **적이 플레이어를 공격할 수단이 전혀 없다** — `DestroyerAIController`·`PatrolShipEntity`에 무장 없음, 선박 충돌은 밀어내기 전용(피해 없음) ③ **선체 기준값·피해·침수·압력 params가 전무하다** — `upgrades.json`의 hullIntegrity·maxDepth는 배율만 승인·`paramRef` 없음("기준값 파라미터·소비자 미존재") ④ `settleSortie({outcome:'destroyed'})` 경로는 계산식만 있고 **production 호출자가 없다**(Game.ts는 `'aborted'` 고정) ⑤ `EconomySystem.settleDefeat`/`settleReturn`/`RunEconomy.settleSortie`는 **production 호출자 0건의 병행 정산 경로**다 |
+| 필요한 변경 | ① `PlayerHullState` 단일 읽기 모델(+`unwired` — 기준값 미주입 시 정상 선체로 위장 금지) ② `DamageEvent`/`DamageRequest`·`DamageSourceType`(기존 `DamageCause`는 폭뢰 근접도로 의미가 달라 **중복 아님**, 병존) ③ `DamageReceiverPort` — 결과 7종(applied·ignoredDuplicate·ignoredDestroyed·invalidDamage·targetNotFound·destroyed·unwired), 적용·선체 변경·파괴 판정이 **한 트랜잭션 경계** ④ `FloodingParams`·`FloodingSnapshot`(단계는 level에서 **파생** — 이중 저장 금지) ⑤ `DepthPressureParams`·`DepthPressurePort`(월드 Y 좌표 규약 명시, tick 기반 결정적 피해) ⑥ `EnemyAttackRequest`/`EnemyAttackPort` ⑦ `SurvivalReadModel`(경고는 key만, 문구·색 없음) ⑧ `SortieFailureReport`/`SortieFailurePort` ⑨ `playerDestroyed`·`sortieFailed` 이벤트 ⑩ **MetaState 미확장** — 파괴 사실은 `PlayerHullState.isDestroyed` 하나가 소유하고 메타는 기존 `DEBRIEF` 사용 |
+| 변경 이유 | C1~C9(전 항목 핵심 게이트)의 생존 루프를 4개 창이 병렬 구현할 수 있도록 경계를 먼저 고정. 특히 피해 중복 적용·이중 정산·이중 저장을 계약 수준에서 차단 |
+| 관련 게이트 | C4(피격)·C5(내구도·침수)·C6(실패 화면)·C7(정산 분리)·C8(영구 요소 보존). C1~C3(탐지·추적)·C9(params 이관)은 별도 계약·소유 |
+| 하위 호환 여부 | 추가만 — 기존 `HullSystem`·`hullDamaged`·`floodingChanged`·`DamageCause`·MetaState·저장 책임 표(A-12) 무변경. A·B 회귀 없음(검증 전 항목 통과) |
+| 개발 리드 결정 | 승인. **수치는 하나도 만들지 않는다** — 선체 기준값·피해량·침수 속도·압력은 C9 [COMBAT] params 이관 대상이며 도착 전까지 `unwired`로 남는다 |
+| 적용 커밋 | (본 브랜치 C 선행 계약 커밋) |
+
+**각 창 적용 지침 (스프린트 C):**
+- **게임플레이**(창 2 — C1·C2 탐지·은신, C4 폭뢰 판정, C5 내구도·침수·파괴 판정, C7 손실 계산): 리드 공용 코어(`PlayerHullSystem`)를 **피해 수신 단일 창구**로 소비하고 자체 체력 상태를 만들지 않는다. 실제 피해 source(폭뢰·충돌·압력)·판정 타이밍은 게임플레이 소유. `PatrolShipFleet.isTargetAlive(PLAYER_ENTITY_ID)`가 현재 항상 true인데, 리드가 제공하는 `PlayerAliveSource`를 구독해 파괴 후 추적을 멈추게 할 것. **`EconomySystem.settleDefeat`/`settleReturn`·`RunEconomy.settleSortie`는 production 호출자가 없는 병행 정산 경로다 — 정본은 MetaLoop이므로 삭제 요청**(C에서 별도 지갑 금지)
+- **그래픽스**(창 3 — C5 X-ray 침수, C1·C3 탐지 UI, C6 실패 화면, C7 귀환 화면): `SurvivalReadModel`만 소비. 침수량·피해량을 결정하지 않는다. **실패 화면은 `sortieFailed`, 귀환 화면은 `sortieEnded`** — 데이터·화면을 완전히 분리한다(C7). 경고는 `warningIds` 키로 오고 문구·색·이펙트는 그래픽스 소유
+- **빌드·툴**(창 4 — C9 [COMBAT] params 이관, C1~C9 검증): `params/combat.json` 확장 스키마 제안 — 선체 기준값(`baseMaxHull`)·survivalState 경계 2종·피해량(폭뢰 direct/near)·침수(단계 3종·확산율·선체 피해율)·압력(안전 심도 Y·피해 시작 Y·tick·tick당 피해). **전부 미확정이며 임의 수치 금지.** `verify:sprint-c` 신설은 툴링 몫이고 리드는 없는 script를 실행하지 않는다. C8은 '파괴 후 재접속 → 영구 요소 보존' 단언
+- **통합**: composition 순서 = 공식 params → PlayerHullSystem → FloodingCore → (게임플레이 피해 source) → SortieFailureCoordinator → MetaLoop 정산 → SaveBridge → BASE 복귀 → SurvivalReadModel → 렌더 HUD. B6·B7은 C core와 섞지 않는다(병렬 슬롯)
+
+### INT-GAME-013 — B5 런타임 연결 완료 + production 배선 2줄 요청 (조립부)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 (창 2 — B5 런타임 연결. B 공식 미발효 선행개발) |
+| 대상 시스템 | `src/core/Game.ts`(조립 배선 **2줄**) — 계약·리드 구현 변경 요청 **없음** |
+| 필요한 변경 | INT-CORE-013의 게임플레이 지침을 전부 이행했다(아래 '적용 완료'). production에서 경비함이 실제로 생성되려면 `Game.composeSystems`에서 두 줄이 필요하다: ① `const surfaceMotionPorts = gameplay.surfaceShipMotionPortFactory;` — 현재 자리에 있는 `{ create: () => null }` 상수를 **그대로 대체**한다(변수명·이후 코드 무변경). ② `guardSpawn.attachLocationStrategy(gameplay.guardSpawnLocation);` — 위치 전략 연결. 선택 ③ `scene.attachShipWorldSource(gameplay.shipWorldSource)`(다중 선박 렌더) · `scene.attachShipIdentificationSource(gameplay.shipIdentification)`(식별 태그) — 그래픽스 소비 API가 준비되면. `gameplay`는 이미 같은 함수 안 상위에서 만들어져 있으므로 순서 문제는 없다 |
+| 브라우저 실측 (배선 전) | dev 서버 production 경로에서 부팅→출항까지 **콘솔 오류 0**. production 경계로 중립 유효 피격을 흘리면 `guardLedger.requestedCount === 1`까지 도달하고 결과는 **`noSpawnLocation`**(위치 전략 미연결). 즉 남은 차단은 위 2줄뿐이며, 게임플레이 쪽 준비는 끝났다 |
+| 변경 이유 | 위 2줄이 없으면 스폰이 `noSpawnLocation`/`spawnFailed`에서 멈춘다. 게임플레이는 임의 좌표·가짜 이동을 만들지 않으므로 조립 배선이 유일한 해소 경로다 |
+| 관련 게이트 | B4(실제 스폰)·B5(범용 AI 재사용)·B2/B1(렌더 소비) |
+| 영향을 받는 파일 | `src/core/Game.ts` 2줄. 게임플레이 측은 완료 |
+| 하위 호환 여부 | 계약 파일 **무수정**. 게임플레이 소유 `CombatTarget`·`GameplaySystems` 기존 소비자 무변경. 검증 213/213·meta 88/88·tooling 26/26·sprint-a 30/30 통과 확인 |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
+
+**게임플레이 적용 완료 (INT-CORE-013 지침 이행):**
+- `SurfaceShipMotionPort` production 구현 + `SurfaceShipMotionPortFactory` 제공 — `gameplay.surfaceShipMotionPortFactory`(`PatrolShipFleet`). **스폰 1건 = 월드 엔티티 1개 = 포트 1개**이며 pose 정본은 `PatrolShipEntity` 하나다(AI는 transform을 저장하지 않는다). 플레이어 pose 재사용·렌더 객체 조작 없음
+- **수치는 전부 임시 상속값**(경비함 전용 공식 튜닝값 아님): 속력·명중 반경·선체 박스 = 공식 `params/cargo.json` / 해수면 = 공유 `CanyonLayout.seaSurfaceY` / 선회 속도 = `params/movement.json` `turn90Seconds` 파생(수상함 선회 공식값이 없어 잠수함 검증값 상속) / 월드 경계 = `CanyonLayout.blocks` 외곽 AABB **+ 공식 항로 끝점**(협곡 벽만으로 잡으면 공식 화물선 항로가 경계 밖이 된다). 공식 params 미주입이면 함대가 스폰을 만들지 않는다(수치 발명 0)
+- 경비함 엔티티: entityId(리드 채번)·faction=patrol·pose·alive·targetable·spawnReason·initialTargetEntityId·incidentPosition·visualArchetype 보유. **spawnPosition을 그대로 초기 위치로** 쓰고 보존한다(그래픽스 등장 연출이 추정 좌표를 만들지 않게). 기존 `TargetRegistry`에 등록(별도 registry 신설 없음), 파괴 시 등록 해제, dispose·새 출항에서 전량 정리, 같은 entityId 재요청 시 추가 생성 0
+- **다중 선박 read source** — `gameplay.shipWorldSource`: hostile cargo·neutral cargo·patrol guard를 한 목록의 **읽기 전용 스냅샷**으로. entityId·faction·pose·alive·targetable·visualArchetype(+B6 highValue/escort 메타). 게임플레이 객체 참조를 넘기지 않으므로 렌더가 상태를 바꿀 수 없다
+- **식별 소스에 patrol 포함** — 세 세력이 한 소스에서 나온다. 미식별 라벨 null·죽은 경비함 `tagDisplayable=false`·entityId는 월드 엔티티와 동일 키
+- B6: 교전 요청을 **경비함과 같은 범용** factory 입력으로 바꾸는 `escortEngagementToAdapterConfig` 제공(호위 전용 AI 0). 이탈 상한 거리는 공식 값이 없어 `bindEscortFromOfficial`이 결속을 만들지 않는다 — **B6 실기동 미완료**(호위함 배치표·거리 공식값 부재)
+- 신규 Guard 전용 AI 파일 **0** (러너 정적 검사로 강제). C 기능(탐지·소나·폭뢰·체력·침수·무기 발사) 참조 0
+
+**추가 요청 (선택):** 개발 모드 `__deepDiveDebug`에 `gameplay` 핸들이 없어 브라우저에서 B1·B2·B5의 게임플레이 상태(선박 목록·식별 뷰·경비함 엔티티)를 직접 관측할 수 없다. `gameplay: gameplay` 한 줄이 추가되면 통합 단계 실측이 쉬워진다.
+
+### INT-CORE-013 — B5 규칙 개정 (diff-only): 범용 production DestroyerAI 신설 · 경비함은 그것을 재사용
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (B5 차단 해소 — 게임플레이 INT-GAME-012·툴링 SPRINT_B_ACCEPTANCE의 `B5_BLOCKED_NO_DESTROYER_IMPLEMENTATION` 보고 확인) |
+| 대상 시스템 | `src/contracts/guard.ts`(이동 포트·entityId·factory 반환형), `src/core/DestroyerAIController.ts`(신규), `src/core/destroyerAiFactory.ts`(신규), `src/core/GuardShipAdapter.ts`(handle 보완), `src/core/PveIntegration.ts`(entityId 부여), `src/core/Game.ts`(팩토리 연결), 검증 러너(B5 판정 개정) |
+| 조사 결과 | **production `DestroyerAI` 구현체 0개.** `implements DestroyerAI` 0건이며, 다른 이름의 구축함·순찰 행동 코드도 없다. 존재한 것은 계약(`contracts/systems.ts`)·어댑터·경계·검증 더블뿐. `CargoShipSystem`은 2점 왕복 보간이라 표적·상태 전이 개념이 없어 재사용 대상이 아니다(위장 금지). 게임플레이·툴링 두 창이 독립적으로 같은 결론을 보고했다 |
+| 필요한 변경 | ① 기존 규칙('이미 존재하는 구현체 재사용 / 신규 AI 0')을 **폐기** — 성립 불가한 전제였다 ② **범용 production `DestroyerAI` 구현체 1개 신설**(`core/DestroyerAIController`) — 경비함·일반 적대 구축함 공용 ③ `GuardShipAdapter`는 그 범용 구현체를 재사용(주입·수명주기만) ④ 경비 전용 `GuardAI`·`GuardBehavior`·`GuardStateMachine` **계속 금지** ⑤ AI 판단과 실제 이동 분리 — `SurfaceShipMotionPort`(게임플레이 구현, 리드는 선박 transform 직접 조작 금지) ⑥ production `DestroyerAIFactory` 제공(검증 더블 사용 금지) ⑦ `GuardShipHandle`에 `entityId`·`spawnPosition` 노출(기존 계약 타입 재사용 — 중복 필드 없음) ⑧ B5 판정 기준 개정: 범용 구현 정확히 1개 / Guard 전용 0개 / 어댑터의 범용 factory 사용 / CargoShipSystem 위장 없음 / 검증 더블 production 미사용 |
+| 변경 이유 | B5 차단 해소. C 탐지·폭뢰·내구도는 포함하지 않는다 — 이번 구현은 '표적 방향으로 이동하는 수상함' 최소 책임뿐이다 |
+| 관련 게이트 | B4(실제 스폰)·B5(AI 재사용). 15차 결의 1의 **diff 한정 개정**으로 문서화 |
+| 하위 호환 여부 | 계약 확장만 — `DestroyerAIFactory.create` 반환형이 `DestroyerAI | null`로 넓어졌고(호출측은 리드 1곳), `GuardShipAdapterConfig`에 `entityId`가 추가됐다. 그래픽스가 요청한 `GuardShipHandle.spawnPosition`은 동일 형태로 반영해 병합 충돌이 없다 |
+| 개발 리드 결정 | 승인 — 범용 구현은 리드 소유(`src/core`, FILE_OWNERSHIP '구축함·보스 AI'), 이동 어댑터는 게임플레이 소유. B는 여전히 **미발효 선행개발**이며 A+B 최종 통합 검증 전까지 완료로 보고하지 않는다 |
+| 적용 커밋 | (본 브랜치 B5 개정 5커밋) |
+
+**각 창 적용 지침 (B5 개정):**
+- **게임플레이**: `SurfaceShipMotionPort` 구현 1개 + `SurfaceShipMotionPortFactory` 제공(스폰 1건당 포트 1개). 선회 속도·속력·해수면 높이·월드 경계는 **구현측 소유**이며 공식 params가 없으면 기존 판정 범위에서 파생하되 임의 수치를 발명하지 않는다. 도착하면 조립부가 `Game.composeSystems`의 `surfaceMotionPorts` 1줄을 교체한다 — 그 즉시 스폰이 `spawnFailed`에서 벗어난다. 이미 제출한 `guardSpawnLocation`(위치 전략)도 같은 지점에서 `attachLocationStrategy`로 연결된다
+- **그래픽스**: 요청한 `GuardShipHandle.spawnPosition`을 **승인·반영**했다(+`entityId`). 스폰 방향 마커는 실제 스폰 좌표만 사용하고 추정 좌표를 만들지 않는다. B 오버레이 파일은 AI가 아니므로 B5 검사에서 허용되지만, DestroyerAI 구현·AI 판단 어휘가 들어가면 위반이다(파일명 변경으로 회피 불가)
+- **툴링**: `SPRINT_B_ACCEPTANCE`의 B5 항목을 `B5_BLOCKED_NO_DESTROYER_IMPLEMENTATION`에서 **개정 기준**으로 교체 — '기존 구현 재사용/신규 0'이 아니라 '범용 production 구현 정확히 1개 + Guard 전용 0개 + 위장·더블 금지'. `verify:meta` 88항목에 해당 정적·동작 검사가 있으므로 중복 구현은 불필요하다
+- **통합**: 병합 순서 리드 → 게임플레이 → 그래픽스 → 툴링. 리드 병합 후 게임플레이 motion adapter가 오면 B4·B5가 런타임에서 관측 가능해진다
+
+### INT-GAME-012 — 스프린트 B 게임플레이 선행개발 결과 + B5 차단 보고 + 배선 요청
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 (창 2 — 스프린트 B **선행개발**. B 공식 발효 전이며 dev/main·통합 브랜치 병합 없음) |
+| 대상 시스템 | `src/core/Game.ts`(조립 배선 3줄), `params/`(공식 수치 3종 신설 요청 — 기획·툴링), `src/core/PveIntegration.ts`(레거시 큐 제거 — 후속) |
+| 필요한 변경 | ① **스폰 위치 전략 연결** — `guardSpawn.attachLocationStrategy(gameplay.guardSpawnLocation)`. 이걸 붙이면 경비 스폰이 `noSpawnLocation`에서 벗어난다(현재 production은 전략 미연결이라 항상 위치 실패) ② **식별 소스 연결** — `scene.attachShipIdentificationSource(gameplay.shipIdentification)` 형태로 렌더에 주입(계약 `ShipIdentificationSource`). 그래픽스가 모델명으로 세력을 추측하지 않게 하는 유일한 경로 ③ **다중 선박 렌더 소스** — 현재 `scene.attachCargoShipSource(gameplay.cargoShipState)`는 **적대 1척만** 받는다. B1으로 중립 1척이 같은 월드에 존재하지만 렌더 배선이 1척뿐이라 화면에는 보이지 않는다. `gameplay.ships`(세력 태그 포함)를 소비하는 다중 선박 소스가 필요하다 ④ **공식 수치 3종 요청**(기획·툴링) — (a) 선박 배치표(`ships[]` — 세력·항로·원형. 현재 게임플레이가 공식 cargo 값에서만 파생 중) (b) 식별 params(식별 거리·태그 표시 거리. 현재 어뢰 유효 사거리 재사용) (c) 경비 스폰 params(최소 안전거리·최대 스폰 거리. 현재 어뢰 유효 사거리와 그 절반 파생) (d) B6 고가치 보상 배율(`economy.highValueTransportRewardMultiplier`. 현재 배율 null = 보상 변경 없음) ⑤ **레거시 큐 제거(후속)** — `SortieEconomyPort.consumeGuardSpawnRequests`는 이제 항상 빈 배열이다(게임플레이가 요청을 넣지 않는다). `SortieEconomyBridge`의 `legacy:<targetId>` 발행 경로와 포트 필드를 리드가 제거하면 계약 표면이 정리된다 |
+| 변경 이유 | B1~B4·B6의 게임플레이 판정은 완료됐으나, 값이 실제로 흐르려면 조립 배선이 필요하다. 공식 수치가 없는 4항목은 **임의 숫자를 발명하지 않고** 기존 판정 범위에서만 파생했으며, params가 도착하면 attach 한 줄로 교체된다 |
+| 관련 게이트 | B1·B2·B3·B4 (+B6). B5는 아래 차단 |
+| 하위 호환 여부 | 계약 파일 **무수정**. 게임플레이 소유 `CombatTarget.onTorpedoHit`에 **선택적** 4번째 인자(`TorpedoAttackContext`)를 추가했으나 기존 구현·호출은 그대로 동작한다(검증 192/192·meta 77/77 통과 확인). `cargoShipState`·`ships` 기존 소비자 무변경 |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
+
+**B5 차단 보고 (B5_BLOCKED=true) — 경우 B: 재사용할 기존 구축함 구현이 없다**
+
+저장소 전체(전 브랜치 히스토리 포함)를 `Destroyer`·`PatrolShip`·`GuardShip`·`pursue`·`chase`·`waypoint`·
+`notifyLastKnownPosition`·`depthCharge`·수상함 이동 어휘로 조사한 결과:
+
+- **AI 판단 구현체 0개.** `implements DestroyerAI`는 물론, 다른 API 이름으로 된 구축함·순찰함 행동 코드도 없다
+- 존재하는 것: 계약(`contracts/systems.ts` `DestroyerAI`, `contracts/guard.ts` `DestroyerAIFactory`), 리드 어댑터(`core/GuardShipAdapter.ts` — 주입·수명주기만), 경계·포트(`core/PveIntegration.ts`), 검증 더블(`meta/__verification__/verifyMeta.ts` — `update()`가 빈 함수)
+- **재사용 불가 사유**: `CargoShipSystem`은 2점 왕복 보간뿐이다. 플레이어 위치를 읽지 않고, 표적 개념·상태 전이·공격 진입점이 없다. 이걸 Destroyer AI라고 부르는 것은 위장이다
+- **필요한 최소 선행 구현** (리드 소유 — `docs/FILE_OWNERSHIP.md` 구축함 AI = `src/core/`): `DestroyerAI` 상태 4종(patrol/alert/attack/lost) 전이 + last-known-position 직선 외삽 추격. 마스터 플랜 §5.11에 사양이 있고 폭뢰는 스프린트 C다
+- **게임플레이가 하지 않은 것**: 신규 Guard AI 코어를 만들지 않았다(정적 검사로 0건 강제 — 러너 `run.mjs`). B5를 가짜로 통과시키지 않았다
+
+체인의 현재 도달점: 중립 유효 피격 → `neutralShipHit` → 원장 중복 방지 → `guardShipRequested` → 위치 전략 **해결** →
+`GuardShipAdapter.spawn()` → **`spawnFailed`(AI 팩토리 미연결)**. 팩토리만 연결되면 같은 체인이 실제 개체를
+만든다는 것을 검증에서 확인했다(초기 표적=공격자·세력 patrol·중복 요청 0 — 최소 AI 더블 사용, production 코드 아님).
+### INT-RENDER-011 — [FACTION][RENDER] 스프린트 B 선행개발 렌더: 식별 태그·세력 외형·경비 방향·호위 표현
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스 (스프린트 B 선행개발 — 기준 `85ec32b`/A tip `8f40117`, 리드 계약 `afd5c71`·최종 tip `1378834` 병합) |
+| 대상 시스템 | `src/render/*`(신규 4 + CargoShipVisual 변형), `src/core/GuardShipAdapter.ts`(핸들 1필드), `src/core/Game.ts`(스폰 결과 배선), `src/meta/__verification__/run.mjs`(B5 가드레일 허용목록) |
+| 관련 게이트 | B1·B2·B5·B6 표현 (판정·스폰은 게임플레이·리드 소유) |
+| 하위 호환 여부 | 계약 파일(`src/contracts/*`) 무수정. 소스 미주입 시 전부 미표시 — A 경로 영향 없음 |
+| 개발 리드 결정 | **확인 대기** — ⚠ 항목 2건 |
+| 적용 커밋 | (이 브랜치 스프린트 B 렌더 커밋) |
+
+**소비 계약 (판정·추측 없음).** 식별 태그는 `ShipIdentificationSource`/
+`ShipIdentificationView`만, 세력 외형은 게임플레이가 준 `FactionId`만,
+호위 표현은 `HighValueTransportView`·`EscortBinding`만 소비한다. 모델·메시·
+클래스 이름으로 세력을 추측하는 경로는 없고, 보상 판정·중립 공격 이벤트
+생성·경비함 스폰 실행도 하지 않는다. 미식별 상태에서는 `view.faction`을
+읽지 않으며 라벨·색·기호 모두 '미식별' 하나로 고정한다.
+
+**B1 세력 외형** (`render/factionVisuals.ts` + `CargoShipVisual` 변형):
+적대=각진 무장 상부구조·포탑 2·삼각 마크·경고등 점멸 / 중립=매끈한 화물
+적재 실루엣·무장 0·사각 마크·상시 백색등 / 경비=저현 전투 갑판·포탑 1·
+마름모 마크·청색 점멸. **색 이전에 실루엣·마크 형태·등화 거동으로 구분**
+되며 원거리·저해상도에서도 실루엣 차이가 남는다. 변형 선택은
+`state.faction` 변화에만 반응한다.
+
+**B2 식별 태그** (`render/IdentificationTags.ts`): 상태 4종을 기호(◇▲■◆)+
+문구+거리+조준 가부로 표시한다. `tagDisplayable=false`면 숨김,
+`isAlive=false`면 제거, `isTargetable=false`면 '조준 불가' 표기.
+십자선 중심 보호 반경 안으로 들어오면 아래로 뒤집고, 겹치면 세로 간격을
+확보한다. 기존 조준 마스크·십자선·거리 눈금은 무변경(z-index 31 별도 층).
+
+**B7 노출 신호**: `IdentificationExposureSink.onTagExposure({entityId,
+identificationTagVisible, factionRevealed, firstShownAtMs})` — 태그가 처음
+표시된 시점과 세력 정보 실노출 여부만 알린다. **결과 분류·오인 사격 판정은
+하지 않는다**(툴링 소유). 툴링은 이 싱크를 `attachIdentificationSource`의
+두 번째 인자로 주입하면 되고, `opportunityId` 연결은 툴링이 entityId·시각을
+키로 수행한다.
+
+**B5 경비 방향 표시** (`render/GuardDirectionIndicator.ts`): **실제 스폰
+결과만** 가리킨다 — 요청 이벤트(`guardShipRequested`)의 사건 지점은 경비함
+위치가 아니므로 마커 근거로 쓰지 않는다. 화면 밖이면 가장자리 방향(화살표
+회전 + 거리 문구), 화면 안이면 해제(0.25s 체류 조건 — 장면 전환 프레임
+오판 방지), 6초 후 자동 소멸. 기지 상태에서는 억제한다. 시간 정지·컷신·
+탐지 게이지·경보 없음.
+
+**B6 호위 표현** (`render/ConvoyVisuals.ts`): 고가치 수송선 ◈ 배지 + 호위
+⚔ 배지 + **EscortBinding 기반 점선 결속선**(거리 추측 아님). 화면 좌표는
+식별 read model의 entityId 조인으로만 얻고, `rewardMultiplierRef`는 참조
+키이므로 **보상 숫자를 노출하지 않는다**.
+
+**⚠ 조립부 최소 변경 2건 (리드 확인 요청).**
+1. `GuardShipHandle.spawnPosition` 추가 (`src/core/GuardShipAdapter.ts`) —
+   기존 핸들에 위치가 없어 방향 마커가 실재하는 경비함을 가리킬 수 없었다.
+   코디네이터가 이미 `location`을 갖고 있어 전달만 한다(판정 변화 없음).
+   `Game.ts`는 `attachSpawnListener`로 실제 스폰 좌표만 렌더에 넘긴다 —
+   **스폰이 차단된 동안 목록은 비어 있고 마커도 뜨지 않는다.**
+2. `src/meta/__verification__/run.mjs` B5 가드레일 허용목록에
+   `src/render/GuardDirectionIndicator.ts` 추가 — 파일명이 `/guard/i`에
+   걸리는 **렌더 오버레이**이며 AI 판단 로직이 없다. 가드레일을 피하려고
+   파일명을 바꾸지 않고, AI 어휘 검사 대상에 이 파일을 **포함**시켜 검사가
+   계속 감시하도록 했다 (77/77 통과).
+
+**검증 구분 (작업 지시 §12).**
+- **production 실동작**: B1 세력 변형이 실제 화물선 상태(`faction:'hostile'`)
+  로 선택됨, B 오버레이는 소스 미구현·스폰 차단으로 **표시 0건**(가짜 데이터
+  없음), A 회귀 없음(기지 UI 7종·salvage 3개·재화 HUD·조준경).
+- **UI 단위 검증(fixture `?bdemo=1`)**: 태그 4종·죽은 표적 제거·조준 불가
+  표기·경비 방향 마커(화면 밖→가장자리, 화면 안→해제)·호위 결속선·보상
+  숫자 미노출. **production 통과가 아니다** — 게임플레이 B 판정 구현 후
+  재검증이 필요하다.
+
+**게임플레이 연결 지침**: `ShipIdentificationSource` 구현 후
+`scene.attachIdentificationSource(source, sink?)` 1줄, B6는
+`scene.attachConvoySource(source)` 1줄. 경비 스폰은 위치 전략·AI 팩토리가
+연결되면 마커가 **코드 변경 없이** 동작한다.
+
 ### INT-CORE-012 — 스프린트 B 선행 계약: Faction 정본·식별 read model·중립 유효 피격·경비함 스폰
 
 | 필드 | 내용 |
@@ -1131,3 +1316,60 @@ scene.attachCargoShipSource(gameplay.cargoShipState); // CargoShipStateSource �
 `factionRewards.patrol`은 `pending`이다. 계약 `FACTION_RULES.patrol.dropTableId`도
 `null`이라 현재는 경비함을 격침해도 보상이 없다. 결정 시 **계약과 params를
 함께** 개정해야 한다(둘 중 하나만 바꾸면 검증기가 로드를 거부한다).
+
+### INT-INTEG-003 — [FACTION][AI] A+B 최종 기술 통합 처리 결과 (통합 관리자)
+
+| 필드 | 내용 |
+|---|---|
+| 처리자 | 통합 관리자 (세션 브랜치 `claude/deep-dive-d5-gray-box-integration-tree5i`) |
+| 대상 | 리드 `5b443d5` · 게임플레이 `a48dce5` · 그래픽스 `cc09fb9` · 툴링 `2757a48` |
+| 관련 게이트 | B1~B5 (핵심) · B6·B7 (병렬) · A 전체 회귀 |
+
+**INT-GAME-013 요청 — 전부 반영.**
+
+| 요청 | 처리 |
+|---|---|
+| ① `const surfaceMotionPorts = gameplay.surfaceShipMotionPortFactory` | 반영. `{ create: () => null }` 상수를 그대로 대체(변수명·이후 코드 무변경). production `PatrolShipFleet`이며 테스트 더블 없음 |
+| ② `guardSpawn.attachLocationStrategy(gameplay.guardSpawnLocation)` | 반영. 정확히 1회 |
+| ③ `scene.attachShipWorldSource` / `attachIdentificationSource` | 반영. 다만 렌더에 `attachShipWorldSource`가 **없어서** 통합 창이 얇은 바인딩을 추가했다 (아래) |
+
+**INT-RENDER-011 — ⚠ 조립부 최소 변경 2건 처리.**
+
+1. `GuardShipHandle.spawnPosition` — 리드 정본에 이미 포함돼 있었다(병합 시
+   주석만 충돌). **리드 판본 채택**, 그래픽스 의도(추정 좌표 금지)는 동일하다.
+2. `run.mjs` B5 가드레일 allowlist에 `GuardDirectionIndicator.ts` 추가 —
+   **채택하지 않았다.** 리드가 같은 커밋 구간에서 검사 방식을 **내용 기반**
+   (`implements DestroyerAI` + AI 어휘 스캔)으로 개정했고, 그 개정판은
+   `src/render`·`src/ui` 오버레이를 allowlist로 빼지 않고 **같은 기준으로 검사**한다.
+   파일명 변경으로 회피할 수 없는 쪽이 더 강한 가드레일이므로 리드 정본을 남겼다.
+   `GuardDirectionIndicator`는 개정 검사에서도 통과한다(AI 어휘 0건).
+
+**통합 창이 추가한 코드 (렌더 소비 API 부재 보완):**
+
+`CanyonScene.attachShipWorldSource(source)` — 중립 화물선과 스폰된 경비함에
+3D 표현이 없었다(기존 `attachCargoShipSource`는 적대 1척 전용). 기존
+`CargoShipVisual` + `factionVisuals` 3종 변형을 **entityId별로 관리하는 얇은
+바인딩**만 추가했고 새 비주얼·새 계약은 만들지 않았다. 주입되면 단일 화물선
+경로를 **대체**하므로 적대 화물선이 두 경로로 중복 렌더되지 않는다.
+`torpedoHit` 폭발은 맞은 개체 인스턴스에서만 시작한다(멱등 유지).
+
+> 그래픽스 창 확인 요청: 이 바인딩의 소유를 렌더 창으로 이관할지, 아니면
+> `ShipWorldSource` 소비를 그래픽스가 자체 구현으로 대체할지 결정 바랍니다.
+> 통합 창은 표현을 설계하지 않았습니다 — 변형 선택·마크·항해등은 전부 기존
+> `factionVisuals` 정의를 그대로 씁니다.
+
+**검증 정규화:** `verify:sprint-b`의 `B4-port`가 관측 없이 `blocked`로
+하드코딩돼 있었다. 배선이 실제로 생겼으므로 **정적 관측 항목**으로 바꿨다 —
+위치 전략 호출 + production AI 팩토리 호출 + `create: () => null` 더미 0건을
+전부 만족할 때만 `pass`이고, 관측값이 없으면 여전히 `blocked`다.
+
+**남긴 결정 요청:**
+
+1. **`IdentificationExposureSink` 활성화 정책** — production 미주입 상태로 두었다.
+   기록 1건에 사람 판단 3필드(`anonymousTesterId`·`playerDecision`·
+   `resultClassification`)가 필수라 노출 신호만으로는 측정이 성립하지 않고,
+   일반 플레이에서 소비자 없는 로그를 켜지 않기 위한 결정이다.
+   측정 세션 운영 방식 확정 후 명시적 측정 모드에서만 배선한다.
+2. **B6 공식 수치** — `rewardMultiplier`·`escortMaximumDistanceMeters` 모두 null.
+   `docs/SPRINT_B_B6_PROPOSAL.md`의 제안값은 승인 수치가 아니므로
+   `params/economy.json`에 입력하지 않았다.

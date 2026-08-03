@@ -37,6 +37,7 @@ import type {
   UpgradeStatId,
 } from '../contracts/meta';
 import type { GameParams } from '../contracts/params';
+import type { SortieSettlement } from '../contracts/meta';
 import { effectiveDurationSeconds, effectiveValue, modifierSumFor } from '../meta/upgradeMath';
 import type { SaveData } from '../meta/save/saveSchema';
 import { createDefaultSave } from '../meta/save/saveSchema';
@@ -55,6 +56,7 @@ import type {
   NeutralShipHitPayload,
 } from '../contracts/guard';
 import { factionRule } from '../contracts/faction';
+import type { DebriefReadModel, SortieFailureReport } from '../contracts/survival';
 import type { GuardShipAdapter, GuardShipHandle } from './GuardShipAdapter';
 import type { SalvageKind } from '../systems/economy/SalvageObject';
 import type { WorldDrop } from '../systems/economy/CreditDropField';
@@ -1015,6 +1017,8 @@ export class GuardSpawnCoordinator implements GuardSpawnPort {
   private readonly adapter: GuardShipAdapter;
   private locationStrategy: GuardSpawnLocationStrategy | null;
   private onSpawned: ((handle: GuardShipHandle) => void) | null = null;
+  /** 경비함 엔티티 id 구간 — 화물선(소수)·salvage(9000+)와 겹치지 않는 구조 상수 */
+  private nextEntityId = GUARD_ENTITY_ID_BASE;
 
   constructor(
     ledger: GuardIncidentLedger,
@@ -1043,7 +1047,9 @@ export class GuardSpawnCoordinator implements GuardSpawnPort {
     const location = this.locationStrategy?.resolve(request) ?? null;
     if (!location) return 'noSpawnLocation';
 
+    const entityId = this.nextEntityId;
     const handle = this.adapter.spawn(request.requestId, {
+      entityId,
       faction: request.requestedFaction,
       spawnReason: request.spawnReason,
       initialTargetEntityId: request.attackerEntityId,
@@ -1052,6 +1058,8 @@ export class GuardSpawnCoordinator implements GuardSpawnPort {
       displayLabelId: factionRule(request.requestedFaction).displayLabelId,
     });
     if (!handle) return 'spawnFailed';
+    // id는 실제 스폰이 성사된 뒤에만 소비한다 (실패한 요청이 id를 태우지 않게).
+    this.nextEntityId += 1;
 
     try {
       this.onSpawned?.(handle);
@@ -1061,6 +1069,9 @@ export class GuardSpawnCoordinator implements GuardSpawnPort {
     return 'spawned';
   }
 }
+
+/** 경비함 엔티티 id 시작값 — 밸런스가 아니라 id 공간 구획(구조 상수) */
+const GUARD_ENTITY_ID_BASE = 8000;
 
 function isValidGuardRequest(request: GuardShipRequestPayload): boolean {
   if (!request.requestId || !request.correlationId) return false;
@@ -1106,5 +1117,94 @@ export class GuardSpawnBridge implements GameSystem {
   dispose(): void {
     this.unsubscribe?.();
     this.unsubscribe = null;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   ⑦ DEBRIEF 읽기 모델 (INT-CORE-015 — C6·C7 화면 분리)
+   — 그래픽스가 isDestroyed를 추측해 실패 화면을 고르지 않게 하는
+   명시적 계약 구현. 읽기 전용이며 상태를 바꾸는 명령은 없다.
+   ───────────────────────────────────────────────────────────── */
+
+/** 실패 스냅샷 소스 — SortieFailureCoordinator가 충족 (재시도 상태 추적용) */
+export interface DebriefFailureSource {
+  readonly lastReport: SortieFailureReport | null;
+}
+
+/**
+ * 정산 국면 추적자 — `sortieEnded`(정상·중도 귀환)·실패 소스(파괴)를 모아
+ * `DebriefReadModel` 하나로 제공한다. 새 출항 시작(`sortieStarted`)에 리셋.
+ *
+ *  - 정상 귀환·중도 귀환 화면: kind 'returned' | 'aborted' + settlement
+ *  - 파괴 실패 화면: kind 'destroyed' + failure (failureReason 포함)
+ *  - 저장 상태: 실패 스냅샷의 saveStatus를 동적으로 반영 — retrySave 후
+ *    최신 상태가 그대로 보인다
+ */
+export class DebriefStateTracker implements GameSystem {
+  readonly id = 'debriefState';
+
+  private readonly failureSource: DebriefFailureSource | null;
+  private readonly saveObserver: { readonly lastSaveSucceeded: boolean } | null;
+  private lastSettlement: SortieSettlement | null = null;
+  private settlementSaveOk: boolean | null = null;
+  private readonly unsubscribes: Unsubscribe[] = [];
+
+  constructor(
+    failureSource: DebriefFailureSource | null = null,
+    saveObserver: { readonly lastSaveSucceeded: boolean } | null = null,
+  ) {
+    this.failureSource = failureSource;
+    this.saveObserver = saveObserver;
+  }
+
+  initialize(context: SystemContext): void {
+    this.unsubscribes.push(
+      context.bus.on('sortieEnded', ({ settlement }) => {
+        this.lastSettlement = settlement;
+        // 정산 직후 저장 결과 스냅샷 (saveRequested 처리 후의 관측값)
+        this.settlementSaveOk = this.saveObserver?.lastSaveSucceeded ?? null;
+      }),
+      context.bus.on('sortieStarted', () => {
+        this.lastSettlement = null;
+        this.settlementSaveOk = null;
+      }),
+    );
+  }
+
+  readModel(): DebriefReadModel {
+    const failure = this.failureSource?.lastReport ?? null;
+    if (failure) {
+      return {
+        kind: 'destroyed',
+        settlement: this.lastSettlement,
+        failure,
+        saveStatus: failure.saveStatus,
+        canRetrySave: failure.saveStatus === 'saveFailed',
+      };
+    }
+    if (this.lastSettlement) {
+      return {
+        kind: this.lastSettlement.outcome,
+        settlement: this.lastSettlement,
+        failure: null,
+        saveStatus:
+          this.settlementSaveOk === null ? 'notAttempted' : this.settlementSaveOk ? 'saved' : 'saveFailed',
+        canRetrySave: false,
+      };
+    }
+    return {
+      kind: 'none',
+      settlement: null,
+      failure: null,
+      saveStatus: 'notAttempted',
+      canRetrySave: false,
+    };
+  }
+
+  update(_deltaSeconds: number): void {}
+
+  dispose(): void {
+    for (const off of this.unsubscribes) off();
+    this.unsubscribes.length = 0;
   }
 }
