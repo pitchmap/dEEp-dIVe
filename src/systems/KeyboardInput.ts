@@ -112,6 +112,18 @@ export class KeyboardInput implements MovementInput {
     return this.heldCodes.has('KeyD');
   }
 
+  /**
+   * 회수 홀드 입력 (M2 상호작용) — 현재 `KeyE`.
+   *
+   * ⚠ **바인딩 충돌**: `KeyE`는 기존 플레이테스트 수정에서 상승 병행 키로
+   * 확정된 키다(아래 `ascend`). 기존 바인딩을 제거하지 않고 읽기만 추가했다 —
+   * 어느 키를 회수에 쓸지는 입력 규칙 결정 사항이며, 결정되면 이 getter가
+   * 읽는 코드만 바꾼다 (INTEGRATION_NOTES INT-GAME-015).
+   */
+  get interactHold(): boolean {
+    return this.heldCodes.has('KeyE');
+  }
+
   get ascend(): boolean {
     return (
       this.heldCodes.has('ControlLeft') ||
