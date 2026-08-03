@@ -37,6 +37,7 @@ import type {
   UpgradeStatId,
 } from '../contracts/meta';
 import type { GameParams } from '../contracts/params';
+import type { SortieSettlement } from '../contracts/meta';
 import { effectiveDurationSeconds, effectiveValue, modifierSumFor } from '../meta/upgradeMath';
 import type { SaveData } from '../meta/save/saveSchema';
 import { createDefaultSave } from '../meta/save/saveSchema';
@@ -55,6 +56,14 @@ import type {
   NeutralShipHitPayload,
 } from '../contracts/guard';
 import { factionRule } from '../contracts/faction';
+import type {
+  DebriefConfirmOutcome,
+  DebriefReadModel,
+  EnemyAttackOutcome,
+  EnemyAttackPort,
+  EnemyAttackRequest,
+  SortieFailureReport,
+} from '../contracts/survival';
 import type { GuardShipAdapter, GuardShipHandle } from './GuardShipAdapter';
 import type { SalvageKind } from '../systems/economy/SalvageObject';
 import type { WorldDrop } from '../systems/economy/CreditDropField';
@@ -1115,5 +1124,159 @@ export class GuardSpawnBridge implements GameSystem {
   dispose(): void {
     this.unsubscribe?.();
     this.unsubscribe = null;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   ⑦ DEBRIEF 읽기 모델 (INT-CORE-015 — C6·C7 화면 분리)
+   — 그래픽스가 isDestroyed를 추측해 실패 화면을 고르지 않게 하는
+   명시적 계약 구현. 읽기 전용이며 상태를 바꾸는 명령은 없다.
+   ───────────────────────────────────────────────────────────── */
+
+/** 실패 스냅샷 소스 — SortieFailureCoordinator가 충족 (재시도 상태 추적용) */
+export interface DebriefFailureSource {
+  readonly lastReport: SortieFailureReport | null;
+}
+
+/**
+ * 정산 국면 추적자 — `sortieEnded`(정상·중도 귀환)·실패 소스(파괴)를 모아
+ * `DebriefReadModel` 하나로 제공한다. 새 출항 시작(`sortieStarted`)에 리셋.
+ *
+ *  - 정상 귀환·중도 귀환 화면: kind 'returned' | 'aborted' + settlement
+ *  - 파괴 실패 화면: kind 'destroyed' + failure (failureReason 포함)
+ *  - 저장 상태: 실패 스냅샷의 saveStatus를 동적으로 반영 — retrySave 후
+ *    최신 상태가 그대로 보인다
+ */
+export class DebriefStateTracker implements GameSystem {
+  readonly id = 'debriefState';
+
+  private readonly failureSource: DebriefFailureSource | null;
+  private readonly saveObserver: { readonly lastSaveSucceeded: boolean } | null;
+  private readonly metaState: { readonly metaState: MetaStateId } | null;
+  private lastSettlement: SortieSettlement | null = null;
+  private settlementSaveOk: boolean | null = null;
+  private readonly unsubscribes: Unsubscribe[] = [];
+
+  constructor(
+    failureSource: DebriefFailureSource | null = null,
+    saveObserver: { readonly lastSaveSucceeded: boolean } | null = null,
+    metaState: { readonly metaState: MetaStateId } | null = null,
+  ) {
+    this.failureSource = failureSource;
+    this.saveObserver = saveObserver;
+    this.metaState = metaState;
+  }
+
+  initialize(context: SystemContext): void {
+    this.unsubscribes.push(
+      context.bus.on('sortieEnded', ({ settlement }) => {
+        this.lastSettlement = settlement;
+        // 정산 직후 저장 결과 스냅샷 (saveRequested 처리 후의 관측값)
+        this.settlementSaveOk = this.saveObserver?.lastSaveSucceeded ?? null;
+      }),
+      context.bus.on('sortieStarted', () => {
+        this.lastSettlement = null;
+        this.settlementSaveOk = null;
+      }),
+    );
+  }
+
+  readModel(): DebriefReadModel {
+    const inDebrief = this.metaState === null || this.metaState.metaState === 'DEBRIEF';
+    const failure = this.failureSource?.lastReport ?? null;
+    if (failure) {
+      return {
+        kind: 'destroyed',
+        settlement: this.lastSettlement,
+        failure,
+        saveStatus: failure.saveStatus,
+        canRetrySave: failure.saveStatus === 'saveFailed',
+        // [INT-CORE-016] 저장 성공 + DEBRIEF일 때만 확인 가능 — 자동 전환 없음
+        canConfirm: inDebrief && failure.saveStatus === 'saved',
+      };
+    }
+    if (this.lastSettlement) {
+      const saveStatus: DebriefReadModel['saveStatus'] =
+        this.settlementSaveOk === null ? 'notAttempted' : this.settlementSaveOk ? 'saved' : 'saveFailed';
+      return {
+        kind: this.lastSettlement.outcome,
+        settlement: this.lastSettlement,
+        failure: null,
+        saveStatus,
+        canRetrySave: false,
+        canConfirm: inDebrief && saveStatus === 'saved',
+      };
+    }
+    return {
+      kind: 'none',
+      settlement: null,
+      failure: null,
+      saveStatus: 'notAttempted',
+      canRetrySave: false,
+      canConfirm: false,
+    };
+  }
+
+  update(_deltaSeconds: number): void {}
+
+  dispose(): void {
+    for (const off of this.unsubscribes) off();
+    this.unsubscribes.length = 0;
+  }
+}
+
+/**
+ * DEBRIEF 확인 command (INT-CORE-016 — 개정 종료 정책의 유일한 BASE 진입점).
+ *
+ * 저장 성공(saved) + DEBRIEF 상태에서만 `completeDebrief()`를 호출한다.
+ * 저장 미완료·상태 밖·중복 확인은 거부 — BASE 전환은 확인 1회당 1회다.
+ * 정상 귀환(sortieEnded)·실패(sortieFailed) 양쪽이 같은 command를 쓴다.
+ */
+export class DebriefConfirmCommand {
+  private readonly meta: { readonly metaState: MetaStateId; completeDebrief(): void };
+  private readonly tracker: DebriefStateTracker;
+
+  constructor(
+    meta: { readonly metaState: MetaStateId; completeDebrief(): void },
+    tracker: DebriefStateTracker,
+  ) {
+    this.meta = meta;
+    this.tracker = tracker;
+  }
+
+  confirm(): DebriefConfirmOutcome {
+    if (this.meta.metaState !== 'DEBRIEF') return 'invalidState';
+    const model = this.tracker.readModel();
+    if (model.kind === 'none') return 'invalidState';
+    if (model.saveStatus !== 'saved') return 'saveIncomplete';
+    try {
+      this.meta.completeDebrief();
+    } catch (error) {
+      console.error('[DebriefConfirm] 기지 복귀 전환 실패 — DEBRIEF 유지', error);
+      return 'invalidState';
+    }
+    return 'confirmed';
+  }
+}
+
+/**
+ * 적 공격 포트 바인딩 (INT-CORE-016) — 리드 AI 팩토리는 조립 시점에 이
+ * 바인딩을 받고, 게임플레이 `EnemyAttackCoordinator`(INT-GAME-014
+ * `gameplay.enemyAttackPort`)는 병합 후 `attach` 1줄로 연결된다.
+ * 미연결이면 모든 요청이 `unwired` — 폭뢰 투하·피해 0건(즉시 피해 금지).
+ */
+export class EnemyAttackPortBinding implements EnemyAttackPort {
+  private port: EnemyAttackPort | null = null;
+
+  attach(port: EnemyAttackPort | null): void {
+    this.port = port;
+  }
+
+  get wired(): boolean {
+    return this.port !== null;
+  }
+
+  requestAttack(request: EnemyAttackRequest): EnemyAttackOutcome {
+    return this.port ? this.port.requestAttack(request) : 'unwired';
   }
 }

@@ -90,6 +90,58 @@
 
 ## 제안 목록
 
+### INT-CORE-016 — C 통합 blocker 마감: AI 공격 요청 생성 · DEBRIEF confirm 정책 개정 · 통합 patch 확정
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (역할 보고 4건 수신 후 — 게임플레이 `844d0c7`·그래픽스 `97e7dd3`·툴링 `2814dd0`. 역할 브랜치 병합 없음, 보고·계약 기준으로만 리드 소유 영역 수정) |
+| 대상 시스템 | `src/core/DestroyerAIController.ts`·`destroyerAiFactory.ts`(공격 요청 생성), `src/contracts/survival.ts`(canConfirm·DebriefConfirmOutcome), `src/core/SortieFailureCoordinator.ts`(자동 전환 제거), `src/core/PveIntegration.ts`(DebriefConfirmCommand·EnemyAttackPortBinding), `src/core/GuardShipAdapter.ts`(TrackingStateSource), `src/core/Game.ts`(조립) |
+| Blocker 1 해소 | `DestroyerAIController`가 **attack 상태에서만** `EnemyAttackRequest` 생성 → 주입된 `EnemyAttackPort`(게임플레이 `EnemyAttackCoordinator`)로 전달. AI는 요청만 — 피해량·반경·사거리·쿨다운·신관 비소유, DamageReceiverPort·DepthChargeRunSystem 직접 접근 0. destroyed·위치 미확인·lost·포트 미연결에서 요청 0건. 탐지 게이트는 게임플레이 motion 포트(getTargetPosition = detected일 때만) 소유 — stage 재판정 없음(이중 판정 금지), 기존 patrol/alert/attack/lost 전이 무변경. `EnemyAttackPortBinding`: 미연결 = unwired(투하·피해 0), 병합 시 `enemyAttackBinding.attach(gameplay.enemyAttackPort)` 1줄 |
+| Blocker 2 해소 | **DEBRIEF 종료 정책 공식 개정** (그래픽스 INT-RENDER-012 '자동 completeDebrief 제거' 요청 승인·확장): 저장 성공 → `saveStatus='saved'`·DEBRIEF 유지·`canConfirm=true` → 사용자 확인(`DebriefConfirmCommand.confirm()`) → BASE. 저장 실패 → DEBRIEF 유지·canRetrySave일 때만 retrySave(재정산 0) → 성공 시 confirm 활성. 정상 귀환·실패 **양쪽 동일 정책**. 보장: 정산 출항당 1회·최초 saveRequested 1회·retry 재정산 0·저장 성공만으로 completeDebrief 자동 호출 0·중복 confirm 시 BASE 전환 1회·저장 미완료 confirm 거부(saveIncomplete)·화면 분기는 kind만 |
+| Blocker 3 | 통합 composition patch 확정 — `docs/SPRINT_C_HANDOFF.md` §'통합 composition patch' (게임플레이 4+1줄·그래픽스 2줄+confirm 교체·조립 순서·Game.ts 충돌 표) |
+| Blocker 4 | B5 테스트 변경 검토 acceptance 5항목 — SPRINT_C_HANDOFF §⑤ (통합 관리자 검사) |
+| Blocker 5 | `consumeDamageFlash` 계약 판정 **허용** — SPRINT_C_HANDOFF §⑥ (플래시 플래그만 해제, 코어 상태·lastDamage 불변, snapshot 계약 유지) |
+| 하위 호환 여부 | `DebriefReadModel.canConfirm` 필드 추가(소비자는 그래픽스 신규 화면뿐 — 병합 시 3-인자 tracker 채택 필요), `SortieFailureReport.nextState`는 이제 항상 'DEBRIEF'(자동 BASE 폐기), factory 2번째 인자 추가(기본 null — 기존 호출 무영향) |
+| 개발 리드 결정 | 승인 — **C_INTEGRATION_HANDOFF_READY=true.** 그래픽스 Game.ts의 `completeDebrief` 직접 호출은 병합 시 `debriefConfirm.confirm()`으로 교체할 것(저장 미완료 가드 우회 방지) |
+| 적용 커밋 | 2dacea4(AI 공격 요청)·fd5574b(confirm 정책·바인딩)·223bfd8(검증 119) + 문서 커밋 |
+
+
+### INT-CORE-015 — 스프린트 C 선행 계약 마감: 탐지·추적(C1~C3)·폭뢰 경로(C4)·침수 단일 창구·DEBRIEF 모델
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (C 병렬 착수 게이트 마감 — 상세 인계는 `docs/SPRINT_C_HANDOFF.md`) |
+| 대상 시스템 | `src/contracts/detection.ts`(신규), `src/contracts/survival.ts`(폭뢰 params·DebriefReadModel), `src/core/FloodingCore.ts`·`PlayerHullSystem.ts`(침수 단일 창구), `src/core/PveIntegration.ts`(DebriefStateTracker), `src/core/Game.ts`(배선) |
+| 확정 정책 | ① 선체 손상·침수 = **출항 단위 상태** — 새 출항 시 maxHull 재계산 + currentHull=maxHull ② 영구 손상·수리비·수리 시간 = 후속 스프린트 이관 ③ 구매 순간 currentHull 회복 없음(최대치만 갱신, 다음 출항 반영) ④ **압력 피해 = C1~C9 핵심 범위 제외** — DepthPressure 계약은 확장 경계로 유지·production unwired, 압력 수치를 C9 필수 params·verify:sprint-c 게이트·C 완료 조건에 불포함 |
+| 필요한 변경 | ① C1~C3: 게이지 정본=게임플레이 DetectionSystem(기존 계약 유지), DetectionEnvironmentSource(은신·심도 입력)·DetectionTuningParams(거리 감쇠·감소율 — 공식 문서에 없어 null/unwired)·DetectionHudView·DetectionStageSource(AI는 stage만 — 수치 재계산 금지)·TrackingStateSource. 추적 전이 소유=리드, 상태 어휘는 기존 patrol/alert/attack/lost, 경비함·호위함·적대함 공유. alert 발화 지점 = 기존 detectionChanged(새 이벤트 없음) ② C4: 정본 경로(탐지 → AI 요청 → EnemyAttackPort → DepthChargeSystem → direct/near → applyDamage) + DepthChargeDamageParams(전부 null 허용 — 미확정 시 피해 unwired) ③ 침수 지속 피해도 applyDamage 단일 창구 경유 — tick별 damageEventId=flood:<단조 카운터>, FloodingCore는 닫힌 적분식(dt 분할 무관 총 피해 동일) ④ DebriefReadModel + DebriefStateTracker — 그래픽스가 isDestroyed 추측 없이 귀환/실패 화면 분기 ⑤ 이중 정산 방지 정적 검사(병행 호출 0·정산 호출자 화이트리스트) |
+| 관련 게이트 | C1·C2·C3·C4·C5·C6·C7 (+공통 저장·정산 규칙) |
+| 하위 호환 여부 | 추가·내부 경로 변경만 — 계약 소비자 깨짐 없음. hullDamaged 발행 형태 유지(침수는 near 보고) |
+| 개발 리드 결정 | 승인 — **C_ROLE_HANDOFF_READY=true.** 역할별 인계·수정 가능/금지 파일·acceptance는 SPRINT_C_HANDOFF.md가 정본 |
+| 적용 커밋 | d28f503·8024f1a·ffa8252·0b3a879 (+문서 커밋) |
+
+**병행 정산 경로 현황 (게임플레이 처리 요청):** `EconomySystem.settleDefeat`(:251)·`settleReturn`(:256)·`RunEconomy.settleSortie`(:94) — production 호출자 **0건**(정의만 잔존, 재확인 완료). 정산 정본은 `MetaLoop.settleSortie`(호출자: Game 세션 포트 'aborted'·SortieFailureCoordinator 'destroyed'뿐 — 정적 검사로 고정). 게임플레이가 세 정의를 삭제하고 검증 전용 사용처를 정리한다. acceptance: verify:meta '이중 정산 방지' 검사 통과 유지.
+
+
+### INT-CORE-014 — 스프린트 C 선행 계약: 선체·피해·침수·심도 압력·실패 정산
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (C 공식 착수 — A 인수 통과·B_CORE_COMPLETE·dev가 3958ce4 포함 확인) |
+| 대상 시스템 | `src/contracts/survival.ts`(신규), `src/contracts/events.ts`(playerDestroyed·sortieFailed), `src/core/PlayerHullSystem.ts`·`FloodingCore.ts`·`SortieFailureCoordinator.ts`(신규), `src/core/Game.ts`(배선) |
+| 조사 결과 (근거) | ① **플레이어 피해 시스템이 존재하지 않는다** — `HullSystem` 계약만 있고 구현 0개, `hullDamaged`·`floodingChanged` 발행·구독 0건, `DepthChargeSystem` 구현 0개 ② **적이 플레이어를 공격할 수단이 전혀 없다** — `DestroyerAIController`·`PatrolShipEntity`에 무장 없음, 선박 충돌은 밀어내기 전용(피해 없음) ③ **선체 기준값·피해·침수·압력 params가 전무하다** — `upgrades.json`의 hullIntegrity·maxDepth는 배율만 승인·`paramRef` 없음("기준값 파라미터·소비자 미존재") ④ `settleSortie({outcome:'destroyed'})` 경로는 계산식만 있고 **production 호출자가 없다**(Game.ts는 `'aborted'` 고정) ⑤ `EconomySystem.settleDefeat`/`settleReturn`/`RunEconomy.settleSortie`는 **production 호출자 0건의 병행 정산 경로**다 |
+| 필요한 변경 | ① `PlayerHullState` 단일 읽기 모델(+`unwired` — 기준값 미주입 시 정상 선체로 위장 금지) ② `DamageEvent`/`DamageRequest`·`DamageSourceType`(기존 `DamageCause`는 폭뢰 근접도로 의미가 달라 **중복 아님**, 병존) ③ `DamageReceiverPort` — 결과 7종(applied·ignoredDuplicate·ignoredDestroyed·invalidDamage·targetNotFound·destroyed·unwired), 적용·선체 변경·파괴 판정이 **한 트랜잭션 경계** ④ `FloodingParams`·`FloodingSnapshot`(단계는 level에서 **파생** — 이중 저장 금지) ⑤ `DepthPressureParams`·`DepthPressurePort`(월드 Y 좌표 규약 명시, tick 기반 결정적 피해) ⑥ `EnemyAttackRequest`/`EnemyAttackPort` ⑦ `SurvivalReadModel`(경고는 key만, 문구·색 없음) ⑧ `SortieFailureReport`/`SortieFailurePort` ⑨ `playerDestroyed`·`sortieFailed` 이벤트 ⑩ **MetaState 미확장** — 파괴 사실은 `PlayerHullState.isDestroyed` 하나가 소유하고 메타는 기존 `DEBRIEF` 사용 |
+| 변경 이유 | C1~C9(전 항목 핵심 게이트)의 생존 루프를 4개 창이 병렬 구현할 수 있도록 경계를 먼저 고정. 특히 피해 중복 적용·이중 정산·이중 저장을 계약 수준에서 차단 |
+| 관련 게이트 | C4(피격)·C5(내구도·침수)·C6(실패 화면)·C7(정산 분리)·C8(영구 요소 보존). C1~C3(탐지·추적)·C9(params 이관)은 별도 계약·소유 |
+| 하위 호환 여부 | 추가만 — 기존 `HullSystem`·`hullDamaged`·`floodingChanged`·`DamageCause`·MetaState·저장 책임 표(A-12) 무변경. A·B 회귀 없음(검증 전 항목 통과) |
+| 개발 리드 결정 | 승인. **수치는 하나도 만들지 않는다** — 선체 기준값·피해량·침수 속도·압력은 C9 [COMBAT] params 이관 대상이며 도착 전까지 `unwired`로 남는다 |
+| 적용 커밋 | (본 브랜치 C 선행 계약 커밋) |
+
+**각 창 적용 지침 (스프린트 C):**
+- **게임플레이**(창 2 — C1·C2 탐지·은신, C4 폭뢰 판정, C5 내구도·침수·파괴 판정, C7 손실 계산): 리드 공용 코어(`PlayerHullSystem`)를 **피해 수신 단일 창구**로 소비하고 자체 체력 상태를 만들지 않는다. 실제 피해 source(폭뢰·충돌·압력)·판정 타이밍은 게임플레이 소유. `PatrolShipFleet.isTargetAlive(PLAYER_ENTITY_ID)`가 현재 항상 true인데, 리드가 제공하는 `PlayerAliveSource`를 구독해 파괴 후 추적을 멈추게 할 것. **`EconomySystem.settleDefeat`/`settleReturn`·`RunEconomy.settleSortie`는 production 호출자가 없는 병행 정산 경로다 — 정본은 MetaLoop이므로 삭제 요청**(C에서 별도 지갑 금지)
+- **그래픽스**(창 3 — C5 X-ray 침수, C1·C3 탐지 UI, C6 실패 화면, C7 귀환 화면): `SurvivalReadModel`만 소비. 침수량·피해량을 결정하지 않는다. **실패 화면은 `sortieFailed`, 귀환 화면은 `sortieEnded`** — 데이터·화면을 완전히 분리한다(C7). 경고는 `warningIds` 키로 오고 문구·색·이펙트는 그래픽스 소유
+- **빌드·툴**(창 4 — C9 [COMBAT] params 이관, C1~C9 검증): `params/combat.json` 확장 스키마 제안 — 선체 기준값(`baseMaxHull`)·survivalState 경계 2종·피해량(폭뢰 direct/near)·침수(단계 3종·확산율·선체 피해율)·압력(안전 심도 Y·피해 시작 Y·tick·tick당 피해). **전부 미확정이며 임의 수치 금지.** `verify:sprint-c` 신설은 툴링 몫이고 리드는 없는 script를 실행하지 않는다. C8은 '파괴 후 재접속 → 영구 요소 보존' 단언
+- **통합**: composition 순서 = 공식 params → PlayerHullSystem → FloodingCore → (게임플레이 피해 source) → SortieFailureCoordinator → MetaLoop 정산 → SaveBridge → BASE 복귀 → SurvivalReadModel → 렌더 HUD. B6·B7은 C core와 섞지 않는다(병렬 슬롯)
+
 ### INT-GAME-013 — B5 런타임 연결 완료 + production 배선 2줄 요청 (조립부)
 
 | 필드 | 내용 |

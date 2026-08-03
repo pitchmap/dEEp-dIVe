@@ -22,6 +22,7 @@ import type {
   SurfaceShipMotionPortFactory,
 } from '../contracts/guard';
 import type { DestroyerAI } from '../contracts/systems';
+import type { EnemyAttackPort } from '../contracts/survival';
 import { DestroyerAIController } from './DestroyerAIController';
 
 /**
@@ -32,6 +33,7 @@ import { DestroyerAIController } from './DestroyerAIController';
  */
 export function createProductionDestroyerAIFactory(
   motionPorts: SurfaceShipMotionPortFactory,
+  attackPort: EnemyAttackPort | null = null,
 ): DestroyerAIFactory {
   return {
     create(config: GuardShipAdapterConfig): DestroyerAI | null {
@@ -44,6 +46,9 @@ export function createProductionDestroyerAIFactory(
         // 사건 지점 = 최초의 마지막 확인 위치 (경비함이면 중립 피격 지점)
         lastKnownPosition: config.initialTargetPosition,
         motion,
+        // 공격 요청 소비자 (게임플레이 EnemyAttackCoordinator) — null이면
+        // 요청을 만들지 않는다. 판정·수치는 전부 포트 소유 (INT-CORE-016).
+        attackPort,
         // 초기 표적을 알고 스폰되므로 경계 태세로 시작한다.
         initialState: 'alert',
       });

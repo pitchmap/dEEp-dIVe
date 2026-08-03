@@ -31,6 +31,10 @@ import { loadEconomyParams } from '../tools/economyParams';
 import { loadAimingParams } from '../tools/aimingParams';
 import type { OfficialRuntimeParams } from '../contracts/officialParams';
 import { GuardShipAdapter } from './GuardShipAdapter';
+import { FloodingCore } from './FloodingCore';
+import { PlayerHullSystem } from './PlayerHullSystem';
+import { SortieFailureCoordinator } from './SortieFailureCoordinator';
+import { PLAYER_ENTITY_ID } from '../contracts/guard';
 import { createProductionDestroyerAIFactory } from './destroyerAiFactory';
 import type { SurfaceShipMotionPortFactory } from '../contracts/guard';
 import { WebAudioSystem } from '../audio/WebAudioSystem';
@@ -45,6 +49,9 @@ import {
   GuardSpawnBridge,
   GuardSpawnCoordinator,
   NeutralIncidentBoundary,
+  DebriefConfirmCommand,
+  DebriefStateTracker,
+  EnemyAttackPortBinding,
   SaveBridge,
   SortieEconomyBridge,
   SortieSalvageSpawner,
@@ -103,6 +110,18 @@ export class Game {
   private guardAdapter: GuardShipAdapter | null = null;
   /** 경비함 생성 포트 — 위치 전략·AI 팩토리 연결 지점 */
   private guardSpawn: GuardSpawnCoordinator | null = null;
+  /** 플레이어 선체 공용 코어 — 피해 수신 단일 창구 (INT-CORE-014) */
+  private playerHull: PlayerHullSystem | null = null;
+  /** 침수 결정적 코어 — 선체와 연계, 수치는 params 주입 */
+  private floodingCore: FloodingCore | null = null;
+  /** 출항 실패 조정자 — 파괴 1회 = 정산 1회 */
+  private sortieFailure: SortieFailureCoordinator | null = null;
+  /** DEBRIEF 읽기 모델 — 정산·실패 화면의 유일한 데이터 소스 (C6·C7) */
+  private debriefState: DebriefStateTracker | null = null;
+  /** DEBRIEF 확인 command — BASE 복귀의 유일한 진입점 (INT-CORE-016) */
+  private debriefConfirm: DebriefConfirmCommand | null = null;
+  /** 적 공격 포트 바인딩 — 게임플레이 EnemyAttackCoordinator 연결 지점 */
+  private enemyAttackBinding: EnemyAttackPortBinding | null = null;
   /** 조립부가 건 EventBus 구독 해제 함수 — stop()에서 전부 해제한다 */
   private readonly unsubscribes: Array<() => void> = [];
 
@@ -201,6 +220,13 @@ export class Game {
         officialParams: this.officialParams,
         salvageSpawner: this.salvageSpawner,
         guardAdapter: this.guardAdapter,
+        playerHull: this.playerHull,
+        debrief: this.debriefState,
+        debriefConfirm: this.debriefConfirm,
+        enemyAttackBinding: this.enemyAttackBinding,
+        gameplay,
+        flooding: this.floodingCore,
+        sortieFailure: this.sortieFailure,
         guardSpawn: this.guardSpawn,
         guardLedger: this.guardLedger,
         // 스프린트 B 실측용 읽기 전용 핸들 (실제 인스턴스 — 더미 아님).
@@ -284,6 +310,10 @@ export class Game {
         // 경비 사건 원장은 출항 경계에서 비운다 — 이전 출항의 상관 id가
         // 새 출항의 같은 표적 사건을 삼키지 않게 한다 (INT-CORE-012).
         this.guardLedger?.resetForNewSortie();
+        // 출항 한정 생존 상태 초기화 — 선체·침수·중복 원장·실패 처리 이력.
+        // 지갑·업그레이드·loadout(영구분)은 건드리지 않는다 (INT-CORE-014).
+        this.playerHull?.resetForNewSortie();
+        this.sortieFailure?.resetForNewSortie();
         const spawnReport = this.salvageSpawner?.beginSortie();
         if (spawnReport) {
           if (spawnReport.status === 'spawned') {
@@ -436,7 +466,15 @@ export class Game {
     //     (pose 정본 = 게임플레이 entity 하나).
     const surfaceMotionPorts: SurfaceShipMotionPortFactory =
       gameplay.surfaceShipMotionPortFactory;
-    guardAdapter.attachFactory(createProductionDestroyerAIFactory(surfaceMotionPorts));
+    //     적 공격 포트 바인딩 (INT-CORE-016 — C4). AI는 attack 상태에서 이
+    //     바인딩으로 **요청만** 넣는다. 게임플레이 C 브랜치 병합 시
+    //     `enemyAttackBinding.attach(gameplay.enemyAttackPort)` 1줄로 연결되며,
+    //     그 전까지 모든 요청은 unwired — 폭뢰 투하·피해 0건(즉시 피해 금지).
+    const enemyAttackBinding = new EnemyAttackPortBinding();
+    this.enemyAttackBinding = enemyAttackBinding;
+    guardAdapter.attachFactory(
+      createProductionDestroyerAIFactory(surfaceMotionPorts, enemyAttackBinding),
+    );
     //     경비함 등장 방향 표시(B5) — **실제 스폰 결과만** 렌더에 넘긴다.
     //     스폰이 차단된 동안(위치 전략·AI 팩토리 미연결) 목록은 비어 있고
     //     마커도 뜨지 않는다: 존재하지 않는 경비함을 가리키지 않는다.
@@ -466,6 +504,27 @@ export class Game {
     this.registry.register(new GuardSpawnBridge(guardSpawn));
     // ③ AI 그룹 — 스폰된 기존 구축함 AI들의 수명주기 전달만 담당한다.
     this.registry.register(guardAdapter);
+
+    // ②-b 생존 계통 (INT-CORE-014 — 스프린트 C 공용 코어).
+    //     선체는 **피해 수신의 단일 창구**다: 게임플레이 피해 source(폭뢰·
+    //     충돌·압력)는 전부 이 포트를 통과하며, 중복 방지·차감·전이·파괴
+    //     판정이 한 트랜잭션 경계 안에서 일어난다.
+    //     선체 기준값·침수 수치는 **공식 params에 아직 없다**(C9 [COMBAT]
+    //     이관 대상) — 주입 전까지 unwired 상태이며 피해가 적용되지 않고
+    //     임시 수치도 만들지 않는다. 도착 시 attachHullParams·attachParams
+    //     두 줄로 연결된다.
+    const floodingCore = new FloodingCore(null);
+    this.floodingCore = floodingCore;
+    const playerHull = new PlayerHullSystem(PLAYER_ENTITY_ID, floodingCore, null);
+    this.playerHull = playerHull;
+    // hullIntegrity 업그레이드 소비 — 배율은 공식 승인값, 기준값은 대기.
+    playerHull.applyHullIntegrityModifier(this.upgrades?.modifiers.hullIntegrity ?? 0);
+    this.registry.register(playerHull);
+    //     [배선 대기 — 게임플레이 attach API] PatrolShipFleet의
+    //     isTargetAlive(PLAYER_ENTITY_ID)는 현재 항상 true다. 게임플레이가
+    //     attachPlayerAliveSource(source: PlayerAliveSource)를 제공하면
+    //     여기서 `gameplay.attachPlayerAliveSource(playerHull)` 1줄로 연결한다
+    //     — 파괴 후 추적·공격 요청이 멈춘다 (INT-CORE-015 §PlayerAliveSource).
 
     // ①-c 업그레이드 구매 판정 시스템 (게임플레이 소유 — 조립부가 공식
     //     카탈로그와 실지갑 읽기 단면을 주입한다). **단계의 단일 저장소** —
@@ -534,6 +593,32 @@ export class Game {
     );
     this.registry.register(saveBridge);
 
+    // ②-c 출항 실패 조정자 (INT-CORE-014 — C6·C7·C8).
+    //     파괴 1회 = 실패 1회 = 정산 1회. 손실 계산·지갑·상태 전이는 기존
+    //     MetaLoop 정산 경로가, 저장은 기존 saveRequested('settlement') →
+    //     SaveBridge 경로가 수행한다 — 코디네이터는 SavePort를 직접 호출하지
+    //     않는다(저장 책임 표 A-12 유지). 저장 실패 시 DEBRIEF에 머물며
+    //     재정산 없이 저장만 재시도한다.
+    const sortieFailure = new SortieFailureCoordinator(metaLoop, saveBridge, () =>
+      playerHull.markFailureSettled(),
+    );
+    this.sortieFailure = sortieFailure;
+    this.registry.register(sortieFailure);
+
+    // ②-c2 DEBRIEF 읽기 모델 (INT-CORE-015 — C6·C7 화면 분리). 그래픽스
+    //     정산·실패 화면은 isDestroyed 추측이 아니라 이 모델만 소비한다:
+    //     kind('returned'/'aborted'/'destroyed')·settlement·failure·
+    //     saveStatus·canRetrySave. 재시도 명령은 sortieFailure.retrySave를
+    //     조립부가 command로 감싸 제공한다(모델은 읽기 전용).
+    const debriefState = new DebriefStateTracker(sortieFailure, saveBridge, metaLoop);
+    this.debriefState = debriefState;
+    this.registry.register(debriefState);
+    //     확인 command (INT-CORE-016 — 개정 DEBRIEF 종료 정책): 저장 성공이
+    //     BASE 전환을 자동으로 일으키지 않는다. 귀환·실패 화면의 '확인'
+    //     버튼이 이 command를 호출하며, 저장 미완료·중복 확인은 거부된다.
+    //     정상 귀환·실패 양쪽 동일 정책.
+    this.debriefConfirm = new DebriefConfirmCommand(metaLoop, debriefState);
+
     // ②-c production 기지 경제 조립 (INT-CORE-010) — 저장 책임 단일화.
     //     savePort: 명령당 호출 횟수 계측 가능 (CountingSavePort.callCount).
     const savePort = new CountingSavePort({
@@ -559,6 +644,10 @@ export class Game {
       // 장비 배율·외형 단계. UpgradeState는 파생 뷰로만 동기화한다.
       onPurchaseCommitted: () => {
         upgrades.setLevels(upgradePurchase.levelSnapshot);
+        // hullIntegrity 구매 반영 [INT-CORE-015 정책]: 최대치만 재계산 —
+        // 진행 중 출항의 currentHull은 회복시키지 않으며, 효과는 다음 출항
+        // 초기화(currentHull=maxHull)에서 적용된다.
+        this.playerHull?.applyHullIntegrityModifier(upgrades.modifiers.hullIntegrity ?? 0);
         this.effectiveParams = deriveEffectiveParams(params, upgrades.modifiers);
         gameplay.equipment.setUpgradeModifiers({
           torpedoSpeedBonus: 0,

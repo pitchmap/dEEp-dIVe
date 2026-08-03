@@ -28,6 +28,7 @@ import type {
   GuardSpawnReason,
 } from '../contracts/guard';
 import type { FactionId } from '../contracts/faction';
+import type { TrackingStateSource, TrackingStateView } from '../contracts/detection';
 import type { GameSystem, SystemContext } from './GameSystem';
 
 /** 스폰된 경비함 1척 — AI는 기존 구현, 나머지는 주입된 메타데이터다 */
@@ -55,7 +56,7 @@ export interface GuardShipHandle {
  * `GameSystem`으로 등록되며 `update(dt)`를 스폰된 기존 AI들에게 그대로
  * 전달한다 (SystemRegistry 규약 유지 — 실행 순서 = 등록 순서, dispose 역순).
  */
-export class GuardShipAdapter implements GameSystem {
+export class GuardShipAdapter implements GameSystem, TrackingStateSource {
   readonly id = 'guardShipAdapter';
 
   private factory: DestroyerAIFactory | null;
@@ -77,6 +78,21 @@ export class GuardShipAdapter implements GameSystem {
   /** 스폰된 경비함 목록 (읽기 전용 — 렌더·검증용) */
   get spawnedShips(): readonly GuardShipHandle[] {
     return this.ships;
+  }
+
+  /**
+   * 추적 상태 읽기 소스 (contracts/detection.ts `TrackingStateSource`) —
+   * 그래픽스 추적 표시가 소비한다. AI 내부 객체를 넘기지 않는 값 스냅샷.
+   */
+  get trackedShips(): readonly TrackingStateView[] {
+    return this.ships.map((ship) => ({
+      entityId: ship.entityId,
+      state: ship.ai.state,
+      lastKnownPosition:
+        'lastKnownPosition' in ship.ai
+          ? { ...(ship.ai as { lastKnownPosition: { x: number; z: number } }).lastKnownPosition }
+          : null,
+    }));
   }
 
   /**

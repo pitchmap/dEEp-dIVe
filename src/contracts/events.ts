@@ -34,6 +34,11 @@ import type {
   NeutralShipHitPayload,
   TransportAttackedPayload,
 } from './guard';
+import type {
+  DamageSourceType,
+  SortieFailureReason,
+  SortieFailureReport,
+} from './survival';
 
 /** 폭뢰 피해 구분 (마스터 플랜 §5.13) */
 export type DamageCause = 'direct' | 'near';
@@ -86,6 +91,23 @@ export interface GameEvents {
   /** 침수 상태 변경 시. severity 0 = 침수 없음(해소).
    *  X-ray 침수 표시(보호 목록)가 이 이벤트로 구동된다 */
   floodingChanged: { compartment: string; severity: number };
+
+  /** 플레이어 잠수함 파괴 확정 — **1회만** (발행: 리드 PlayerHullSystem).
+   *  구독: SortieFailureCoordinator(실패 정산 1회), 렌더(실패 연출), 오디오.
+   *  파괴 판정의 주인은 선체 상태 하나뿐이며 MetaState는 확장하지 않는다
+   *  (파괴 사실을 두 곳에 저장 금지 — INT-CORE-014) */
+  playerDestroyed: {
+    reason: SortieFailureReason;
+    destroyedByEntityId: number | null;
+    damageSource: DamageSourceType | null;
+    worldPosition: { x: number; y: number; z: number };
+  };
+
+  /** 출항 실패 정산 확정 (발행: 리드 SortieFailureCoordinator).
+   *  구독: 그래픽스 **실패 화면**(C6·C7 — 귀환 정산 화면과 데이터·화면 분리),
+   *  UI·오디오. 손실 계산은 MetaLoop 정산 경로가 소유하며 이 이벤트는
+   *  그 결과를 전달만 한다 */
+  sortieFailed: { report: SortieFailureReport };
 
   /** 성능 샘플(약 1초 주기, 발행: core/Game).
    *  계측 오버레이·게이트 기록 툴이 구독한다 (G1·G2) */
