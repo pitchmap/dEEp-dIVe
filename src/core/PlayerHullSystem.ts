@@ -68,6 +68,8 @@ export class PlayerHullSystem
   /** 중복 방지 원장 — 이벤트 id·상관 id 공용 단일 저장소 (출항 경계 리셋) */
   private readonly appliedEventIds = new Set<string>();
   private readonly appliedCorrelationIds = new Set<string>();
+  /** 침수 tick id 카운터 — 출항 내 단조 증가, 출항 경계 리셋 */
+  private floodTickCounter = 0;
 
   private bus: EventBus | null = null;
 
@@ -91,9 +93,10 @@ export class PlayerHullSystem
   /** `hullIntegrity` 보정 합 소비 — 최종 최대치 = 기준값 × (1 + 보정 합) */
   applyHullIntegrityModifier(modifierSum: number): void {
     this.hullModifierSum = Number.isFinite(modifierSum) && modifierSum > 0 ? modifierSum : 0;
-    // 구매는 기지에서만 가능하고 출항 시작 시 최대치로 초기화되므로, 여기서
-    // 현재 선체를 어떻게 다룰지는 C 핵심 게이트에 영향이 없다. 정책 미결정
-    // 상태를 반영해 **최대치만 갱신**하고 현재치는 상한으로만 클램프한다.
+    // 정책 확정 [INT-CORE-015]: 구매 순간에는 진행 중 출항의 currentHull을
+    // 회복시키지 않는다 — 최대치만 갱신하고 현재치는 상한 클램프만. 효과는
+    // 다음 출항 초기화(resetForNewSortie)에서 currentHull=maxHull로 반영된다.
+    // 기지까지 이어지는 영구 손상·수리비·수리 시간은 후속 스프린트 이관.
     this.recomputeMaxHull(false);
   }
 
@@ -191,7 +194,17 @@ export class PlayerHullSystem
     this.bus = context.bus;
   }
 
-  /** 침수 지속 피해 — 결정적 누적(프레임 수 무관, dt에만 비례) */
+  /**
+   * 침수 지속 피해 — FloodingCore가 계산한 피해도 선체를 직접 깎지 않고
+   * **같은 단일 창구(`applyDamage`)를 통과한다** [INT-CORE-015].
+   *
+   * 중복 원장 규칙 (정상 tick vs 실제 중복의 구분):
+   *  - tick별 `damageEventId` = `flood:<출항 내 단조 증가 카운터>` — 매 tick
+   *    새 id이므로 정상적인 후속 tick은 원장에 막히지 않는다.
+   *  - `correlationId`도 같은 tick id를 쓴다 — 침수 tick 1회 = 독립된 피해
+   *    적용 1회이며, '같은 공격의 중복'이 아니다.
+   *  - 실제 중복(같은 tick id의 재적용)만 원장이 차단한다.
+   */
   update(deltaSeconds: number): void {
     if (this.base === null || this.destroyed) return;
     if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0) return;
@@ -199,20 +212,26 @@ export class PlayerHullSystem
     const floodDamage = this.flooding.update(deltaSeconds);
     if (floodDamage <= 0) return;
 
-    const applied = Math.min(floodDamage, this.currentHullValue);
-    this.currentHullValue = Math.max(0, this.currentHullValue - applied);
-    this.lastSource = FLOODING_DAMAGE_SOURCE;
-    this.lastAmount = applied;
-    this.bus?.emit('hullDamaged', {
-      amount: applied,
-      hullRemaining: this.maxHullValue > 0 ? this.currentHullValue / this.maxHullValue : 0,
-      cause: 'near',
+    this.floodTickCounter += 1;
+    const tickId = `flood:${this.floodTickCounter}`;
+    const flashBefore = this.damageFlash;
+    this.applyDamage({
+      damageEventId: tickId,
+      targetEntityId: this.entityId,
+      attackerEntityId: null,
+      sourceType: FLOODING_DAMAGE_SOURCE,
+      rawDamage: floodDamage,
+      // 침수는 위치 없는 내부 피해 — 좌표는 의미를 갖지 않는다.
+      worldPosition: { x: 0, y: 0, z: 0 },
+      occurredAt: this.floodTickCounter,
+      correlationId: tickId,
+      causesFlooding: false,
+      floodingContribution: 0,
+      // 기존 hullDamaged 계약 형태 유지 — 간접(near) 피해로 보고한다.
+      proximity: 'near',
     });
-    this.emitFlooding();
-
-    if (this.currentHullValue <= 0) {
-      this.enterDestroyed(null);
-    }
+    // 지속 피해는 피격 플래시를 만들지 않는다 (연속 점멸 방지).
+    this.damageFlash = flashBefore;
   }
 
   /** 출항 한정 상태 초기화 — 지갑·업그레이드·loadout은 건드리지 않는다 */
@@ -226,7 +245,10 @@ export class PlayerHullSystem
     this.damageFlash = false;
     this.appliedEventIds.clear();
     this.appliedCorrelationIds.clear();
+    this.floodTickCounter = 0;
     this.flooding.resetForNewSortie();
+    // 정책 확정 [INT-CORE-015]: 선체 손상·침수는 출항 단위 상태 — 새 출항
+    // 시작 시 업그레이드 반영 maxHull 재계산 + currentHull = maxHull.
     this.recomputeMaxHull(true);
   }
 

@@ -71,8 +71,14 @@ export class FloodingCore {
   }
 
   /**
-   * 시간 경과 누적. 반환값은 이번 구간에 침수가 유발한 **선체 피해량**
-   * (수치가 0이거나 미연결이면 0 — 호출측이 그대로 선체에 적용한다).
+   * 시간 경과 누적. 반환값은 이번 구간에 침수가 유발한 **선체 피해량** —
+   * 호출측(PlayerHullSystem)이 이 값으로 DamageRequest를 만들어 단일 창구
+   * (`DamageReceiverPort.applyDamage`)를 통과시킨다. 여기서 선체를 직접
+   * 수정하지 않는다.
+   *
+   * 결정성: 피해 = rate × ∫level(t)dt 의 **닫힌 적분식**(수위는 구간 안에서
+   * 선형 증가·1.0 클램프)이므로, dt를 어떻게 분할해도 총 피해가 같다 —
+   * update(a+b) = update(a)+update(b) (부동소수 오차 범위 내).
    */
   update(deltaSeconds: number): number {
     const params = this.params;
@@ -80,9 +86,27 @@ export class FloodingCore {
     if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0) return 0;
     if (this.levelValue <= 0) return 0;
 
-    this.levelValue = Math.min(1, this.levelValue + params.spreadPerSecond * deltaSeconds);
-    // 침수 수위에 비례한 지속 피해 — 프레임 수가 아니라 dt에만 비례한다.
-    return params.hullDamagePerSecondAtFull * this.levelValue * deltaSeconds;
+    const levelBefore = this.levelValue;
+    const spread = params.spreadPerSecond;
+    let levelAfter: number;
+    let levelIntegral: number;
+    if (spread <= 0) {
+      levelAfter = levelBefore;
+      levelIntegral = levelBefore * deltaSeconds;
+    } else {
+      const unclamped = levelBefore + spread * deltaSeconds;
+      if (unclamped <= 1) {
+        levelAfter = unclamped;
+        levelIntegral = ((levelBefore + levelAfter) / 2) * deltaSeconds;
+      } else {
+        // 구간 중간에 1.0 도달 — 도달 시점까지 사다리꼴 + 이후 상수 구간
+        const timeToFull = (1 - levelBefore) / spread;
+        levelAfter = 1;
+        levelIntegral = ((levelBefore + 1) / 2) * timeToFull + (deltaSeconds - timeToFull);
+      }
+    }
+    this.levelValue = levelAfter;
+    return params.hullDamagePerSecondAtFull * levelIntegral;
   }
 
   /** 출항 한정 상태 — 새 출항마다 초기화된다 (기지에서는 침수 없음) */
