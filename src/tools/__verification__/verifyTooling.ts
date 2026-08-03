@@ -10,7 +10,7 @@ import {
   createDefaultSave,
   type SaveData,
 } from '../../meta/save/saveSchema';
-import { migrateToCurrent, type SaveMigration } from '../../meta/save/migrations';
+import { migrateToCurrent, SAVE_MIGRATIONS, type SaveMigration } from '../../meta/save/migrations';
 import {
   SAVE_KEY_BACKUP,
   SAVE_KEY_CURRENT,
@@ -127,16 +127,32 @@ export function runToolingVerification(): CheckResult[] {
     return '음수 크레딧 구조 거부 → 백업 채택';
   });
 
-  check('세이브: 버전 마이그레이션 (주입 v0→v1)', () => {
+  check('세이브: 버전 마이그레이션 사슬 (주입 v0→v1 → 실제 v1→v2)', () => {
     const storage = new MapStorage();
+    // 주입 v0→v1은 v1 형태(progress.bossCluesFound)를 만들어야 하고, 이후
+    // 실제 등록부의 v1→v2(M2 단서 id 목록화 — INT-CORE-020)가 이어진다.
     const migrations: Record<number, SaveMigration> = {
-      0: (old) => ({ ...createDefaultSave(), credits: old['gold'] ?? 0, schemaVersion: 1 }),
+      0: (old) => ({
+        schemaVersion: 1,
+        credits: (old['gold'] as number | undefined) ?? 0,
+        rareParts: 0,
+        upgradeLevels: {},
+        equippedGear: [],
+        progress: { bossCluesFound: 1, bossUnlocked: false, bossDefeated: false },
+        settings: { keyboardLockNoticeShown: false },
+      }),
+      ...SAVE_MIGRATIONS,
     };
     storage.setItem(SAVE_KEY_CURRENT, JSON.stringify({ schemaVersion: 0, gold: 77 }));
     const store = new SaveStore(storage, migrations);
     const loaded = store.load();
-    assert(loaded.source === 'current' && loaded.data.credits === 77, 'v0 gold → v1 credits 이관');
-    return 'v0{gold:77} → v1{credits:77}';
+    assert(loaded.source === 'current' && loaded.data.credits === 77, 'v0 gold → credits 이관');
+    assert(
+      loaded.data.schemaVersion === CURRENT_SCHEMA_VERSION &&
+        loaded.data.progress.bossCluesCollected.length === 1,
+      'v1 개수 1 → v2 legacy id 1개 이관 (2단계 사슬)',
+    );
+    return 'v0{gold:77} → v1{clues:1} → v2{credits:77, legacy id 1}';
   });
 
   check('세이브: 마이그레이션 함수 부재·미래 버전 → 복구 경로', () => {
