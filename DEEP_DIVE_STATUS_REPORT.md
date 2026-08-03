@@ -23,6 +23,12 @@
 | 측정 시점 커밋 | `971be90` (2026-08-03 18:01 UTC) |
 | `dev` 총 커밋 수 | 232 (최초 `5fc8b8e`, 2026-07-31) |
 | Node | `.nvmrc` 고정 (`engine-strict` 활성) |
+| 미병합 브랜치 조사 시점 | `origin` fetch 2026-08-03 (§2·§4의 "미병합 진행분") |
+
+⚠️ **§1의 검증 수치는 `dev` 기준이다.** M0~M2 작업이 여러 브랜치에서 **동시
+진행 중**이라 미병합 브랜치의 상태는 이 값과 다르다. 어떤 항목이 어느 브랜치에
+있는지는 §4의 "미병합 진행분" 열을 본다. 브랜치 상황은 빠르게 바뀌므로 판단
+전에 `git fetch origin --prune`으로 다시 확인할 것.
 
 재현 명령:
 
@@ -63,13 +69,13 @@ npm run verify:hud && npm run verify:sprint-a && npm run verify:sprint-b && npm 
 | 브랜치 | dev 대비 | 상태 |
 |---|---|---|
 | `dev` | — | 통합 기준선. PR #1~#7 전부 병합 완료 |
-| `feat/gameplay-m2-interaction` | **+3커밋** (dev −1) | ⚠️ **유일한 미병합 실작업.** `InteractionSystem` 신규 (아래 §4) |
-| `feat/render` | +0 (dev −2) | PR #7로 병합 완료 |
+| `feat/gameplay-m2-interaction` | **+3커밋** | ⚠️ 미병합 — `InteractionSystem` 신규 (§4) |
+| `feat/render` | **+2커밋** | ⚠️ 미병합 — 소나 스코프·보스 피격/페이즈 상태·GPU 계측 문서. PR #7분은 병합 완료 |
+| `claude/deep-dive-tooling-phase-0-cj6c49` | **+2커밋** | ⚠️ 미병합 — 폭뢰 lifecycle 이벤트 발행·사운드 배선·M0 계측 산출물 이관 |
 | `claude/deep-dive-d5-gray-box-integration-tree5i` | +1 (dev −11) | 병합됨 (PR #6), 이후 문서만 |
 | `claude/sprint-c-runtime-closeout` | +0 (dev −13) | 병합됨 (PR #5) |
 | `claude/deep-dive-bootstrap-6wrpuw` | +1 (dev −164) | 병합됨 (PR #2), 이후 문서만 |
 | `claude/deep-dive-core-lead-uyg77p` | +0 (dev −44) | 정리됨 |
-| `claude/deep-dive-tooling-phase-0-cj6c49` | +0 (dev −45) | 정리됨 |
 | `claude/submarine-controls-depth-3wi424` | +0 (dev −42) | 정리됨 |
 | `feat/core` · `feat/gameplay` · `feat/tooling` | +0 (dev −227) | **2026-07-31 이후 방치.** 초기 역할 브랜치 |
 
@@ -92,8 +98,9 @@ npm run verify:hud && npm run verify:sprint-a && npm run verify:sprint-b && npm 
 | #1 | D+5 회색 박스 빌드 통합 | 통합 브랜치 → `dev` | 2026-07-31 |
 
 > **17차 회의 안건 1(M0) 대비:** "PR #7 병합"은 **이미 완료**(2026-08-03).
-> 남은 M0 항목은 실 GPU 계측과 `docs/measurements/M0_gpu_baseline.md` 커밋인데,
-> **`docs/measurements/` 디렉터리는 아직 없다.**
+> 남은 M0 항목인 `docs/measurements/M0_gpu_baseline.md`는 **`dev`에 아직 없고**,
+> `feat/render`와 `claude/deep-dive-tooling-phase-0-cj6c49` **두 브랜치에 각각**
+> 만들어져 있다(§5-4). 따라서 M0는 **병합 기준으로는 미완료**다.
 
 ---
 
@@ -123,18 +130,22 @@ TypeScript production 파일 **148개**.
 
 16·17차가 지시한 항목을 `dev` 코드에서 직접 확인한 결과다.
 
-| 항목 | 근거 결의 | dev 실측 상태 |
-|---|---|---|
-| `InteractionSystem` (E 2초 홀드 회수) | 16차 2-4 / 17차 결의 3 창 2 **선행** | ⚠️ **dev에 없음.** `feat/gameplay-m2-interaction`에만 존재 (`src/systems/interaction/InteractionSystem.ts` 314줄 + 검증 265줄). **미병합** |
-| 소나 스코프 (`SonarScopeReadModel`) | 16차 2-5 / 17차 결의 4 | ❌ **코드 없음.** 관련 심볼 0건 |
-| 보스 AI (3단계 × 4패턴) | 11차 결의 5 / 16차 1-3 / 17차 결의 3 창 1 | ❌ **AI 없음.** 존재하는 건 렌더 스파이크(`src/render/boss/` 4파일)와 `src/systems/BossWeakPointTarget.ts`뿐 |
-| 침묵 항행 | 16차 / 17차 결의 3 창 2 (완주 판정 직후) | 🟡 **판정 경로만 존재, 토글 없음.** `SilentRunningSource` 인터페이스와 `silentRunningNoiseMultiplier` 파라미터는 있고 `SubmarineDetectionSystem`이 소비하지만, **소스를 주입하는 토글 시스템이 없어 항상 false**. 코드 주석에도 명시됨 |
-| 폭뢰 lifecycle 이벤트 발행자 | 17차 결의 4 | ❌ **미이행 확인.** `depthChargeEnteredWater`·`depthChargeExploded`는 `src/contracts/events.ts` 83·86행 **선언만**, production 발행자 **0건**. 발행 예정지 `src/systems/combat/DepthChargeRunSystem.ts`는 존재 |
-| `params.depthChargeOnPassiveScope` | 17차 결의 4 (초기값 false) | ❌ **파라미터 없음** |
-| 어뢰 추적 캠 | 16차 2-1 / 17차 결의 2 | ❌ **미구현** (M3 앞머리 — 17차에서 오늘 범위 밖으로 명시) |
-| 화면 전투 버튼 제거 + Alt 프리룩 | 16차 2-2 (8차 결의 1 폐지) | ❌ **미이행.** `.hud-buttons`가 `src/ui/`에 남아 있음 (M3 앞머리) |
-| 보스 분절 애니 스파이크 | 11차 / 17차 결의 3 창 3 | ✅ **A안·B안 둘 다 존재**, 판정 문서 `docs/RENDER_SPIKE_BOSS.md` |
-| M0 GPU 계측 문서 | 17차 결의 1 | ❌ **`docs/measurements/` 없음** |
+| 항목 | 근거 결의 | `dev` 실측 상태 | 미병합 진행분 |
+|---|---|---|---|
+| `InteractionSystem` (E 2초 홀드 회수) | 16차 2-4 / 17차 결의 3 창 2 **선행** | ❌ 없음 | 🟡 `feat/gameplay-m2-interaction` — `src/systems/interaction/InteractionSystem.ts` 314줄 + 검증 265줄 |
+| 소나 스코프 (`SonarScopeReadModel`) | 16차 2-5 / 17차 결의 4 | ❌ 없음 | 🟡 `feat/render` — `src/render/SonarScope.ts` 신설, 좌상단 배치 정합 커밋(`6c13a9b`)까지 진행 |
+| 보스 AI (3단계 × 4패턴) | 11차 결의 5 / 16차 1-3 / 17차 결의 3 창 1 | ❌ AI 없음. 렌더 스파이크(`src/render/boss/` 4파일)와 `src/systems/BossWeakPointTarget.ts`뿐 | 🟡 `feat/render` — 보스 피격·페이즈 **상태**(`845897a`). 패턴 4종 AI는 아직 확인되지 않음 |
+| 침묵 항행 | 16차 / 17차 결의 3 창 2 (완주 판정 직후) | 🟡 **판정 경로만, 토글 없음.** `SilentRunningSource`와 `silentRunningNoiseMultiplier`는 있고 `SubmarineDetectionSystem`이 소비하지만 **소스 주입 토글이 없어 항상 false** (코드 주석에도 명시) | — |
+| 폭뢰 lifecycle 이벤트 발행자 | 17차 결의 4 | ❌ `src/contracts/events.ts` 83·86행 **선언만**, production 발행자 **0건** | ✅ `claude/deep-dive-tooling-phase-0-cj6c49` — `DepthChargeRunSystem`에서 발행 + 사운드 배선(`3fd22db`) |
+| `params.depthChargeOnPassiveScope` | 17차 결의 4 (초기값 false) | ❌ 파라미터 없음 | 미확인 |
+| 어뢰 추적 캠 | 16차 2-1 / 17차 결의 2 | ❌ 미구현 (M3 앞머리 — 17차에서 오늘 범위 밖으로 명시) | — |
+| 화면 전투 버튼 제거 + Alt 프리룩 | 16차 2-2 (8차 결의 1 폐지) | ❌ 미이행. `.hud-buttons`가 `src/ui/ControlsHud.ts:99`에 남아 있음 (M3 앞머리) | — |
+| 보스 분절 애니 스파이크 | 11차 / 17차 결의 3 창 3 | ✅ **A안·B안 둘 다 존재**, 판정 문서 `docs/RENDER_SPIKE_BOSS.md` | — |
+| M0 GPU 계측 문서 | 17차 결의 1 | ❌ `docs/measurements/` 없음 | 🟡 두 브랜치에 각각 존재 — `feat/render`(`M0_gpu_baseline.md`) / 툴링 브랜치(`M0_gpu_baseline.md` + `m0-measurement.json`, 미실시 항목 명시). **두 산출물의 정합은 병합 시 확인 필요** |
+
+**읽는 법:** `dev` 열이 이 프로젝트의 "합의된 현재"다. "미병합 진행분"은
+아직 통합 판정을 받지 않았으므로 **완료로 세지 않는다** (17차 결의 3 창 5 —
+완주 판정은 dev 통합 빌드에서 수행).
 
 ---
 
@@ -152,15 +163,20 @@ TypeScript production 파일 **148개**.
    (다른 9개 `params/*.json`은 `null` 0건.)
 2. **`params/boss.json`·`params/sectors.json` 미존재** — 스코프 가드는 통과하지만
    보스·해역 정의가 아직 데이터로 없다. M1 착수 전제.
-3. **`feat/gameplay-m2-interaction` 미병합** — 17차가 "보스 착수 전 **선행**"으로
-   못 박은 `InteractionSystem`이 `dev`에 없다. **M1의 첫 병합 대상.**
-4. **폭뢰 lifecycle 이벤트 발행자 0건** — 계약만 있고 발행이 없어 사운드 트리거와
-   패시브 스코프 표시가 둘 다 막혀 있다 (17차 결의 4).
+3. **M1 작업이 세 브랜치에 흩어져 있고 전부 `dev` 미병합** — 17차 결의 3 창 5의
+   병합 순서(`InteractionSystem` → 보스 코어 → 병렬 2건 → 완주 판정)를 적용하려면
+   **`feat/gameplay-m2-interaction`(선행)이 먼저** 들어가야 한다.
+   현재 미병합: `feat/gameplay-m2-interaction`(InteractionSystem) ·
+   `feat/render`(소나 스코프·보스 상태·GPU 계측) ·
+   `claude/deep-dive-tooling-phase-0-cj6c49`(폭뢰 이벤트 발행·사운드·GPU 계측).
+4. **`docs/measurements/M0_gpu_baseline.md`가 두 브랜치에 각각 존재** — 서로 다른
+   세션이 같은 경로에 산출물을 만들었다. **병합 시 충돌·수치 불일치 확인 필요.**
+   `dev`에는 아직 없으므로 17차 결의 1의 기본 품질(low/medium) 자동 결정은
+   **아직 확정되지 않았다.**
 5. **수동 판정 잔여** — sprint-a 수동 5건, sprint-b 보류 1·차단 1·대기 4.
    자동 검증으로는 닫을 수 없고 `dev` 통합 빌드에서 사람이 판정해야 한다.
-6. **M0 실 GPU 계측 미수행** — `docs/measurements/M0_gpu_baseline.md` 없음.
-   17차 결의 1에 따라 기본 품질(low/medium)이 이 계측으로 자동 결정되므로,
-   **계측 전에는 기본 품질이 확정되지 않은 상태**다.
+6. **침묵 항행 토글 부재** — 판정 경로는 있으나 소스 주입이 없어 항상 false다.
+   17차 결의 3 기준 완주 판정 직후 연결 예정이며 아직 착수 흔적이 없다.
 
 ---
 
