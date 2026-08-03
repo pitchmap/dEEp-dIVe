@@ -14,7 +14,7 @@
  *  - 로딩이 끝나고 루프가 실제로 도는가
  *
  * 하드웨어 실측은 그래픽스 창(또는 실제 노트북 보유자)이 채워야 하며,
- * 이 러너의 출력은 `docs/M0_gpu_baseline.md`의 '컨테이너 참조' 열에만 들어간다.
+ * 이 러너의 출력은 `docs/measurements/M0_gpu_baseline.md`의 '컨테이너 참조' 열에만 들어간다.
  */
 
 import { chromium } from 'playwright-core';
@@ -175,7 +175,7 @@ const report = {
   rows,
   consoleErrors: allErrors,
 };
-writeFileSync(path.join(projectRoot, 'docs', 'm0-measurement.json'), `${JSON.stringify(report, null, 2)}\n`);
+writeFileSync(path.join(projectRoot, 'docs', 'measurements', 'm0-measurement.json'), `${JSON.stringify(report, null, 2)}\n`);
 
 console.log('=== M0 계측 (컨테이너 Chromium — 노트북 실측 대체 아님) ===');
 console.log('tier    scenario        loadMs  avgFps  p95ms  worstMs  err');
