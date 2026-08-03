@@ -3686,13 +3686,33 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
   {
     const bus = new EventBus();
     const systems = new GameplaySystems(bus, params, undefined, STARTING_CANYON_LAYOUT, testOfficialParams());
-    // 공식 combat.json에는 거리 감쇠·감소율이 아직 null이다 → unwired.
-    // 정규화 경로 그대로 검증: 공인 로더(validateCombatParams — 중첩 스키마
-    // 단일 해석 지점) 결과의 게임플레이 단면을 넘긴다 [INT-CORE-017].
-    const combatResult = validateCombatParams(rawParams.combat);
+    // unwired 보장은 **명시적 null 입력**으로 검증한다 — C9 v0.1 승인으로
+    // 실파일은 더 이상 null이 아니지만, 미확정 상태의 게이지 0·safe 고정
+    // 계약은 영구 보장이다. 정규화 경로 그대로: 공인 로더(validateCombatParams
+    // — 중첩 스키마 단일 해석 지점)에 null 명시 픽스처를 통과시킨다 [INT-CORE-017].
+    const nullValueBlock = (fields: readonly string[]): Record<string, { value: null }> =>
+      Object.fromEntries(fields.map((field) => [field, { value: null }]));
+    const nullCombatResult = validateCombatParams({
+      hull: nullValueBlock(['baseMaxHull', 'damagedRatioThreshold', 'criticalRatioThreshold']),
+      depthCharge: nullValueBlock([
+        'directRadiusMeters',
+        'nearRadiusMeters',
+        'directDamage',
+        'nearDamage',
+        'dropCooldownSeconds',
+      ]),
+      flooding: nullValueBlock([
+        'minorThreshold',
+        'majorThreshold',
+        'catastrophicThreshold',
+        'hullDamagePerSecondAtFull',
+        'spreadPerSecond',
+      ]),
+      detection: nullValueBlock(['distanceFalloff', 'gaugeDecayPerSecond']),
+    });
     systems.attachCombatParams({
-      detectionTuning: combatResult.detectionTuning,
-      depthCharge: combatResult.depthCharge,
+      detectionTuning: nullCombatResult.detectionTuning,
+      depthCharge: nullCombatResult.depthCharge,
     });
     const changes: Array<{ gauge: number; stage: string }> = [];
     bus.on('detectionChanged', (payload) => changes.push(payload));
@@ -3709,6 +3729,19 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
         changes.length === 0 &&
         systems.detectionStageSource.stage === 'safe',
       `gauge=${hud.gauge}, stage=${hud.stage}, unwired=${hud.unwired}, 전이=${changes.length}`,
+    );
+
+    // 실파일 확정 상태 단언 (C9 v0.1 승인): 공인 로더 기준 15필드 전량
+    // 확정·pending 0건. 승인값이 회귀로 null·부분 확정이 되면 여기서 잡힌다.
+    const realCombatResult = validateCombatParams(rawParams.combat);
+    check(
+      '[COMBAT] C9 v0.1 — 실파일 combat.json 15필드 전량 확정 (pending 0건·전 블록 non-null)',
+      realCombatResult.pendingFields.length === 0 &&
+        realCombatResult.hull !== null &&
+        realCombatResult.depthCharge !== null &&
+        realCombatResult.flooding !== null &&
+        realCombatResult.detectionTuning !== null,
+      `pending=${realCombatResult.pendingFields.length} [${realCombatResult.pendingFields.join(', ')}]`,
     );
 
     // 픽스처 수치 주입(검증 전용 — production params 아님) → 게이지 구동
