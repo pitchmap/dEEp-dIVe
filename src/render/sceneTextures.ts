@@ -31,7 +31,7 @@ import visualParams from './renderVisualParams.json';
 
 const TEX = visualParams.artDirection.textures;
 
-export type SceneTextureKind = 'wall' | 'floor' | 'metal';
+export type SceneTextureKind = 'wall' | 'floor' | 'metal' | 'marks';
 
 interface Slot {
   texture: THREE.Texture | null;
@@ -43,6 +43,7 @@ const slots: Record<SceneTextureKind, Slot> = {
   wall: { texture: null, failed: false, pending: [] },
   floor: { texture: null, failed: false, pending: [] },
   metal: { texture: null, failed: false, pending: [] },
+  marks: { texture: null, failed: false, pending: [] },
 };
 let initialized = false;
 
@@ -51,12 +52,19 @@ function configure(
   repeatU: number,
   repeatV: number,
   maxAnisotropy: number,
+  wrap: 'repeat' | 'clamp',
 ): void {
   texture.colorSpace = THREE.SRGBColorSpace;
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
+  if (wrap === 'repeat') {
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+  } else {
+    // 아틀라스 — 셀 밖 샘플링 방지 (기본 clamp 유지 + repeat 1)
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+  }
   texture.repeat.set(repeatU, repeatV);
-  // mipmap은 기본 활성(LinearMipmapLinear) — PoT(1024/512) 에셋 전제
+  // mipmap은 기본 활성(LinearMipmapLinear) — PoT 에셋 전제
   texture.anisotropy = Math.max(1, Math.min(TEX.anisotropy, maxAnisotropy));
 }
 
@@ -78,6 +86,7 @@ export function initSceneTextures(maxAnisotropy: number): void {
     sizeStandard: number;
     repeatU: number;
     repeatV: number;
+    wrap: 'repeat' | 'clamp';
   }> = [
     {
       kind: 'wall',
@@ -85,6 +94,7 @@ export function initSceneTextures(maxAnisotropy: number): void {
       sizeStandard: TEX.wall.sizeStandard,
       repeatU: 1 / TEX.wall.tileMetersU,
       repeatV: 1 / TEX.wall.tileMetersV,
+      wrap: 'repeat',
     },
     {
       kind: 'floor',
@@ -92,6 +102,7 @@ export function initSceneTextures(maxAnisotropy: number): void {
       sizeStandard: TEX.floor.sizeStandard,
       repeatU: 1 / TEX.floor.tileMetersU,
       repeatV: 1 / TEX.floor.tileMetersV,
+      wrap: 'repeat',
     },
     {
       kind: 'metal',
@@ -99,6 +110,16 @@ export function initSceneTextures(maxAnisotropy: number): void {
       sizeStandard: TEX.metal.sizeStandard,
       repeatU: TEX.metal.repeatU,
       repeatV: TEX.metal.repeatV,
+      wrap: 'repeat',
+    },
+    {
+      // 세력 마크 아틀라스 — UV 셀 규격은 factionMarks.ts(markAtlasCell) 소유
+      kind: 'marks',
+      file: TEX.marks.file,
+      sizeStandard: TEX.marks.sizeStandard,
+      repeatU: 1,
+      repeatV: 1,
+      wrap: 'clamp',
     },
   ];
 
@@ -110,7 +131,7 @@ export function initSceneTextures(maxAnisotropy: number): void {
     loader.load(
       url,
       (texture) => {
-        configure(texture, spec.repeatU, spec.repeatV, maxAnisotropy);
+        configure(texture, spec.repeatU, spec.repeatV, maxAnisotropy, spec.wrap);
         const slot = slots[spec.kind];
         slot.texture = texture;
         for (const callback of slot.pending) callback(texture);
@@ -146,6 +167,11 @@ export function onSceneTexture(
   }
   if (slot.failed) return; // 로딩 실패 확정 — 단색 유지, 콜백 미보관
   slot.pending.push(callback);
+}
+
+/** 동기 조회 — 로딩 전·실패 시 null (소비 측 fallback 분기용) */
+export function getSceneTexture(kind: SceneTextureKind): THREE.Texture | null {
+  return slots[kind].texture;
 }
 
 /**

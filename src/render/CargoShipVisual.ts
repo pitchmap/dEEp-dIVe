@@ -20,8 +20,9 @@ import * as THREE from 'three';
 import type { FactionId } from '../contracts/meta';
 import type { CargoShipStateSource } from '../contracts/systems';
 import { meshYawRadians } from '../core/conventions';
+import { markAtlasCell } from './factionMarks';
 import { factionVisualVariant, type FactionVisualVariant } from './factionVisuals';
-import { onSceneTexture } from './sceneTextures';
+import { getSceneTexture, onSceneTexture } from './sceneTextures';
 import visualParams from './renderVisualParams.json';
 
 const PARAMS = visualParams.cargoShip;
@@ -74,6 +75,11 @@ export class CargoShipVisual {
       hullMaterial.needsUpdate = true;
       upperMaterial.map = texture;
       upperMaterial.needsUpdate = true;
+    });
+    // 마크 아틀라스 도착 시 데칼로 승급 — 실패하면 기하 마크 그대로 (fallback)
+    onSceneTexture('marks', () => {
+      if (this.disposed) return;
+      this.buildVariantParts();
     });
 
     // 선체 — 그룹 원점이 흘수선(계약 positionY)에 오도록 배치
@@ -206,12 +212,25 @@ export class CargoShipVisual {
       this.disposables.push(deckGeometry);
     }
 
-    // ④ 식별 마크 — **형태**로 구분(삼각/사각/마름모). 색은 보조 채널
-    const markGeometry = this.buildMarkGeometry(v.markShape);
-    const markMaterial = new THREE.MeshBasicMaterial({
-      color: v.markColor,
-      side: THREE.DoubleSide,
-    });
+    // ④ 식별 마크 — **형태**로 구분(삼각/사각/마름모). 색은 보조 채널.
+    // 아틀라스가 로딩돼 있으면 시안 형태 언어의 알파 데칼(plane + alphaTest —
+    // 불투명 패스라 투명 정렬 문제 없음, 선체에서 0.02m 띄워 z-fighting 회피,
+    // 원거리 디테일 소실은 mipmap이 자연 처리), 아니면 기존 기하 마크(fallback).
+    const atlas = getSceneTexture('marks');
+    const markGeometry = atlas
+      ? this.buildAtlasMarkGeometry(v.markShape)
+      : this.buildMarkGeometry(v.markShape);
+    const markMaterial = atlas
+      ? new THREE.MeshBasicMaterial({
+          map: atlas,
+          alphaTest: 0.5,
+          color: v.markColor,
+          side: THREE.DoubleSide,
+        })
+      : new THREE.MeshBasicMaterial({
+          color: v.markColor,
+          side: THREE.DoubleSide,
+        });
     for (const side of [-1, 1]) {
       const mark = new THREE.Mesh(markGeometry, markMaterial);
       mark.position.set(side * (HULL_BEAM / 2 + 0.02), deckY - 1.1, -HULL_LENGTH * 0.28);
@@ -241,7 +260,28 @@ export class CargoShipVisual {
     this.variantGroup = group;
   }
 
-  /** 식별 마크 기하 — 색과 독립된 형태 구분자 (삼각·사각·마름모) */
+  /**
+   * 아틀라스 데칼 마크 — 시안 형태(디테일 행)의 UV 셀을 plane에 매핑한다.
+   * 셀 규격은 factionMarks.markAtlasCell 소유 (아틀라스 파일과 단일 정본).
+   */
+  private buildAtlasMarkGeometry(
+    shape: FactionVisualVariant['markShape'],
+  ): THREE.BufferGeometry {
+    const geometry = new THREE.PlaneGeometry(1.6, 1.6);
+    const cell = markAtlasCell(shape, false);
+    const uv = geometry.getAttribute('uv') as THREE.BufferAttribute;
+    for (let i = 0; i < uv.count; i += 1) {
+      uv.setXY(
+        i,
+        cell.uOffset + uv.getX(i) * cell.uScale,
+        cell.vOffset + uv.getY(i) * cell.vScale,
+      );
+    }
+    uv.needsUpdate = true;
+    return geometry;
+  }
+
+  /** 식별 마크 기하(fallback) — 아틀라스 로딩 전·실패 시의 형태 구분자 */
   private buildMarkGeometry(shape: FactionVisualVariant['markShape']): THREE.BufferGeometry {
     if (shape === 'square') return new THREE.PlaneGeometry(1.5, 1.5);
     const triangle = new THREE.CircleGeometry(1.05, 3);

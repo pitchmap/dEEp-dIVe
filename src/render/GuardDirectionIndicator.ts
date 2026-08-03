@@ -16,6 +16,7 @@
  */
 
 import * as THREE from 'three';
+import { applyMarkMask, cssMaskSupported } from './factionMarks';
 
 /** 스폰된 경비함 1척의 표시용 단면 — 위치는 실제 스폰 결과에서만 온다 */
 export interface GuardSightingView {
@@ -217,6 +218,14 @@ export class GuardDirectionIndicator {
     arrow.textContent = '➤';
     arrow.style.cssText = 'font-size:0.95rem;line-height:1';
     const text = document.createElement('span');
+    // 경비(patrol) 마름모 실루엣 — 방향 마커용 소형 단색 버전 (시안 형태 언어).
+    // CSS mask 미지원이면 생략 — 화살표+문구가 기존 그대로 남는다 (fallback).
+    if (cssMaskSupported()) {
+      const mark = document.createElement('span');
+      mark.style.cssText = 'width:0.7rem;height:0.7rem;display:inline-block';
+      applyMarkMask(mark, 'diamond', true);
+      root.append(mark);
+    }
     root.append(arrow, text);
     this.overlay.appendChild(root);
 

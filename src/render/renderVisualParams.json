@@ -125,7 +125,16 @@
         "sizeStandard": 512,
         "repeatU": 1,
         "repeatV": 1
+      },
+      "marks": {
+        "$comment": "세력 마크 아틀라스 (512×256 — factionMarks.ts 셀 규격). 단일 크기 — 품질 사다리 무관",
+        "file": "faction_marks",
+        "sizeStandard": 512
       }
+    },
+    "factionMarks": {
+      "$comment": "식별 태그 마크가 단색 실루엣(내부 디테일 제거)으로 전환되는 거리 — 작은 표시 크기 가독 규칙",
+      "solidBeyondMeters": 90
     },
     "lowSpec": {
       "driftCount": 40,

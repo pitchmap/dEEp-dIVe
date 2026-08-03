@@ -76,6 +76,12 @@
   최종 색은 material.color(아트 팔레트)가 결정한다. UV 규약: 협곡 벽/바닥은
   **월드 미터 UV**(`scaleBoxUvsToWorldMeters`) + repeat=1/tileMeters, 금속은
   0..1 UV × repeat. KTX2/Basis·normal/roughness 미도입(§12·로우폴리 문법)
+- `factionMarks.ts` — 세력 마크 형태 언어 단일 정본(사각=neutral · 삼각=
+  hostile · 마름모=patrol): 좌표 → DOM CSS mask data URI + WebGL 아틀라스
+  UV 셀(`markAtlasCell`). 에셋(`public/marks/*.svg·png`,
+  `public/textures/faction_marks_512.webp`)은 같은 좌표에서 생성.
+  미식별은 마크를 쓰지 않는다(◇ 규칙 유지). 원거리(작은 표시 크기)는
+  솔리드 실루엣(`artDirection.factionMarks.solidBeyondMeters`)
 - 아트 디렉션(`renderVisualParams.json artDirection`): 연속 심도 안개
   (수면↔해저 보간 — 전경·중경·후경 명도 분리), HemisphereLight 보조 환경광
   (조명 예산 2등 불변 — AmbientLight 재도입 금지), 벽/바닥/선체 팔레트+미세
