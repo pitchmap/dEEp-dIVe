@@ -269,6 +269,29 @@ try {
     });
   }
 
+  // ③-1 AI 소유 경계 (INT-CORE-016): AI는 공격 **요청만** 생성한다 —
+  //     피해량·반경·사거리·쿨다운·신관·직접 피해 호출을 소유하지 않는다.
+  {
+    const ai = read('src/core/DestroyerAIController.ts');
+    const forbidden = [
+      'applyDamage',
+      'DamageReceiverPort',
+      'DepthChargeRunSystem',
+      'directDamage',
+      'nearDamage',
+      'RadiusMeters',
+      'cooldown',
+      'Cooldown',
+      'fuse',
+    ];
+    const leaked = forbidden.filter((marker) => ai.includes(marker));
+    results.push({
+      name: 'C4 AI 소유 경계: DestroyerAIController에 피해·반경·쿨다운·신관·직접 피해 호출 0건',
+      passed: leaked.length === 0,
+      detail: leaked.length === 0 ? '통과 (요청 생성만)' : `발견: ${leaked.join(', ')}`,
+    });
+  }
+
   // ③ C 수치 발명 금지 — 생존 코어에 밸런스 상수 리터럴이 없어야 한다.
   //    (선체 기준값·피해량·침수 속도·압력은 C9 [COMBAT] params 이관 대상)
   {
