@@ -183,11 +183,16 @@ const GAME_TS = readText('src/core/Game.ts') ?? '';
 
 function composition() {
   const registered = (name) => new RegExp(`registry\\.register\\(\\s*${name}`).test(GAME_TS);
+  // 렌더 소비 위치는 `src/render/`와 `src/ui/` **둘 다**다 —
+  // FILE_OWNERSHIP: 게임 UI(눈 아이콘·선체 계기 등)는 `src/ui/`에 둔다.
+  // 스캔이 `src/render/`만 보면 실제 소비를 놓쳐 미병합으로 오판한다.
+  const isRenderSurface = (rel) =>
+    rel.startsWith(path.join('src', 'render')) || rel.startsWith(path.join('src', 'ui'));
   const survival = at(
-    scan((line, rel) => rel.startsWith(path.join('src', 'render')) && /survivalReadModel|SurvivalReadModel/.test(line)),
+    scan((line, rel) => isRenderSurface(rel) && /survivalReadModel|SurvivalReadModel/.test(line)),
   );
   const debrief = at(
-    scan((line, rel) => rel.startsWith(path.join('src', 'render')) && /DebriefReadModel|debriefReadModel/.test(line)),
+    scan((line, rel) => isRenderSurface(rel) && /DebriefReadModel|debriefReadModel/.test(line)),
   );
   // 실제 attach '호출'만 센다 — 주석·타입 선언은 경계이지 호출이 아니다.
   const attachCalls = at(scan((line) => /\battachPlayerAliveSource\s*\(\s*[A-Za-z_$]/.test(line)));

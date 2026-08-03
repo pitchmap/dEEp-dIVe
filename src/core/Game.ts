@@ -33,6 +33,7 @@ import { MetaLoop } from '../meta/MetaLoop';
 import { defaultSaveStore } from '../meta/save/SaveStore';
 import { loadEconomyParams } from '../tools/economyParams';
 import { loadAimingParams } from '../tools/aimingParams';
+import { loadCombatParams, combatParamsFullyDefined, type CombatParamsResult } from '../tools/combatParamsLoader';
 import type { OfficialRuntimeParams } from '../contracts/officialParams';
 import { GuardShipAdapter } from './GuardShipAdapter';
 import { FloodingCore } from './FloodingCore';
@@ -106,6 +107,8 @@ export class Game {
   private savePort: CountingSavePort | null = null;
   /** 공식 런타임 params 번들 — 로더 호출은 composeSystems 1회뿐 (INT-CORE-011) */
   private officialParams: OfficialRuntimeParams | null = null;
+  /** C9 전투 params 검증 결과 — 미확정은 null 유지 (INT-CORE-016) */
+  private combatParams: CombatParamsResult | null = null;
   /** 출항당 1회 salvage 스포너 — 좌표는 SalvagePlacementSource 전용 */
   private salvageSpawner: SortieSalvageSpawner | null = null;
   /** 경비 사건 중복 방지 원장 — 요청·스폰 공용 단일 저장소 (INT-CORE-012) */
@@ -228,6 +231,9 @@ export class Game {
         debrief: this.debriefState,
         debriefConfirm: this.debriefConfirm,
         enemyAttackBinding: this.enemyAttackBinding,
+        // C9 params 검증 결과 (읽기 전용) — 미확정 목록으로 unwired 근거를
+        // 실측에서 확인한다. 이 핸들로 상태를 바꾸는 경로는 없다.
+        combatParams: this.combatParams,
         gameplay,
         flooding: this.floodingCore,
         sortieFailure: this.sortieFailure,
@@ -293,6 +299,16 @@ export class Game {
     console.info(
       '[Game] 공식 경제 params 로드·검증 완료 (upgrades/equipment/economy/cargo + aiming) — ' +
         `손실률 ${official.economy.creditLossOnDestroyedRatio} · salvage 배치 ${official.economy.salvageSpawns.length}건`,
+    );
+
+    //    C9 전투 params (INT-CORE-016 §① — 툴링 로더 1회 호출). 미확정 필드는
+    //    **null 그대로** 흘러가며 소비 측이 계약대로 unwired가 된다 — 조립부가
+    //    기본값·0·임시 상수를 채우지 않는다. 소비자: 선체(기준값·임계)·침수·
+    //    폭뢰 피해·탐지 튜닝.
+    const combat = loadCombatParams();
+    this.combatParams = combat;
+    console.info(
+      `[Game] C9 전투 params 로드·검증 완료 — 확정 여부 ${combatParamsFullyDefined(combat) ? '전량 확정' : '미확정 필드 존재(unwired 유지)'}`,
     );
 
     // ⓪ 상위 메타 루프 (리드 소유, src/meta — INT-CORE-006·007).
@@ -476,6 +492,12 @@ export class Game {
     //     그 전까지 모든 요청은 unwired — 폭뢰 투하·피해 0건(즉시 피해 금지).
     const enemyAttackBinding = new EnemyAttackPortBinding();
     this.enemyAttackBinding = enemyAttackBinding;
+    //     **C4 공격 사슬의 마지막 연결** — AI가 만든 EnemyAttackRequest가 이
+    //     바인딩을 거쳐 게임플레이 `EnemyAttackCoordinator`로 간다. AI는
+    //     피해량·반경·쿨다운을 소유하지 않고 요청만 생성한다.
+    //     폭뢰 피해 params가 null이면 포트가 `unwired`를 돌려주므로 투하·
+    //     피해가 0건으로 남는다 (즉시 피해·거리 무관 피해 금지).
+    enemyAttackBinding.attach(gameplay.enemyAttackPort);
     guardAdapter.attachFactory(
       createProductionDestroyerAIFactory(surfaceMotionPorts, enemyAttackBinding),
     );
@@ -517,18 +539,36 @@ export class Game {
     //     이관 대상) — 주입 전까지 unwired 상태이며 피해가 적용되지 않고
     //     임시 수치도 만들지 않는다. 도착 시 attachHullParams·attachParams
     //     두 줄로 연결된다.
-    const floodingCore = new FloodingCore(null);
+    //     C9 params 주입 — 검증기가 돌려준 값을 그대로 넘긴다. 미확정이면
+    //     `null`이 그대로 들어가 선체·침수가 unwired로 남는다(피해 미적용).
+    const floodingCore = new FloodingCore(combat.flooding);
     this.floodingCore = floodingCore;
-    const playerHull = new PlayerHullSystem(PLAYER_ENTITY_ID, floodingCore, null);
+    const playerHull = new PlayerHullSystem(PLAYER_ENTITY_ID, floodingCore, combat.hull);
     this.playerHull = playerHull;
     // hullIntegrity 업그레이드 소비 — 배율은 공식 승인값, 기준값은 대기.
     playerHull.applyHullIntegrityModifier(this.upgrades?.modifiers.hullIntegrity ?? 0);
     this.registry.register(playerHull);
-    //     [배선 대기 — 게임플레이 attach API] PatrolShipFleet의
-    //     isTargetAlive(PLAYER_ENTITY_ID)는 현재 항상 true다. 게임플레이가
-    //     attachPlayerAliveSource(source: PlayerAliveSource)를 제공하면
-    //     여기서 `gameplay.attachPlayerAliveSource(playerHull)` 1줄로 연결한다
-    //     — 파괴 후 추적·공격 요청이 멈춘다 (INT-CORE-015 §PlayerAliveSource).
+    //     생존 상태 배선 (INT-CORE-016 §① — 게임플레이 attach API 도착).
+    //     ① PlayerAliveSource — PatrolShipFleet(추적)과 EnemyAttackCoordinator
+    //        (공격) 양쪽에 도달한다. 파괴 후 추적·공격 요청이 멈춘다.
+    //     ② DamageReceiver — 폭뢰·충돌 등 모든 피해가 이 **단일 창구**를
+    //        통과한다. 게임플레이는 자체 체력 상태를 두지 않는다.
+    gameplay.attachPlayerAliveSource(playerHull);
+    gameplay.attachDamageReceiver(playerHull);
+    //     ③ C9 전투 params → 게임플레이 주입은 **미배선**이다 (blocker).
+    //        인계표(INT-CORE-016 §① 3번)는 `params/combat.json` 원본을 그대로
+    //        넘기라고 지정했지만, 병합 후 실제 코드가 두 가지로 어긋난다:
+    //          ⓐ 툴링 검증기(`verify:sprint-c` C9-loaderSingleSource)는 공인
+    //            로더(`combatParams`/`combatParamsLoader`) 밖에서 combat.json을
+    //            직접 import하는 것을 **금지**한다 — 원본을 받을 통로가 없다.
+    //          ⓑ 게임플레이 리더(`systems/combat/officialCombatParams.ts`)는
+    //            `root['directRadiusMeters']`처럼 **평면 root**를 읽는데, 툴링
+    //            스키마는 `depthCharge.*`·`detection.*` **블록 중첩**이다.
+    //            원본을 넘겨도 값이 도착한 뒤 읽히지 않는다.
+    //        통합 창은 전송 형태를 임의로 정하지 않는다(계약 충돌 = blocker).
+    //        현재 15필드가 전부 null이라 런타임 동작은 동일하다 — 탐지 safe
+    //        고정·공격 unwired·폭뢰 피해 0. 선체·침수는 아래에서 툴링 로더
+    //        결과를 리드 코어에 직접 주입하므로 이 충돌의 영향을 받지 않는다.
 
     // ①-c 업그레이드 구매 판정 시스템 (게임플레이 소유 — 조립부가 공식
     //     카탈로그와 실지갑 읽기 단면을 주입한다). **단계의 단일 저장소** —
@@ -686,10 +726,18 @@ export class Game {
     //     TrackingStateSource(게임플레이 도착 시 attach 2줄)·
     //     SurvivalReadModel(playerHull)·DebriefReadModel(debriefState).
     const detectionHud = new DetectionHud(this.container);
-    //     [배선 대기 — 게임플레이 DetectionSystem·TrackingStateSource]
-    //     도착 시: detectionHud.attachDetectionSource(gameplay.detection);
-    //             detectionHud.attachTrackingSource(gameplay.trackingState);
-    //     그 전까지 HUD는 '탐지 계기 미연결'을 표시한다 (위장 없음).
+    //     탐지 HUD 배선 (INT-CORE-016 §②).
+    //     ① 탐지 read model — 게임플레이 정본은 `detectionHudView()`(호출마다
+    //        값 복사본)이므로 폴링 어댑터로 감싼다. HUD는 게이지를 재계산하지
+    //        않고 이 값만 표시한다.
+    //     ② 추적 read model — 정본은 **리드 `GuardShipAdapter`**의
+    //        `TrackingStateSource` 구현이다 (게임플레이에 없는 API를 만들지
+    //        않는다). params 미확정이면 stage가 safe에 고정돼 attack 전이가
+    //        없고, HUD는 그 미연결 상태를 그대로 표시한다.
+    detectionHud.attachDetectionSource({
+      hudView: () => gameplay.detectionHudView(),
+    });
+    detectionHud.attachTrackingSource(guardAdapter);
     const survivalHud = new SurvivalHud(this.container);
     survivalHud.attachSource(playerHull, () => playerHull.consumeDamageFlash());
     const rendererCamera = this.renderer?.camera ?? null;
