@@ -105,6 +105,31 @@
 | 개발 리드 결정 | 승인 — **C_INTEGRATION_HANDOFF_READY=true.** 그래픽스 Game.ts의 `completeDebrief` 직접 호출은 병합 시 `debriefConfirm.confirm()`으로 교체할 것(저장 미완료 가드 우회 방지) |
 | 적용 커밋 | 2dacea4(AI 공격 요청)·fd5574b(confirm 정책·바인딩)·223bfd8(검증 119) + 문서 커밋 |
 
+### INT-GAME-014 — C1~C4 게임플레이 구현 완료 + production 배선 4줄 요청 (조립부)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 (창 2 — C1~C4 source·adapter·composition. B는 여전히 미발효 선행개발) |
+| 대상 시스템 | `src/core/Game.ts`(조립 배선 **4줄**) — 계약·리드 구현 변경 요청 **없음** |
+| 필요한 변경 | `Game.composeSystems`에서 네 줄: ① `gameplay.attachPlayerAliveSource(playerHull);` — 리드가 남긴 대기 주석(Game.ts) 자리. 파괴 후 추적·공격 요청이 멈춘다 ② `gameplay.attachDamageReceiver(playerHull);` — 폭뢰 피해의 **단일 창구** 연결. 미연결이면 폭발해도 피해 경로가 없다(게임플레이는 자체 체력을 만들지 않는다) ③ `gameplay.attachCombatParams(combatJson);` — `params/combat.json` 원본 주입. 현재 C9 필드가 없어 탐지·폭뢰 판정이 **unwired**로 남고, 툴링이 필드를 추가하면 같은 줄로 자동 구동된다 ④ (렌더) `gameplay.detectionHudView()`·`gameplay.detectionStageSource` 소비 — HUD 눈 아이콘·게이지. 추가로 리드 `GuardShipAdapter`가 만든 AI가 공격하려면 `gameplay.enemyAttackPort`를 AI 공격 요청 소비자로 연결해야 한다(현재 `DestroyerAIController`는 이동만 하고 공격 요청을 만들지 않는다 — 아래 blocker) |
+| 변경 이유 | C1~C4의 게임플레이 측 구현·adapter는 끝났고, 값이 실제로 흐르려면 조립 배선이 필요하다. 임의 수치·자체 체력·병행 정산을 만들지 않았으므로 배선이 유일한 해소 경로다 |
+| 관련 게이트 | C1·C2·C3·C4 (+ C 공통 이중 정산 방지) |
+| 하위 호환 여부 | 계약 파일 **무수정**. 검증 238/238·meta 110/110·tooling 26/26·sprint-a 30/30·sprint-b 23/23 통과 |
+| 개발 리드 결정 | (대기) |
+| 적용 커밋 | — |
+
+**게임플레이 적용 완료 (C1~C4):**
+- **C1 탐지 게이지 정본** `systems/detection/SubmarineDetectionSystem` — 계약 `DetectionSystem`+`DetectionStageSource`+`SortieResettable` 구현. HUD는 `DetectionHudView` 값 복사본, AI는 **stage와 마지막 노출 위치만** 받는다(게이지 비노출·내부 mutable state 접근 불가). 거리 감쇠·감소율이 null이면 **게이지 0·safe 고정·전이 0**. 출항 시작·종료 reset. 관측자는 세력 무관 동일 계약(적대·patrol·향후 호위 공용)
+- **C2 환경 입력** `systems/detection/DetectionEnvironmentAdapter` — 기존 3층 심도 정본 소비. 보정식·계수를 만들지 않는다(공식 `depthModifiers`·`silentRunningNoiseMultiplier`를 탐지 시스템이 적용). 소음·침묵 항행 소스는 공식 규칙이 없어 **미연결 = 중립 입력**(0 / false)이며 `wired`로 드러난다. 심도 이동 물리 무변경
+- **C3 추적 연결** — `PatrolShipFleet.getTargetPosition(PLAYER)`가 stage `detected`일 때만 위치를 준다. 전이는 전적으로 리드 `DestroyerAIController`가 수행하며 상태 어휘·전이 로직을 복제하지 않았다. 새 이벤트 없음(`detectionChanged` 단일)
+- **C4 공격 경계** `systems/combat/EnemyAttackCoordinator`(계약 `EnemyAttackPort`) — 사거리·쿨다운 판정 소유. params null이면 `unwired`, 표적 파괴 시 거부, 같은 `attackId` `duplicate`. **요청 즉시 피해 없음**(투하만)
+- **C4 폭뢰** `systems/combat/DepthChargeRunSystem`(계약 `DepthChargeSystem`) — 투하→낙하→신관(**3.0초 하한 준수**)→폭발→direct/near **택일**→`DamageRequest`→`DamageReceiverPort.applyDamage` 단일 창구. 반경·피해 null이면 폭발 상태는 진행하되 피해 `damageUnwired`. `damageEventId`·`correlationId` 부여, 같은 상관 id 중복 피해 차단
+- **PlayerAliveSource 실제 배선** — `gameplay.attachPlayerAliveSource()`가 `PatrolShipFleet`·`EnemyAttackCoordinator` 양쪽에 연결된다. `isTargetAlive(PLAYER_ENTITY_ID)`의 **항상 true 경로 제거**(미연결일 때만 생존 가정). 파괴 후 관측·공격 요청 0, 다음 출항 reset 후 정상 복구
+- **병행 정산 제거** — `EconomySystem.settleDefeat`·`settleReturn`·`RunEconomy.settleSortie` **삭제**(production 호출자 0건이었음). 검증 코드도 정리했고 게임플레이는 지갑을 확정하지 않는다. `verify:meta`의 이중 정산 정적 검사 통과 유지
+
+**수치 출처 (임의 전투 수치 0):** 탐지 확정 3종 = `params/detection.json` / 신관 = `combat.json depthChargeFuseSeconds`(하한 3.0 고정) / 동시 폭뢰 = `simultaneousDepthCharges` / 공격 사거리 = 폭뢰 `nearRadiusMeters`(피해 가능 거리 밖 투하 금지라는 구조 규칙, 새 수치 아님). **미확정 전량 null 유지**: 거리 감쇠·게이지 감소율·direct/near 반경·피해·투하 쿨다운·선체 기준값. 검증 픽스처(`DETECTION_TUNING_FIXTURE`·`DEPTH_CHARGE_FIXTURE`)는 검증 파일 안에만 있고 production import 0건
+
+**남은 blocker:** ① 위 4줄 배선 ② `params/combat.json` C9 필드(툴링) — 도착 전까지 탐지·폭뢰 피해는 unwired ③ **AI가 공격 요청을 만들지 않는다** — 리드 `DestroyerAIController`는 이동만 하고 `EnemyAttackRequest`를 생성하지 않는다. `attack` 상태에서 요청을 만들어 `EnemyAttackPort`로 넘기는 지점이 리드 소유 파일에 필요하다(게임플레이는 포트를 제공했다)
 
 ### INT-CORE-015 — 스프린트 C 선행 계약 마감: 탐지·추적(C1~C3)·폭뢰 경로(C4)·침수 단일 창구·DEBRIEF 모델
 
