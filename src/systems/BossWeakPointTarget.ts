@@ -27,30 +27,29 @@ export interface BossPhasePort {
 
 export type BossHitKind = 'weakPoint' | 'hull';
 
-export interface BossWeakPointConfig {
+/** 약점 배치 — 월드·보스 배치 데이터 소유 (밸런스 수치가 아니다) */
+export interface BossWeakPointPlacement {
   readonly id: number;
   readonly x: number;
   readonly y: number;
   readonly z: number;
-  /** 명중 판정 반경 (통짜 캡슐 근사 — 회의 11 결의 5) */
-  readonly hitRadius: number;
-  /** 약점 개방 중 피해 배율 (임시값 — INT-GAME-008 이관 대기) */
-  readonly weakPointDamageMultiplier: number;
-  /** 약점 닫힘 중(일반 선체) 피해 배율 (임시값) */
-  readonly closedHullDamageMultiplier: number;
 }
 
-/** 임시 기본 판정 수치 (R7 — params 이관 대기, INT-GAME-008) */
-export function provisionalBossWeakPointConfig(id: number, x: number, y: number, z: number): BossWeakPointConfig {
-  return {
-    id,
-    x,
-    y,
-    z,
-    hitRadius: 6,
-    weakPointDamageMultiplier: 2.0,
-    closedHullDamageMultiplier: 0.25,
-  };
+/**
+ * 약점 판정 수치 — **전부 공식 params 소유** (M2 3단계 이관).
+ *
+ * 이전에는 `provisionalBossWeakPointConfig`가 임시값(반경 6·배율 2.0/0.25)을
+ * 들고 있었다(R7). `params/boss.json`이 아직 없으므로 값을 옮길 곳이 없고,
+ * 그렇다고 임시값을 production에 남기지 않는다 — null이면 `unwired`로
+ * 남아 **명중 자체가 성립하지 않는다**(반경 0). 요청: INT-GAME-016.
+ */
+export interface BossWeakPointParams {
+  /** 명중 판정 반경 (m, 통짜 캡슐 근사 — 회의 11 결의 5) */
+  readonly hitRadiusMeters: number | null;
+  /** 약점 개방 중 피해 배율 */
+  readonly weakPointDamageMultiplier: number | null;
+  /** 약점 닫힘 중(일반 선체) 피해 배율 */
+  readonly closedHullDamageMultiplier: number | null;
 }
 
 export class BossWeakPointTarget implements CombatTarget {
@@ -64,19 +63,47 @@ export class BossWeakPointTarget implements CombatTarget {
 
   // 검증 러너(run.mjs) Node 타입 스트리핑 호환 — 매개변수 프로퍼티 미사용
   private readonly port: BossPhasePort;
-  private readonly config: BossWeakPointConfig;
+  private readonly placement: BossWeakPointPlacement;
+  private params: BossWeakPointParams | null;
 
-  constructor(port: BossPhasePort, config: BossWeakPointConfig) {
+  constructor(
+    port: BossPhasePort,
+    placement: BossWeakPointPlacement,
+    params: BossWeakPointParams | null = null,
+  ) {
     this.port = port;
-    this.config = config;
-    this.posX = config.x;
-    this.posZ = config.z;
+    this.placement = placement;
+    this.params = params;
+    this.posX = placement.x;
+    this.posZ = placement.z;
+  }
+
+  /** 공식 약점 판정 수치 주입 (조립부) — null이면 unwired 유지 */
+  attachParams(params: BossWeakPointParams | null): void {
+    this.params = params;
+  }
+
+  /**
+   * 판정 수치가 전부 확정됐는가. false면 판정 반경 0 — 어뢰가 약점을
+   * 맞히지 못하고 누적 피해도 오르지 않는다(격파 판정 입력이 0으로 남는다).
+   */
+  get wired(): boolean {
+    const params = this.params;
+    return (
+      params !== null &&
+      params.hitRadiusMeters !== null &&
+      params.hitRadiusMeters > 0 &&
+      params.weakPointDamageMultiplier !== null &&
+      params.weakPointDamageMultiplier >= 0 &&
+      params.closedHullDamageMultiplier !== null &&
+      params.closedHullDamageMultiplier >= 0
+    );
   }
 
   // ── CombatTarget (기존 어뢰 단일 판정 경로 재사용) ─────────────────────
 
   get id(): number {
-    return this.config.id;
+    return this.placement.id;
   }
 
   get faction(): FactionId {
@@ -88,7 +115,7 @@ export class BossWeakPointTarget implements CombatTarget {
   }
 
   get positionY(): number {
-    return this.config.y;
+    return this.placement.y;
   }
 
   get positionZ(): number {
@@ -103,8 +130,9 @@ export class BossWeakPointTarget implements CombatTarget {
     return 0;
   }
 
+  /** 미주입이면 0 — 판정 반경을 발명하지 않는다(명중이 성립하지 않는다) */
   get hitRadius(): number {
-    return this.config.hitRadius;
+    return this.wired ? (this.params?.hitRadiusMeters as number) : 0;
   }
 
   /** 보스 이동 반영 — 포즈 공급은 리드 AI가 담당 (판정 위치 동기화 전용) */
@@ -113,13 +141,20 @@ export class BossWeakPointTarget implements CombatTarget {
     this.posZ = z;
   }
 
-  /** 약점 피격/일반 피격 구분 판정 — 개방 여부는 포트(리드 계약)만 사용 */
+  /**
+   * 약점 피격/일반 피격 구분 판정 — 개방 여부는 포트(리드 계약)만 사용.
+   *
+   * **구분은 params 없이도 성립한다**(개방 여부는 포트가 소유하는 사실이다).
+   * 확정되지 않은 것은 배율뿐이므로, unwired면 종류만 기록하고 피해를 0으로
+   * 둔다 — 임의 배율을 만들지 않는다.
+   */
   onTorpedoHit(_hitX: number, _hitZ: number, damage: number): void {
     const kind: BossHitKind = this.port.weakPointOpen ? 'weakPoint' : 'hull';
-    const multiplier =
-      kind === 'weakPoint'
-        ? this.config.weakPointDamageMultiplier
-        : this.config.closedHullDamageMultiplier;
+    const multiplier = !this.wired
+      ? 0
+      : kind === 'weakPoint'
+        ? (this.params?.weakPointDamageMultiplier as number)
+        : (this.params?.closedHullDamageMultiplier as number);
     const applied = damage * multiplier;
 
     if (kind === 'weakPoint') this.weakPointHitTotal += 1;
@@ -164,5 +199,19 @@ export class BossWeakPointTarget implements CombatTarget {
   onHit(listener: (kind: BossHitKind, appliedDamage: number) => void): () => void {
     this.hitListeners.add(listener);
     return () => this.hitListeners.delete(listener);
+  }
+
+  /**
+   * 새 출항 — 피격 누적을 비운다. 배치·params는 유지한다.
+   * (17차 R-M3 비상 컷은 '패턴 노출 플래그 오프'이지 판정 제거가 아니므로
+   * 이 클래스는 컷 상황에서도 그대로 살아 있어야 한다.)
+   */
+  resetForNewSortie(): void {
+    this.hullHitTotal = 0;
+    this.weakPointHitTotal = 0;
+    this.damageTotal = 0;
+    this.lastKind = null;
+    this.posX = this.placement.x;
+    this.posZ = this.placement.z;
   }
 }
