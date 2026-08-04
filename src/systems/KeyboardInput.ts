@@ -48,6 +48,9 @@ const TRACKED_CODES = new Set([
   'KeyA',
   'KeyD',
   'KeyE',
+  // 회수 홀드 (INT-CORE-022 §9) — 추적 목록에 없으면 keydown이 버려져
+  // getter가 영원히 false다. E는 상승 병행 키로 그대로 남는다.
+  'KeyF',
   'ShiftLeft',
   'ShiftRight',
   'ControlLeft',
@@ -113,15 +116,18 @@ export class KeyboardInput implements MovementInput {
   }
 
   /**
-   * 회수 홀드 입력 (M2 상호작용) — 현재 `KeyE`.
+   * 회수 홀드 입력 (M2 상호작용) — **`KeyF`** (INT-CORE-022 §9 확정).
    *
-   * ⚠ **바인딩 충돌**: `KeyE`는 기존 플레이테스트 수정에서 상승 병행 키로
-   * 확정된 키다(아래 `ascend`). 기존 바인딩을 제거하지 않고 읽기만 추가했다 —
-   * 어느 키를 회수에 쓸지는 입력 규칙 결정 사항이며, 결정되면 이 getter가
-   * 읽는 코드만 바꾼다 (INTEGRATION_NOTES INT-GAME-015).
+   * 이전에는 `KeyE`를 읽어 아래 `ascend`(상승 병행 키)와 같은 키를 공유했고,
+   * 그래서 회수 홀드 중 상승이 동시에 진행돼 3D 거리 판정이 `outOfRange`로
+   * 취소되는 경로가 있었다. 최종 정책은 **E = 상승 유지 / F hold = 회수**이며,
+   * 17차 결의 2로 `F`가 키맵에서 미배정 반환된 키다(신규 규칙 신설 아님).
+   *
+   * 변경은 이 getter 한 줄뿐이다 — `ascend`는 손대지 않는다. 화면 문구
+   * ('E'→'F')는 그래픽스·HUD 소유이며 이 파일에서 바꾸지 않는다.
    */
   get interactHold(): boolean {
-    return this.heldCodes.has('KeyE');
+    return this.heldCodes.has('KeyF');
   }
 
   get ascend(): boolean {

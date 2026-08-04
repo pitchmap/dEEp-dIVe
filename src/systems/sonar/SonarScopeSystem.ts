@@ -18,9 +18,20 @@
  * ```
  * 패시브(상시): 소음을 내는 접점만 · 방위만(거리 null) · 방위 번짐은
  *               내 소음 계수에 비례 → 청각 정보의 시각 '축약'
- * 액티브 핑:    모든 접점(보상·단서·지형·보스)을 정확히 표시(거리 포함)
- *               표시 시간 동안만 · 대가로 탐지 게이지 상승 · 쿨다운
+ * 액티브 핑:    전투 접점 + **탐색 4종**(금괴·salvage·단서·심층 지점)을
+ *               정확히 표시(거리 포함) · 표시 시간 동안만 · 대가로 탐지
+ *               게이지 상승 · 쿨다운
  * ```
+ *
+ * **지형은 blip이 아니다** — 렌더가 협곡 레이아웃 단일 소스로 스코프 배경층에
+ * 직접 그린다(계약 주석 그대로). 여기서 지형 접점을 만들지 않는다.
+ *
+ * ## 입력 키
+ *
+ * 액티브 핑의 **최종 입력 키는 아직 확정되지 않았다**(INT-CORE-022 §9는
+ * E·F만 확정했다). 그래서 이 시스템은 키를 알지 못하고 `requestActivePing()`
+ * **command 표면**만 제공한다 — 조립부가 키가 정해지면 그 입력을 이 command에
+ * 연결한다. 키를 임의로 배정하지 않는다.
  *
  * 액티브 핑의 대가는 **기존 탐지 게이지 정본**에 적용된다 — 별도 노출 정본을
  * 만들지 않는다(`DetectionGaugeRisePort` → `SubmarineDetectionSystem`).
@@ -40,27 +51,48 @@
 
 import type { DetectionStage } from '../../contracts/events';
 import type { DetectionStageSource } from '../../contracts/detection';
-import type { SonarBlip, SonarBlipKind, SonarScopeReadModel } from '../../contracts/sonar';
+import type {
+  SonarBlip,
+  SonarBlipKind,
+  SonarExplorationBlipKind,
+  SonarScopeReadModel,
+} from '../../contracts/sonar';
 import { bowDirectionXZ } from '../../core/conventions';
 
-/** 접점 분류 — 표시 분기용 태그 (판정은 `noiseEmitting`이 가른다) */
-export type SonarContactKind = 'ship' | 'boss' | 'torpedo' | 'depthCharge';
+/**
+ * 접점 분류 — 공급자 어휘. 전투 4종(보스 포함) + 탐색 4종.
+ *
+ * 탐색 4종은 상호작용 계약 `InteractionTargetKind`를 **그대로 재사용**한다 —
+ * 같은 대상에 두 이름을 만들지 않는다 (INT-CORE-022).
+ */
+export type SonarCombatContactKind = 'ship' | 'boss' | 'torpedo' | 'depthCharge';
+export type SonarContactKind = SonarCombatContactKind | SonarExplorationBlipKind;
 
 /**
- * 공급 kind → 계약 정본 `SonarBlipKind`. 계약 어휘는 `ship | torpedo |
- * depthCharge` 셋뿐이므로(INT-RENDER-014) 보스는 **선박 접촉**으로 옮긴다.
+ * 공급 kind → 계약 정본 `SonarBlipKind`.
  *
- * ⚠ 16차 결의 2-5의 액티브 핑 규격은 **보상·단서·지형**도 표시하라고 하지만
- * 계약에 해당 kind가 없다. 어휘를 임의로 늘리지 않고(계약 규칙: 확장은
- * INTEGRATION_NOTES 제안 → 리드 결정) 이 공급자는 표현 가능한 접촉만
- * 만든다 — 요청: INT-GAME-017.
+ * 보스는 계약에 별도 kind가 없고 **선박 접촉(`ship`)으로 표현**한다 —
+ * 보스 연출 정본은 `BossCoreView`이지 스코프가 아니다(계약 주석 그대로).
+ * 탐색 4종은 이름이 같으므로 항등 변환이며, 여기서 새 어휘를 만들지 않는다.
  */
 const CANONICAL_BLIP_KIND: Readonly<Record<SonarContactKind, SonarBlipKind>> = Object.freeze({
   ship: 'ship',
   boss: 'ship',
   torpedo: 'torpedo',
   depthCharge: 'depthCharge',
+  goldCache: 'goldCache',
+  salvage: 'salvage',
+  clue: 'clue',
+  deepSite: 'deepSite',
 });
+
+/** 탐색 접촉인가 — **액티브 핑 노출 중에만** blip으로 나갈 자격이 있다 */
+const EXPLORATION_CONTACT_KINDS: ReadonlySet<string> = new Set<string>([
+  'goldCache',
+  'salvage',
+  'clue',
+  'deepSite',
+]);
 
 /** 접점 1개의 읽기 전용 단면 — 소유 시스템이 공급한다 */
 export interface SonarContact {
@@ -213,6 +245,11 @@ export class SonarScopeSystem {
    * 액티브 핑 — '위치를 알 것인가, 위치를 알릴 것인가'(16차 결의 2-5).
    * 성공 시 그 순간의 접점 명단을 고정하고 **기존 탐지 게이지를 올린다**.
    */
+  requestActivePing(): SonarPingOutcome {
+    return this.requestPing();
+  }
+
+  /** `requestActivePing()`의 구현 — 1회 요청당 1회 처리, 쿨다운 중 거부 */
   requestPing(): SonarPingOutcome {
     if (!this.wired) return { status: 'unwired' };
     if (this.cooldownRemaining > 0) {
@@ -325,7 +362,12 @@ export class SonarScopeSystem {
    * 표시한다 (17차 결의 4, 초기값·미주입 전부 false = 표시 안 함).
    */
   private passiveVisible(contact: SonarContact, params: SonarScopeParams): boolean {
+    // 탐색 접촉은 **패시브에 절대 나타나지 않는다.** 소음을 낸다고 표시되면
+    // '위치를 알 것인가, 알릴 것인가'(16차 결의 2-5) 교환이 무너진다 —
+    // 종류를 선노출하지 않기 위해 자격 자체를 kind에서 끊는다.
+    if (EXPLORATION_CONTACT_KINDS.has(contact.kind)) return false;
     if (!contact.noiseEmitting) return false;
+    // 낙하 중 폭뢰는 정책 불리언이 명시적으로 true일 때만 (17차 결의 4).
     if (contact.kind === 'depthCharge') return params.depthChargeOnPassiveScope === true;
     return true;
   }
