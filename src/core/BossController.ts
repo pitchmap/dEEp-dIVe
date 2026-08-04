@@ -161,7 +161,7 @@ export class BossController implements BossDamageSink {
       case 'weakPointOpen':
         this.execution.remaining -= deltaSeconds;
         if (this.execution.remaining <= 0) {
-          this.weakOpen = false;
+          this.setWeakOpen(false);
           this.endPattern();
         }
         return;
@@ -278,7 +278,7 @@ export class BossController implements BossDamageSink {
     }
 
     if (state.telegraph === 'weakPointOpen') {
-      this.weakOpen = true;
+      this.setWeakOpen(true);
       this.execution = {
         kind: 'weakPointOpen',
         remaining: this.params.patterns.weakPointOpen.openSeconds.value,
@@ -409,9 +409,22 @@ export class BossController implements BossDamageSink {
 
   private cancelExecution(): void {
     if (this.execution.kind === 'ram') this.motion.setMoveSpeed(null);
-    if (this.execution.kind === 'weakPointOpen' || this.weakOpen) this.weakOpen = false;
+    if (this.execution.kind === 'weakPointOpen' || this.weakOpen) this.setWeakOpen(false);
     this.execution = { kind: 'idle' };
     this.cooldownRemaining = this.effectiveInterval();
+  }
+
+  /**
+   * 약점 개방 상태 전이 단일 지점 — 전이 시에만 `bossWeakPointChanged` 1회
+   * 발행 (INT-CORE-022: 상태 정본 = 이 코어 phasePort이므로 발행도 코어가
+   * 한다. 명중 통지 `bossHit`은 게임플레이 발행 — 별개 이벤트).
+   * 격파 경로에서는 cancelExecution이 먼저 불리므로 항상
+   * bossWeakPointChanged(false) → bossDefeated 순서다.
+   */
+  private setWeakOpen(open: boolean): void {
+    if (this.weakOpen === open) return;
+    this.weakOpen = open;
+    this.bus?.emit('bossWeakPointChanged', { active: open });
   }
 
   private handleDefeat(): void {
