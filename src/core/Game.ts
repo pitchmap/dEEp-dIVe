@@ -21,6 +21,7 @@ import { PerformanceOverlay } from '../ui/PerformanceOverlay';
 import { ControlsHud } from '../ui/ControlsHud';
 import { DetectionHud } from '../ui/DetectionHud';
 import { EconomyHud } from '../ui/EconomyHud';
+import { BossHealthHud } from '../ui/BossHealthHud';
 import { ExplorationHud } from '../ui/ExplorationHud';
 import { InteractionPromptHud } from '../ui/InteractionPromptHud';
 import { SortieFailureScreen } from '../ui/SortieFailureScreen';
@@ -176,6 +177,8 @@ export class Game {
   private interactionPromptHud: InteractionPromptHud | null = null;
   /** 탐사 안내 HUD — 단서 진행·표식 범례·보스 구역 상태 표시 전용 */
   private explorationHud: ExplorationHud | null = null;
+  /** 보스 체력 HUD — BossCoreView.hullRatio 표시 전용 (체력 정본 무소유) */
+  private bossHealthHud: BossHealthHud | null = null;
   /** 출항당 1회 salvage 스포너 — 좌표는 SalvagePlacementSource 전용 */
   private salvageSpawner: SortieSalvageSpawner | null = null;
   /** 경비 사건 중복 방지 원장 — 요청·스폰 공용 단일 저장소 (INT-CORE-012) */
@@ -460,6 +463,7 @@ export class Game {
         // 새 출항에 남지 않게. 진행 수(단서 N/M)는 정본이 소유하므로 건드리지 않는다.
         this.interactionPromptHud?.reset();
         this.explorationHud?.reset();
+        this.bossHealthHud?.reset();
         const spawnReport = this.salvageSpawner?.beginSortie();
         if (spawnReport) {
           if (spawnReport.status === 'spawned') {
@@ -818,6 +822,20 @@ export class Game {
     explorationHud.attachBossZone(BOSS_ZONE);
     this.explorationHud = explorationHud;
 
+    //     보스 체력 HUD — 스폰 이후 상단 중앙. 체력 정본은 리드
+    //     `BossController.view().hullRatio` 하나이고 HUD는 그 값을 표시만
+    //     한다(새 체력 상태·피해 계산 0). 피격 강조는 공식 `bossHit`의 kind만
+    //     소비하며 체력을 건드리지 않는다.
+    const bossHealthHud = new BossHealthHud(this.container);
+    bossHealthHud.attachSource({
+      coreView: () =>
+        this.bossSpawned && this.bossController ? this.bossController.view() : null,
+    });
+    this.bossHealthHud = bossHealthHud;
+    this.registerUnsubscribe(
+      this.bus.on('bossHit', ({ kind }) => bossHealthHud.notifyHit(kind)),
+    );
+
     //     [순서 5] 보스 구역 — 좌표는 world 정본이며 여기서 다시 쓰지 않는다.
     gameplay.attachBossZone(BOSS_ZONE);
 
@@ -884,6 +902,13 @@ export class Game {
       this.bossController = null;
       this.bossSpawned = false;
       explorationHud.setEncounterActive(false);
+      //   약점 표적 정리 — `spawnBoss()`가 등록한 표적은 격파·재출항 뒤에도
+      //   표적 목록에 남아 있었다. 피해·이벤트는 이미 차단돼 있지만(제거된
+      //   보스에는 발행 0, 피해 sink 해제) 어뢰 명중 판정은 여전히 걸려
+      //   **어뢰가 빈 자리에서 소멸**한다. 등록소와 표적 모두 공개 API이므로
+      //   조립부가 수명주기를 맞춰 해제한다(중복 해제·미등록 해제 안전).
+      const weakPoint = gameplay.bossWeakPoint;
+      if (weakPoint) gameplay.targets.unregister(weakPoint);
     };
     const spawnBossIfGranted = (): void => {
       // 이미 스폰됐으면 재요청하지 않는다 — 구역 체류·재진입 모두 1회.
@@ -1247,13 +1272,34 @@ export class Game {
     scene.attachSonarScopeSource({
       scopeView: () => gameplay.sonarScopeReadModel(),
     });
-    //     [§5 순서 15] BossCoreView 공급 (INT-RENDER-016) — 스폰 성공 이후에만
-    //     비-null. 스폰 전·격파 폐기 후·재출항 리셋 후에는 null이라 production
-    //     보스 시각물이 장착되지 않는다. 계약에 spawned 필드를 더하지 않고
-    //     조립부 게이트로 해결한다.
+    //     [§5 순서 15] BossCoreView + BossPoseView 공급 (INT-RENDER-016) —
+    //     스폰 성공 이후에만 비-null. 스폰 전·격파 폐기 후·재출항 리셋 후에는
+    //     null이라 production 보스 시각물이 장착되지 않는다. 계약에 spawned
+    //     필드를 더하지 않고 조립부 게이트로 해결한다.
+    //
+    //     포즈를 함께 주는 이유: 렌더는 포즈 read model이 없어 `BOSS_PLACEMENT`
+    //     스폰 좌표에 시각물을 고정하고 있었는데, 게임플레이 보스는 실제로
+    //     이동한다. 결정적 재현 결과 스폰 1초 뒤 6.90m, 12초 뒤 12~23m가
+    //     어긋나 판정 반경 6.0(+어뢰 0.35) 밖이었다 — 보이는 보스를 정확히
+    //     맞혀도 어뢰가 통과하고 bossHit·피해·격파가 전부 0이 됐다.
+    //     여기서는 게임플레이 **포트 값만** 복사해 넘긴다(객체 전달 0).
     scene.attachBossViewSource({
       coreView: () =>
         this.bossSpawned && this.bossController ? this.bossController.view() : null,
+      poseView: () => {
+        if (!this.bossSpawned || !this.bossController) return null;
+        const boss = gameplay.boss;
+        if (!boss || boss.removed) return null;
+        const position = boss.getPosition();
+        const forward = boss.getForward();
+        return {
+          positionX: position.x,
+          positionY: position.y,
+          positionZ: position.z,
+          forwardX: forward.x,
+          forwardZ: forward.z,
+        };
+      },
     });
     const survivalHud = new SurvivalHud(this.container);
     survivalHud.attachSource(playerHull, () => playerHull.consumeDamageFlash());
@@ -1312,6 +1358,9 @@ export class Game {
         explorationHud.setVisible(inSortie);
         interactionPromptHud.update(deltaSeconds);
         explorationHud.update(deltaSeconds);
+        // 보스 체력 HUD는 출항 게이트가 아니라 **보스 뷰 유무**로 뜬다 —
+        // 스폰 이후·격파 전에만 비-null이므로 조건을 여기서 다시 쓰지 않는다.
+        bossHealthHud.update(deltaSeconds);
         failureScreen.update();
         returnScreen.update();
       },
@@ -1320,6 +1369,7 @@ export class Game {
         survivalHud.dispose();
         interactionPromptHud.dispose();
         explorationHud.dispose();
+        bossHealthHud.dispose();
         failureScreen.dispose();
         returnScreen.dispose();
       },
