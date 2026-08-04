@@ -6,7 +6,44 @@
 
 ---
 
-## 스프린트 C 기술 통합 — 통합 관리자, 최신
+## M1·M2 Runtime Closure — 통합 관리자, 최신
+
+> 상세: `docs/measurements/M1_M2_PRODUCTION_CLOSURE.md`(composition 배선) ·
+> `docs/measurements/HUD_DISCOVERABILITY_FIX.md`(HUD blocker 3건).
+> 브랜치: `claude/m1-m2-runtime-closure-composition` (PR #18, dev 미병합).
+
+### 완료
+
+- production `Game.ts` composition 배선 — WIRING_2~16 전부 pass
+  (`verify:runtime-closure` fail 0 · unwired 0 · blocked 0).
+- 로컬 플레이테스트 blocker 3건 조치 (판정 무변경, HUD·배치만):
+  - L-1 성능 디버그 패널을 우측 자산 HUD 아래로 이동 — 소나 스코프 가림 해소.
+  - L-2 `InteractionPromptHud` 신설 — F 키캡 + 진행 링(정본 `progress`만),
+    완료 피드백, 단서 대상 한정 표시.
+  - L-3 `ExplorationHud` 신설 — 단서 N/M(BossProgressStore 단일 정본),
+    탐색 안내·표식 범례, `BOSS_ZONE` 좌표와 `requestEntry()` 결과 표기,
+    진입·교전 배너(edge 1회).
+- production 실측: 단서 `survey-probe` 실제 F 홀드 회수 1/3 완주,
+  중복 방지·저장 왕복·farming 혼합 0 확인. 레이아웃 겹침 0건
+  (1920×1080 · 2552×1388).
+
+### 진행 중 / 다음 작업
+
+- 단서 2·3종 회수와 보스 구역 진입·교전은 스크립트 항법 미도달로 **미실측** —
+  사용자 로컬 수동 플레이 검수 대기.
+
+### 차단 문제
+
+- farming reward 데이터 부재(대상 0개·보상표 없음) — **구현하지 않음**.
+  기획(금액·산식) + 월드(대상 배치) 결정 필요.
+
+### 변경된 계약
+
+- 없음. `src/contracts/*` · `params/*.json` 무변경.
+
+---
+
+## 스프린트 C 기술 통합 — 통합 관리자, 이전 회차
 
 > 상세: `docs/SPRINT_C_HANDOFF.md` 'C 통합 실행 결과' §1~11.
 > 브랜치: `claude/deep-dive-d5-gray-box-integration-tree5i` (dev 미병합, PR 없음).

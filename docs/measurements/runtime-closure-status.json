@@ -89,103 +89,103 @@
       "id": "Q1-activePingKey",
       "name": "KeyQ = 액티브 소나 핑 정합",
       "status": "pass",
-      "detail": "consume=src/core/Game.ts:990,src/systems/KeyboardInput.ts:148 · request=src/core/Game.ts:325,src/core/Game.ts:990,src/systems/GameplaySystems.ts:881,src/systems/GameplaySystems.ts:882,src/systems/GameplaySystems.ts:885,src/systems/GameplaySystems.ts:887,src/systems/sonar/SonarScopeSystem.ts:248,src/systems/sonar/SonarScopeSystem.ts:252 · KeyQ=src/systems/KeyboardInput.ts:58,src/systems/KeyboardInput.ts:74 · 도움말=src/ui/controlsConfig.ts:35 · repeat 가드·쿨다운 거부 검증 존재 · 충돌 0"
+      "detail": "consume=src/core/Game.ts:1040,src/systems/KeyboardInput.ts:148 · request=src/core/Game.ts:331,src/core/Game.ts:1040,src/systems/GameplaySystems.ts:881,src/systems/GameplaySystems.ts:882,src/systems/GameplaySystems.ts:885,src/systems/GameplaySystems.ts:887,src/systems/sonar/SonarScopeSystem.ts:248,src/systems/sonar/SonarScopeSystem.ts:252 · KeyQ=src/systems/KeyboardInput.ts:58,src/systems/KeyboardInput.ts:74 · 도움말=src/ui/controlsConfig.ts:35 · repeat 가드·쿨다운 거부 검증 존재 · 충돌 0"
     },
     {
       "id": "W1-officialParams",
       "name": "[배선 1] 공식 params loader 결과 생성",
       "status": "pass",
-      "detail": "production 호출 src/core/Game.ts:507"
+      "detail": "production 호출 src/core/Game.ts:517"
     },
     {
       "id": "W2-toolingLoaders",
       "name": "[배선 2] 툴링 params 로더(interaction·sonar·farming) 호출",
       "status": "pass",
-      "detail": "production 호출 src/core/Game.ts:409, src/core/Game.ts:410"
+      "detail": "production 호출 src/core/Game.ts:415, src/core/Game.ts:416"
     },
     {
       "id": "W3-clueSource",
       "name": "[배선 3] world clue placement 소비",
       "status": "pass",
-      "detail": "production 호출 src/core/Game.ts:46, src/core/Game.ts:48, src/core/Game.ts:113, src/core/Game.ts:316, src/core/Game.ts:759"
+      "detail": "production 호출 src/core/Game.ts:48, src/core/Game.ts:50, src/core/Game.ts:115, src/core/Game.ts:322, src/core/Game.ts:769, src/core/Game.ts:801"
     },
     {
       "id": "W4-clueIds",
       "name": "[배선 4] clue mapping source 주입 (attachClueIds)",
       "status": "pass",
-      "detail": "production 호출 src/core/Game.ts:773"
+      "detail": "production 호출 src/core/Game.ts:783"
     },
     {
       "id": "W5-bossPlacement",
       "name": "[배선 5] world boss placement 소비",
       "status": "pass",
-      "detail": "production 호출 src/core/Game.ts:41, src/core/Game.ts:44, src/core/Game.ts:807, src/core/Game.ts:855, src/core/Game.ts:862, src/core/Game.ts:862, src/core/Game.ts:922"
+      "detail": "production 호출 src/core/Game.ts:43, src/core/Game.ts:46, src/core/Game.ts:846, src/core/Game.ts:895, src/core/Game.ts:902, src/core/Game.ts:902, src/core/Game.ts:972"
     },
     {
       "id": "W6-bossEncounter",
       "name": "[배선 6] BossEncounter 연결 (createBoss)",
       "status": "pass",
-      "detail": "production 호출 src/core/Game.ts:806"
+      "detail": "production 호출 src/core/Game.ts:845"
     },
     {
       "id": "W7-bossController",
       "name": "[배선 7] BossController 생성",
       "status": "pass",
-      "detail": "production 호출 src/core/Game.ts:854"
+      "detail": "production 호출 src/core/Game.ts:894"
     },
     {
       "id": "W8-bossMotionPort",
       "name": "[배선 8] BossMotionPort 연결",
       "status": "pass",
-      "detail": "production 호출 src/core/Game.ts:827, src/core/Game.ts:827, src/core/Game.ts:829, src/core/Game.ts:832, src/core/Game.ts:857"
+      "detail": "production 호출 src/core/Game.ts:866, src/core/Game.ts:866, src/core/Game.ts:868, src/core/Game.ts:871, src/core/Game.ts:897"
     },
     {
       "id": "W9-bossAttackPort",
       "name": "[배선 9] BossAttackPort 연결",
       "status": "pass",
-      "detail": "production 호출 src/core/Game.ts:828, src/core/Game.ts:828, src/core/Game.ts:829, src/core/Game.ts:832, src/core/Game.ts:858"
+      "detail": "production 호출 src/core/Game.ts:867, src/core/Game.ts:867, src/core/Game.ts:868, src/core/Game.ts:871, src/core/Game.ts:898"
     },
     {
       "id": "W10-bossDamageSink",
       "name": "[배선 10] BossDamageSink 연결",
       "status": "pass",
-      "detail": "production 호출 src/core/Game.ts:870"
+      "detail": "production 호출 src/core/Game.ts:910"
     },
     {
       "id": "W11-weakPointTarget",
       "name": "[배선 11] BossWeakPointTarget 등록",
       "status": "pass",
-      "detail": "production 호출 src/core/Game.ts:805, src/core/Game.ts:808"
+      "detail": "production 호출 src/core/Game.ts:844, src/core/Game.ts:847"
     },
     {
       "id": "W12-interactables",
       "name": "[배선 12] interactable source 연결",
       "status": "pass",
-      "detail": "production 호출 src/core/Game.ts:769"
+      "detail": "production 호출 src/core/Game.ts:779"
     },
     {
       "id": "W13-sonarProvider",
       "name": "[배선 13] SonarScope provider 연결 (contacts·params)",
       "status": "pass",
-      "detail": "production 호출 src/core/Game.ts:906, src/core/Game.ts:972"
+      "detail": "production 호출 src/core/Game.ts:956, src/core/Game.ts:1022"
     },
     {
       "id": "W14-sonarRender",
       "name": "[배선 14] SonarScope render consumer 연결",
       "status": "pass",
-      "detail": "production 호출 src/core/Game.ts:1197"
+      "detail": "production 호출 src/core/Game.ts:1247"
     },
     {
       "id": "W15-bossView",
       "name": "[배선 15] BossCoreView render consumer 연결",
       "status": "pass",
-      "detail": "production 호출 src/core/Game.ts:1204"
+      "detail": "production 호출 src/core/Game.ts:1254"
     },
     {
       "id": "W16-bossSpawn",
       "name": "[배선 16] boss spawn·victory·sortieFailed·reset 사슬",
       "status": "pass",
-      "detail": "production 호출 src/core/Game.ts:852"
+      "detail": "production 호출 src/core/Game.ts:892"
     },
     {
       "id": "C0-clueVerifierSelfTest",
