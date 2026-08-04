@@ -85,6 +85,7 @@ import { BossProgressStore } from '../BossProgressStore';
 import { BossVictoryBridge, SaveBridge } from '../../core/PveIntegration';
 import { validateBossParams } from '../../config/bossParams';
 import { BOSS_PATTERN_KINDS } from '../../contracts/boss';
+import type { SonarScopeReadModel } from '../../contracts/sonar';
 import type { BossAttackRequest, BossMotionPort } from '../../contracts/boss';
 import type { BossParams } from '../../contracts/params';
 import { SaveStore, type StorageLike } from '../save/SaveStore';
@@ -2626,6 +2627,87 @@ export function runMetaVerification(options: { bossJson?: unknown } = {}): Verif
       );
     }
 
+    // ── interactionCollected 구독 경로 (composition root 규약 재현) ──
+    //    Game.ts와 동일한 구독: kind==='clue'의 canonical `clueId`만 소비,
+    //    `targetId`(월드 interactable ID)는 진행 스토어에 전달하지 않는다.
+    {
+      const bus = new EventBus();
+      const store = new BossProgressStore(clueOptions, bus);
+      bus.on('interactionCollected', (payload) => {
+        if (payload.kind === 'clue') store.collectClue(payload.clueId);
+      });
+
+      // ① targetId ≠ clueId여도 저장되는 것은 clueId다
+      bus.emit('interactionCollected', {
+        kind: 'clue', targetId: 'world-clue-node-07', clueId: 'clue-a', x: 0, z: 0,
+      });
+      check(
+        'M2 구독: targetId≠clueId에도 canonical clueId가 기록된다',
+        store.collectedClueIds.includes('clue-a') && store.collectedCanonicalCount === 1,
+        `ids=${JSON.stringify(store.collectedClueIds)}`,
+      );
+
+      // ② targetId가 우연히 canonical id 모양이어도 clueId만 소비된다
+      //    (targetId를 단서 id로 오해하는 경로가 0임을 확인)
+      bus.emit('interactionCollected', {
+        kind: 'clue', targetId: 'clue-c', clueId: 'clue-b', x: 0, z: 0,
+      });
+      check(
+        'M2 구독: targetId가 canonical id 모양이어도 clueId만 기록 (오해 경로 0)',
+        store.collectedClueIds.includes('clue-b') && !store.collectedClueIds.includes('clue-c'),
+        `ids=${JSON.stringify(store.collectedClueIds)}`,
+      );
+
+      // ③ 미지 clueId는 거부되어 진행에 반영되지 않는다
+      bus.emit('interactionCollected', {
+        kind: 'clue', targetId: 'world-clue-node-08', clueId: 'clue-unknown', x: 0, z: 0,
+      });
+      // ④ 동일 clueId 재발행은 중복 0
+      bus.emit('interactionCollected', {
+        kind: 'clue', targetId: 'world-clue-node-07', clueId: 'clue-a', x: 0, z: 0,
+      });
+      // ⑤ 다른 targetId라도 같은 clueId면 중복 0 (반영 단위는 clueId)
+      bus.emit('interactionCollected', {
+        kind: 'clue', targetId: 'world-clue-node-99', clueId: 'clue-a', x: 0, z: 0,
+      });
+      check(
+        'M2 구독: 미지 clueId 거부 + 동일 clueId 중복 0 (다른 targetId 포함)',
+        store.collectedCanonicalCount === 2 &&
+          !store.collectedClueIds.includes('clue-unknown'),
+        `count=${store.collectedCanonicalCount}, ids=${JSON.stringify(store.collectedClueIds)}`,
+      );
+
+      // ⑥ clue가 아닌 kind는 진행 스토어에 도달하지 않는다
+      const beforeNonClue = store.collectedClueIds.length;
+      bus.emit('interactionCollected', { kind: 'goldCache', targetId: 'gold-01', x: 0, z: 0 });
+      bus.emit('interactionCollected', { kind: 'salvage', targetId: 'salvage-01', x: 0, z: 0 });
+      bus.emit('interactionCollected', { kind: 'deepSite', targetId: 'deep-01', x: 0, z: 0 });
+      check(
+        'M2 구독: 비clue kind(goldCache·salvage·deepSite)는 진행 영향 0',
+        store.collectedClueIds.length === beforeNonClue && !store.unlocked,
+        `len=${store.collectedClueIds.length}, unlocked=${store.unlocked}`,
+      );
+
+      // 타입 수준 금지 검사 — 비clue arm에는 clueId를 실을 수 없다
+      // (`clueId?: never` — 계약 위반은 컴파일 단계에서 차단된다)
+      const rejectNonClueClueId = (): void => {
+        // @ts-expect-error 비clue kind에 clueId 탑재는 계약 위반 (`clueId?: never`)
+        bus.emit('interactionCollected', { kind: 'goldCache', targetId: 'gold-02', clueId: 'clue-a', x: 0, z: 0 });
+      };
+      // clue arm은 clueId가 필수다
+      const rejectClueMissingClueId = (): void => {
+        // @ts-expect-error clue kind는 clueId 없이 발행할 수 없다
+        bus.emit('interactionCollected', { kind: 'clue', targetId: 'world-clue-node-07', x: 0, z: 0 });
+      };
+      void rejectNonClueClueId;
+      void rejectClueMissingClueId;
+      check(
+        'M2 구독 계약: 비clue clueId 금지·clue clueId 필수 (타입 수준 — 컴파일 통과가 증명)',
+        true,
+        'ts-expect-error 정적 검사',
+      );
+    }
+
     // ── 재접속(저장 왕복) 후 유지 + 중복 방지 지속 ──
     {
       const store = new BossProgressStore(clueOptions, null);
@@ -2729,6 +2811,80 @@ export function runMetaVerification(options: { bossJson?: unknown } = {}): Verif
         `저장 내용=${JSON.stringify(savedProgress[0] ?? null)}`,
       );
     }
+  }
+
+  /* ═══ INT-RENDER-014 소나 스코프 읽기 모델 계약 (타입 정적 검사) ═══ */
+  {
+    // 적합 표본 — unwired 자세 그대로 (blips 빈 배열·타이머 0·safe 고정)
+    const unwiredModel: SonarScopeReadModel = {
+      unwired: true,
+      noiseFactor: 0,
+      blips: [],
+      activePingRemainingSeconds: 0,
+      cooldownRemainingSeconds: 0,
+      pingReady: false,
+      ringState: 'safe',
+    };
+    // 적합 표본 — 패시브 접촉(거리 미상 null) + 액티브 반사 접촉
+    const wiredModel: SonarScopeReadModel = {
+      unwired: false,
+      noiseFactor: 0.4,
+      blips: [
+        {
+          targetId: 'destroyer-1',
+          kind: 'ship',
+          bearingRadians: 1.2,
+          bearingSpreadRadians: 0.3,
+          distanceMeters: null,
+          fromActivePing: false,
+        },
+        {
+          targetId: 'torpedo-7',
+          kind: 'torpedo',
+          bearingRadians: -0.5,
+          bearingSpreadRadians: 0,
+          distanceMeters: 120,
+          fromActivePing: true,
+        },
+      ],
+      activePingRemainingSeconds: 2.5,
+      cooldownRemainingSeconds: 0,
+      pingReady: true,
+      ringState: 'searching',
+    };
+
+    // 금지 검사 ① — blip에 월드 좌표를 실을 수 없다 (렌더 역산 금지)
+    const rejectWorldCoordinates = (): SonarScopeReadModel => ({
+      ...unwiredModel,
+      blips: [
+        {
+          targetId: 'destroyer-1',
+          kind: 'ship',
+          bearingRadians: 0,
+          bearingSpreadRadians: 0,
+          distanceMeters: null,
+          fromActivePing: false,
+          // @ts-expect-error blip에 월드 좌표 탑재는 계약 위반 (방위·거리 표현만)
+          x: 10,
+        },
+      ],
+    });
+    // 금지 검사 ② — 침묵 항행 boolean을 모델에 실을 수 없다 (17차 결의 4)
+    const rejectSilentRunningFlag = (): SonarScopeReadModel => ({
+      ...unwiredModel,
+      // @ts-expect-error 침묵 항행 인지 금지 — noiseFactor 단일 의존
+      silentRunning: true,
+    });
+    void rejectWorldCoordinates;
+    void rejectSilentRunningFlag;
+
+    check(
+      'INT-RENDER-014 소나 계약: unwired 자세·패시브 null 거리·핑 타이머 표현 + 월드좌표·침묵 boolean 타입 금지',
+      unwiredModel.blips.length === 0 && !unwiredModel.pingReady &&
+        wiredModel.blips[0]?.distanceMeters === null &&
+        wiredModel.blips[1]?.fromActivePing === true,
+      'ts-expect-error 정적 검사 + 표본 적합',
+    );
   }
 
   return results;
