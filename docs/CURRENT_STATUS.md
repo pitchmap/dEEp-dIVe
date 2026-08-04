@@ -474,11 +474,12 @@ B 선행개발          = 가능 (선행개발 상태로만)
     - **회수 중 소음은 기존 `attachNoiseSource` 경로에 가산**된다(`DetectionEnvironmentAdapter.addNoiseContributor`) — 조립부가 연결한 속도 기반 소음 정책을 대체하지 않고, 별도 소음 정본을 만들지 않는다
     - **수치 전량 주입**: 홀드 시간·근접 반경·소음 기여량. 미주입이면 `unwired`로 회수가 성립하지 않는다 — 지시에 명시된 2초도 코드에 넣지 않았다(params 요청 INT-GAME-015)
     - 회수 이력은 `restoreCollected()`로 **복원만** 받는다 — 저장 정본 신설 0
-    - ⚠ **입력 충돌**: 회수 입력 `E`는 현재 상승 병행 키다. 기존 바인딩을 지우지 않고 읽기만 추가했으며 키 결정을 요청했다
+    - ⚠ **입력 충돌 (미해결 — 후속 결정 항목)**: 회수 입력 `E`는 **현재도 상승 병행 키**다(`KeyboardInput.ascend`가 `KeyE`를 그대로 읽는다 — 이 PR에서 제거·변경하지 않았다). 두 getter 모두 `heldCodes`를 **읽기만** 하고 소비하지 않으므로 E를 누르면 상승과 회수 홀드가 동시에 진행된다. 회수 거리 판정이 3D라 수직 상승만으로 `outOfRange` 취소가 걸릴 수 있다. 키 정책은 추측으로 바꾸지 않고 결정을 요청했다 — 상세 표: INT-GAME-015
     - 결정적 검증 **253항목**(253/253 — 기존 242 유지 + 신규 11). meta 128/128·tooling 26/26·sprint-a 30/30 동시 통과
-    - **2~6단계 미착수** — 기준 문서(`AGENTS.md`·16/17차 회의록·`DEEP_DIVE_STATUS_REPORT.md`)와 M0~M2 마일스톤 정의, 리드 계약 3종(회수 완료 이벤트·단서 진행 상태·`SonarScopeReadModel`)이 저장소에 없다. 상세: INT-GAME-015
-- **마지막 업데이트:** M2 1단계 InteractionSystem (공유 회수 절차·가산 소음 경로·수치 전량 주입). 2~6단계는 기준 문서·리드 계약 부재로 미착수 — INT-GAME-015
-- **담당 브랜치:** `claude/submarine-controls-depth-3wi424` (원격 세션 지정 브랜치 — `feat/gameplay` 역할, origin/dev + 리드 계약 브랜치 병합 기반)
+    - ~~2~6단계 미착수 — 기준 문서 부재~~ → **해소.** 기준 문서 4종(`AGENTS.md`·16/17차 회의록·`DEEP_DIVE_STATUS_REPORT.md`)이 `dev`에 도착했고, **17차 결의 3 창 2 규격과 이 구현의 정합 확인을 마쳤다**(불일치 0건 — 대조표는 INT-GAME-015). 2~5단계 구현분은 역할 브랜치 `feat/gameplay-m2-interaction`에 있으며 **이번 PR에는 포함하지 않는다**
+    - **이번 PR 범위 = InteractionSystem 선행 배관만.** 단서 진행 정본·`BossProgressStore` 연결·보스 해금·파밍 보상·소나 스코프·침묵 항행·M3는 **후속 PR**이다. 회수 완료의 EventBus 이벤트화와 리드 `InteractionTargetKind` 계약 소비도 리드 계약 병합 후 후속 PR에서 연결한다
+- **마지막 업데이트:** M2 1단계 InteractionSystem을 **첫 통합 PR로 분리**(`feat/gameplay-interaction-pr1`, base `dev@5cb0210`). 기준 문서 도착에 따른 문서 정정 포함 — 「기준 문서 부재」는 구현 시점 이력으로 과거형 표기. 상세: INT-GAME-015
+- **담당 브랜치:** `feat/gameplay-interaction-pr1` (첫 통합 PR — `b983dec` 분리 + `origin/dev@5cb0210` 병합) / 후속 M2 2~5단계는 `feat/gameplay-m2-interaction`에 유지
 
 ## 그래픽스
 
