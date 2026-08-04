@@ -65,6 +65,7 @@ import type {
   SortieFailureReport,
 } from '../contracts/survival';
 import type { GuardShipAdapter, GuardShipHandle } from './GuardShipAdapter';
+import type { BossProgressStore } from '../meta/BossProgressStore';
 import type { SalvageKind } from '../systems/economy/SalvageObject';
 import type { WorldDrop } from '../systems/economy/CreditDropField';
 import type { EventBus, Unsubscribe } from './EventBus';
@@ -221,6 +222,8 @@ export interface SaveSnapshotSource {
   readonly wallet: CurrencyBundle;
   readonly upgradeLevels: Readonly<Record<string, number>>;
   readonly equippedGear: readonly string[];
+  /** M2 단서·해금·격파 진행 (리드 BossProgressStore.snapshot — INT-CORE-020) */
+  readonly progress: SaveData['progress'];
 }
 
 /**
@@ -262,17 +265,76 @@ export class SaveBridge implements GameSystem {
   /** 현재 메타 스냅샷을 저장한다 (호출 시점 = saveRequested 수신 시) */
   writeSnapshot(): void {
     const wallet = this.snapshot.wallet;
+    const progress = this.snapshot.progress;
     this.lastSaveOk = this.store.save({
       ...this.base,
       credits: Math.floor(wallet.credits),
       rareParts: Math.floor(wallet.rareParts),
       upgradeLevels: { ...this.snapshot.upgradeLevels },
       equippedGear: [...this.snapshot.equippedGear],
+      progress: {
+        bossCluesCollected: [...progress.bossCluesCollected],
+        bossUnlocked: progress.bossUnlocked,
+        bossDefeated: progress.bossDefeated,
+      },
     });
   }
 
   update(_deltaSeconds: number): void {
     // 이벤트 구동 — 프레임 작업 없음 (주기 저장 금지)
+  }
+
+  dispose(): void {
+    for (const off of this.unsubscribes) off();
+    this.unsubscribes.length = 0;
+  }
+}
+
+/**
+ * M2 보스 격파 승리 브리지 (INT-CORE-020).
+ *
+ * `bossDefeated`(리드 보스 코어, 격파당 1회) →
+ *  ① 진행 기록 `markDefeated()` — 최초 1회만 true (데모 완료 기록의 중복 방지)
+ *  ② **기존** `lootDropped(source 'boss')` 경로로 보상 발행 → MetaLoop이
+ *     희귀 부품 즉시 확정 + `saveRequested('rarePart')` 1회. 그 저장 스냅샷에
+ *     ①의 `bossDefeated=true`가 이미 실려 있으므로 **승리 보상 지급과 데모
+ *     완료 기록 저장이 각각 정확히 1회**다.
+ *
+ * 보상 수치는 `params/boss.json reward.*` — 이 브리지는 값을 만들지 않는다.
+ * 별도 저장 호출 없음(저장 책임 표 A-12 유지 — SavePort 직접 호출 금지).
+ */
+export class BossVictoryBridge implements GameSystem {
+  readonly id = 'bossVictoryBridge';
+
+  private readonly progress: BossProgressStore;
+  private readonly rewardCredits: number;
+  private readonly rewardRareParts: number;
+  private readonly unsubscribes: Unsubscribe[] = [];
+
+  constructor(progress: BossProgressStore, reward: { credits: number; rareParts: number }) {
+    this.progress = progress;
+    this.rewardCredits = Math.max(0, Math.floor(reward.credits));
+    this.rewardRareParts = Math.max(0, Math.floor(reward.rareParts));
+  }
+
+  initialize(context: SystemContext): void {
+    this.unsubscribes.push(
+      context.bus.on('bossDefeated', (payload) => {
+        // 최초 격파만 보상·기록 — 재격파(이미 defeated 저장됨)는 무시
+        if (!this.progress.markDefeated()) return;
+        context.bus.emit('lootDropped', {
+          source: 'boss',
+          credits: this.rewardCredits,
+          rareParts: this.rewardRareParts,
+          x: payload.x,
+          z: payload.z,
+        });
+      }),
+    );
+  }
+
+  update(_deltaSeconds: number): void {
+    // 이벤트 구동 — 프레임 작업 없음
   }
 
   dispose(): void {

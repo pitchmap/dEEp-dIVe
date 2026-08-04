@@ -10,7 +10,7 @@
  *    유저 자유].
  */
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 export interface SaveDataV1 {
   schemaVersion: 1;
@@ -35,8 +35,34 @@ export interface SaveDataV1 {
   };
 }
 
+/**
+ * v2 (M2 단서·해금 — 17차 결의 3 창 1 / INT-CORE-020):
+ * `progress.bossCluesFound`(개수) → `bossCluesCollected`(단서 **id 목록**).
+ *
+ * 개수만으로는 '동일 단서 중복 반영 금지'(16차 M2 규격)를 재접속 후에
+ * 보장할 수 없다 — 어떤 단서를 이미 회수했는지가 정본이어야 같은 단서가
+ * 두 번 세어지지 않는다. 개수는 `bossCluesCollected.length` 파생값이다
+ * (이중 저장 금지 원칙).
+ */
+export interface SaveDataV2 {
+  schemaVersion: 2;
+  credits: number;
+  rareParts: number;
+  upgradeLevels: Record<string, number>;
+  equippedGear: string[];
+  progress: {
+    /** 회수한 단서 id 목록 (중복 없음) — 정본. 개수는 length 파생 */
+    bossCluesCollected: string[];
+    bossUnlocked: boolean;
+    bossDefeated: boolean;
+  };
+  settings: {
+    keyboardLockNoticeShown: boolean;
+  };
+}
+
 /** 현재 스키마의 저장 데이터 타입 별칭 — 버전 추가 시 유니온으로 확장 */
-export type SaveData = SaveDataV1;
+export type SaveData = SaveDataV2;
 
 export function createDefaultSave(): SaveData {
   return {
@@ -46,7 +72,7 @@ export function createDefaultSave(): SaveData {
     upgradeLevels: {},
     equippedGear: [],
     progress: {
-      bossCluesFound: 0,
+      bossCluesCollected: [],
       bossUnlocked: false,
       bossDefeated: false,
     },
@@ -114,10 +140,12 @@ export function validateSaveData(raw: unknown): SaveData {
 
   const progressRaw = raw['progress'];
   if (!isRecord(progressRaw)) throw new SaveValidationError('progress', '객체가 필요합니다');
-  const clues = requireNonNegativeNumber('progress.bossCluesFound', progressRaw['bossCluesFound']);
-  if (!Number.isInteger(clues)) {
-    throw new SaveValidationError('progress.bossCluesFound', '정수가 필요합니다');
+  const cluesRaw = progressRaw['bossCluesCollected'];
+  if (!Array.isArray(cluesRaw) || cluesRaw.some((c) => typeof c !== 'string' || c.length === 0)) {
+    throw new SaveValidationError('progress.bossCluesCollected', '비어 있지 않은 문자열 배열이 필요합니다');
   }
+  // 중복은 저장 손상으로 보고 정규화한다 — 중복 반영 금지 규격의 방어선
+  const clues = [...new Set(cluesRaw as string[])];
 
   const settingsRaw = raw['settings'];
   if (!isRecord(settingsRaw)) throw new SaveValidationError('settings', '객체가 필요합니다');
@@ -129,7 +157,7 @@ export function validateSaveData(raw: unknown): SaveData {
     upgradeLevels,
     equippedGear: [...(gearRaw as string[])],
     progress: {
-      bossCluesFound: clues,
+      bossCluesCollected: clues,
       bossUnlocked: requireBoolean('progress.bossUnlocked', progressRaw['bossUnlocked']),
       bossDefeated: requireBoolean('progress.bossDefeated', progressRaw['bossDefeated']),
     },

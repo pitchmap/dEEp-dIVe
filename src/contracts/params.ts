@@ -125,3 +125,81 @@ export interface GameParams {
   combat: CombatParams;
   crew: CrewParams;
 }
+
+/* ── M1 보스 params (params/boss.json — 17차 결의 3 창 1) ──────── */
+
+/**
+ * 패턴 노출 플래그 [17차 결의 5 R-M3 — D10 비상 컷 = 플래그 오프].
+ * 정확히 이 4키뿐이다 — 소환·회전 근접 키는 존재하지 않으며 로더가
+ * 미지 키를 거부한다(16차 결의 1-3 봉인). 비상 컷 발동 시
+ * `weakPointOpen`·`finalAcceleration`만 false로 바꾸고 약점 '판정'
+ * 코드는 그대로 둔다.
+ */
+export interface BossPatternFlags {
+  ram: boolean;
+  projectile: boolean;
+  weakPointOpen: boolean;
+  finalAcceleration: boolean;
+}
+
+/**
+ * params/boss.json — MVP 보스 1종 정의 (스코프 가드 상한 1).
+ * 모든 수치는 [초기 테스트값 — 확정 밸런스 아님]이며 튜닝표 절차로만
+ * 조정한다. 로더: `config/bossParams.loadBossParams` (composition root 1회).
+ */
+export interface BossParams {
+  /** 보스 식별자 — 스코프 가드가 개체 수(1)를 세는 키 */
+  id: string;
+  name: string;
+  hull: {
+    /** 보스 체력 풀 (어뢰 피해 1.0 스케일과 동일 단위) */
+    maxHull: Tunable;
+    /** 2단계 진입 체력 비율 임계 (이하 진입) — phase3보다 커야 함 */
+    phase2AtHullRatio: Tunable;
+    /** 3단계 진입 체력 비율 임계 (이하 진입) */
+    phase3AtHullRatio: Tunable;
+  };
+  patterns: {
+    flags: BossPatternFlags;
+    /** 패턴 간 간격 (초) — 3단계에서 finalPhase.intervalMultiplier 적용 */
+    intervalSeconds: Tunable;
+    /** 모든 공격·개방·단계 전환에 선행하는 예고 지속 시간 (초) */
+    telegraphSeconds: Tunable;
+    ram: {
+      /** 돌진 속도 (m/s) — 기존 이동 포트의 속도 노브로 주입 */
+      speedMetersPerSecond: Tunable;
+      durationSeconds: Tunable;
+    };
+    projectile: {
+      /** 투사체 속도 (m/s) — 기존 어뢰 직진 경로 재사용 시 주입 */
+      speedMetersPerSecond: Tunable;
+      /** 플레이어 선체 피해 (C9 선체 120 스케일과 동일 단위) */
+      damage: Tunable;
+    };
+    weakPointOpen: {
+      openSeconds: Tunable;
+      /** 개방 중 명중 피해 배율 (게임플레이 판정이 소비 — INT-GAME-008 이관) */
+      weakPointDamageMultiplier: Tunable;
+      /** 닫힘 중 일반 선체 명중 피해 배율 */
+      closedHullDamageMultiplier: Tunable;
+    };
+    finalPhase: {
+      /** 3단계 이동·돌진 속도 배율 */
+      speedMultiplier: Tunable;
+      /** 3단계 패턴 간격 배율 (<1 = 가속) */
+      intervalMultiplier: Tunable;
+    };
+  };
+  /** M2 해금 (16차 결의 1-5 — 단서 3개, 획득원은 기존 콘텐츠 재사용) */
+  unlock: {
+    requiredClues: FixedNumber;
+    /** 정본 단서 id 목록 — 길이 = requiredClues, 중복 금지. 미지 id는
+     *  진행에 반영되지 않는다(unknownClue) */
+    clueIds: string[];
+  };
+  /** 격파 보상 — 기존 lootDropped(source 'boss') 경로로 지급 */
+  reward: {
+    rareParts: FixedNumber;
+    credits: FixedNumber;
+  };
+}

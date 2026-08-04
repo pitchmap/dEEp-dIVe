@@ -161,7 +161,30 @@ lifecycle 이벤트 발행자(`depthChargeEnteredWater`·`depthChargeExploded`)�
 
 ---
 
-### INT-GAME-015 — M2 1단계 InteractionSystem 구현 + 기준 문서·리드 계약 부재 보고
+### INT-CORE-021 — interactionCollected 의미 확정(targetId/clueId 분리) · 단서 진행 정본 소유권 · PR #9 수신 (리드 창 — 두 번째 통합 PR)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (PR #9 병합 후 — base = dev `bd59d0a`, 브랜치 `claude/deep-dive-core-lead-uyg77p`에 일반 merge 수신, 충돌 0) |
+| **이벤트 의미 확정** | `interactionCollected` payload를 `InteractionCollectedEvent`(contracts/meta.ts) **discriminated union**으로 확정: **`targetId` = 월드 interactable 고유 ID**(모든 kind 공통 — 단서 ID로 해석 금지) / **`clueId` = canonical 단서 ID**(`params/boss.json unlock.clueIds`)로 `kind === 'clue'` arm에서만 **필수**, 비clue arm은 `clueId?: never`로 **타입 수준 금지**. `completedAt`은 소비자가 없어 추가하지 않음(필요 시 제안 후 추가) |
+| **kind 정본** | 계약 정본 = `InteractionTargetKind` 4종 **`goldCache | salvage | clue | deepSite`**. 게임플레이 `InteractionSystem` 내부 태그(`gold | salvage | clue | deepSurvey`)와 다르다 — **변환은 게임플레이 조립 어댑터 소유**(후속 창). 리드 PR에서는 게임플레이 파일을 수정하지 않았다 |
+| **단서 진행 정본 소유권 (단일)** | **원장(수집 id 목록)·중복 방지·저장 복원·해금 판정·보스 구역 게이트 = `BossProgressStore` 하나.** 게임플레이 어댑터(후속) = interactableId→clueId 매핑·kind 변환·`interactionCollected` 발행만 소유하는 **무상태** 계층. 게임플레이 쪽 `CluePickupProgress`류의 영속·복원·중복 방지 로직은 **병합 대상이 아니다**(중복 정본 금지) |
+| Game 구독 정정 | 조립부 구독을 `payload.kind === 'clue'` → **`collectClue(payload.clueId)`**로 정정(기존 `payload.targetId` 전달은 월드 ID를 단서 ID로 오해하는 경로였음). 비clue kind는 진행 스토어에 전달하지 않는다 |
+| ⚠ 발행자 0 | dev의 `InteractionSystem`은 로컬 `completionListeners` 콜백만 제공 — **`interactionCollected` EventBus 발행자는 현재 0이다.** 구독 배선은 계약대로 상시이나 런타임 배선 완료가 아니다(`INTERACTION_EVENTBUS_WIRED=false` 유지) |
+| 검증 | verify:meta **156/156** — 구독 경로 테스트 6종(targetId≠clueId에도 clueId 기록·targetId 오해 경로 0·미지 clueId 거부·동일 clueId 중복 0(다른 targetId 포함)·비clue 영향 0) + `@ts-expect-error` 타입 정적 검사 2종(비clue clueId 금지·clue clueId 필수). typecheck·build·scope·gameplay 253/253·tooling 26/26·sprint-a/b/c 전부 통과 |
+| 개발 리드 결정 | 승인 — 두 ID 의미·정본 소유권 확정. 게임플레이 후속 PR은 어댑터(매핑·변환·발행)만 추가하고 진행 상태를 들지 않는다 |
+
+### INT-RENDER-014 — [RENDER][DETECT] 소나 스코프 읽기 모델 공용 계약 `SonarScopeReadModel` (리드 정의 — 배선 아님)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (INT-GAME-015 5단계 차단 사유 "리드 계약 부재" 해소 + 그래픽스 기존 `SonarScope` 표시물과 게임플레이 판정의 비호환 수렴) |
+| 신설 계약 | `src/contracts/sonar.ts` — `SonarScopeReadModel`: `unwired`(미확정 정지 자세 — blips 빈 배열·pingReady false·타이머 0·ringState 'safe' 고정), `noiseFactor`(0~1 — 표시가 의존하는 **유일한** 자기 상태), `blips[]`(canonical `targetId`·`kind`(ship/torpedo/depthCharge)·`bearingRadians`·`bearingSpreadRadians`·`distanceMeters | null`(패시브 거리 미상)·`fromActivePing`), `activePingRemainingSeconds`·`cooldownRemainingSeconds`·`pingReady`, `ringState`(**기존 `DetectionStage` 재사용** — 새 어휘 금지) |
+| 금지 규칙 | ① blip에 **월드 좌표 탑재 금지** — 렌더는 방위·거리 표현만으로 그리고 재계산·역산하지 않는다 ② **침묵 항행 boolean 금지**(17차 결의 4) — noiseFactor 단일 의존, 원인 구분 표시 금지 ③ `depthChargeOnPassiveScope` 필터는 **게임플레이가 blips 공급 시점에 적용** — 렌더는 받은 blips를 걸러내거나 추가하지 않는다 (①②는 `@ts-expect-error` 정적 검사로 고정) |
+| ⚠ 배선 아님 | dev에는 이 모델의 공급자(게임플레이 소나 시스템)도 소비자(그래픽스 스코프)도 아직 없다 — **계약 정의만이며 그래픽스 구현 완료로 표기하지 않는다** |
+| 개발 리드 결정 | 승인 — 양쪽 창은 이 계약으로 수렴. blip kind 확장은 이 문서 제안 → 리드 결정 후에만 |
+
+### INT-GAME-015 — M2 1단계 InteractionSystem (첫 통합 PR 범위) + 당시 기준 문서 부재 이력
 
 | 필드 | 내용 |
 |---|---|
@@ -175,31 +198,38 @@ lifecycle 이벤트 발행자(`depthChargeEnteredWater`·`depthChargeExploded`)�
 
 **구현 완료 (1단계):** `systems/interaction/InteractionSystem` — 금괴·salvage·단서·심층 탐사 지점이 **공유하는 단일 시스템**(타입별 시스템 0). 근접 판정·E 홀드·진행률·거리 이탈/대상 제거/입력 해제 취소·완료 통지 1회·같은 대상 중복 회수 불가·UI read model(접근 가능·진행률·이미 회수함·unwired) 구현. 회수 중 소음은 **기존 `attachNoiseSource` 경로에 가산**되며 별도 소음 정본을 만들지 않았다. 회수 이력은 `restoreCollected()`로 복원만 받고 **저장하지 않는다**(저장 정본 신설 0).
 
-**⚠ 기준 문서·계약 부재 (전 원격 브랜치 확인)**
+**✅ [해소됨] 기준 문서·계약 부재 — 아래는 구현 시점(`b983dec`)의 이력이다**
 
-지시가 지정한 문서 우선순위 중 다음이 저장소에 **존재하지 않는다**:
+> **현재 사실이 아니다.** 최신 `dev`(`5cb0210`)에 `AGENTS.md`·`CLAUDE.md`·
+> `DEEP_DIVE_STATUS_REPORT.md`·16차 대회의록·17차 개발팀 소회의록이 **전부
+> 존재한다.** 아래 표와 목록은 "왜 당시 1단계만 선행했는가"를 남기기 위한
+> **과거 기록**이며 현재 상태 보고가 아니다. 도착 후 정합 확인 결과는 이 절
+> 끝의 「기준 문서 도착 후 정합 확인」에 적었다.
 
-| 우선순위 | 문서 | 상태 |
-|---|---|---|
-| 1 | `AGENTS.md` | 전 브랜치 부재 |
-| 3 | 17차 개발팀 소회의록 | 부재 (`docs/meetings/`는 15차까지) |
-| 4 | 16차 대회의록 | 부재 |
-| 5 | `DEEP_DIVE_STATUS_REPORT.md` | 부재 |
+지시가 지정한 문서 우선순위 중 다음이 **당시** 저장소에 존재하지 않았다:
 
-또한 **M0·M1·M2 마일스톤 정의 자체가 저장소에 없다.** `dev` tip(`d968514`)의 최신 상태는
-스프린트 C 완료(`C_FINAL_COMPLETE=true`)이며 M0 그래픽 통합·M1 보스 회색 상자·M2
-단서/해금/보상에 해당하는 범위표·인수 조건이 없다.
+| 우선순위 | 문서 | 당시 상태 (`b983dec`) | 현재 (`dev@5cb0210`) |
+|---|---|---|---|
+| 1 | `AGENTS.md` | 전 브랜치 부재 | ✅ 존재 (`0d761a8`) |
+| 3 | 17차 개발팀 소회의록 | 부재 (`docs/meetings/`는 15차까지) | ✅ 존재 (`971be90`) |
+| 4 | 16차 대회의록 | 부재 | ✅ 존재 (`971be90`) |
+| 5 | `DEEP_DIVE_STATUS_REPORT.md` | 부재 | ✅ 존재 (`0d761a8`·`5cb0210`) |
 
-다음 **리드 계약도 부재**라 해당 단계를 시작할 수 없다:
+또한 **M0·M1·M2 마일스톤 정의 자체가 당시 저장소에 없었다.** `dev` tip(`d968514`)의
+최신 상태는 스프린트 C 완료(`C_FINAL_COMPLETE=true`)였고 M0 그래픽 통합·M1 보스
+회색 상자·M2 단서/해금/보상에 해당하는 범위표·인수 조건이 없었다. **현재는 16차
+결의 1·17차 결의 3(5창 범위표)이 그 정의를 제공한다.**
+
+다음 **리드 계약도 당시 부재**라 해당 단계를 시작할 수 없었다:
 - 회수 완료 이벤트 계약(현재는 시스템 콜백으로 제공 — 이벤트화는 리드 결정 사항)
 - 단서 **진행 상태 계약**(2단계: "획득 이벤트는 개발 리드의 진행 상태 계약으로 전달")
 - `SonarScopeReadModel`(5단계: "개발 리드 계약에 맞게 연결")
 
-콘텐츠도 부재: 금괴·난파선 salvage 구분·심층 탐사 지점·보스 회색 상자 배치.
+콘텐츠도 당시 부재: 금괴·난파선 salvage 구분·심층 탐사 지점·보스 회색 상자 배치.
 
-**단계별 착수 가능 여부**
+**단계별 착수 가능 여부 — 당시(`b983dec`) 판정**
 
-| 단계 | 상태 | 사유 |
+| 단계 | 당시 상태 | 사유 |
 |---|---|---|
 | 1 InteractionSystem | **완료** | 규격이 지시에 자족적으로 명시됨 |
 | 2 단서 획득 연결 | **대기** | 지시 자체가 "1단계 통합 전 병합 금지" + 진행 상태 계약·단서 콘텐츠 부재 |
@@ -208,8 +238,54 @@ lifecycle 이벤트 발행자(`depthChargeEnteredWater`·`depthChargeExploded`)�
 | 5 소나 스코프 | **대기** | `SonarScopeReadModel` 리드 계약 부재 + 수치(3초·30%·25초) params 부재 |
 | 6 침묵 항행 | **대기** | 지시 자체가 "보스전 완주 판정 전 연결 금지". 보스 회색 상자 미존재. 저장소도 `C_SILENT_RUNNING_INTERACTIVE=false`를 후속으로 기록 중. 소비 경로(`attachSilentRunningSource`)는 이미 존재 |
 
-**요청:** 위 4개 문서와 3개 리드 계약, 그리고 회수·소나·침묵·보상 상한 params를 받으면
-2~6단계를 이어서 착수한다. 값·계약을 임의로 만들지 않았다.
+---
+
+**기준 문서 도착 후 정합 확인 (현재 사실)**
+
+기준 문서 4종이 `dev`(`971be90`·`0d761a8`·`5cb0210`)에 도착해 위 차단 사유는
+해소됐다. 도착한 문서와 이 PR의 구현을 대조한 결과 **수정이 필요한 불일치는
+없다.**
+
+| 17차 결의 3 창 2(게임플레이) 규격 | 이 PR의 구현 | 판정 |
+|---|---|---|
+| `InteractionSystem`을 보스 착수 **전 선행** | 이 PR이 M1·M2 통합 순서의 첫 PR | ✅ 순서 일치 |
+| E 키 근접 프롬프트 | `KeyboardInput.interactHold`(`KeyE`) + 근접 후보 read model | ✅ |
+| 2초 홀드 회수 | `holdSeconds` **주입값**. 16차 튜닝표 초기값 2.0초는 `params` 소유이므로 코드에 넣지 않았다 | ✅ (params 대기) |
+| 회수 중 소음 발생, **기존 `attachNoiseSource` 경로에 소음원 추가** | `DetectionEnvironmentAdapter.addNoiseContributor` 가산. 기존 속도 기반 소음 정책을 대체하지 않음 | ✅ 문구까지 일치 |
+| 대상 타입: 금괴·salvage·단서·심층 지점 **공용** | 단일 시스템 + `kind` 태그. 타입별 시스템 0 | ✅ |
+| M2 배관 겸용 | 완료 통지만 내보내고 소비는 시스템 밖 | ✅ |
+
+**이번 PR(첫 통합 대상)의 범위 — InteractionSystem 선행 배관만**
+
+포함: 공용 `InteractionSystem`, `interactHold` 입력 상태, 근접·거리 이탈·대상
+제거·입력 해제 취소, 회수 중 가산 소음, 완료 1회, 재회수 방지, UI read model,
+게임플레이 결정적 검증.
+
+**제외(후속 PR):** 단서 진행 정본 · `BossProgressStore` 연결 · 보스 해금 ·
+파밍 보상 · 소나 스코프 · 침묵 항행 · M3(어뢰 캠·프리룩). 회수 완료의
+**EventBus 이벤트화**와 리드 `InteractionTargetKind` 계약 소비도 이 PR에
+넣지 않았다 — 리드 계약 병합 후 후속 게임플레이 PR에서 연결한다.
+
+**남은 요청 (이 PR 병합과 무관하게 계속 유효)**
+
+① 회수 수치 params 3종 — `holdSeconds`(16차 튜닝표 초기값 **2.0초**, 범위
+1.0~4.0) / `interactRadiusMeters`(**공식 수치 없음** — 기획 결정 필요) /
+`noiseContribution`(**공식 수치 없음** — 기획 결정 필요).
+② 조립 배선 — `attachInteractionParams` · `attachInteractables`.
+③ **입력 바인딩 결정** (아래 별도 절).
+
+**③ 입력 바인딩 현황 — 재확인 결과 (코드 기준)**
+
+| 확인 항목 | 결과 |
+|---|---|
+| `E` 상승 입력이 유지되는가 | ✅ 유지. `KeyboardInput.ascend`는 `ControlLeft`·`ControlRight`·**`KeyE`**를 그대로 읽는다(제거·변경 없음) |
+| 회수 홀드 중 상승이 동시에 발생하는가 | ⚠ **발생한다.** `ascend`와 `interactHold`가 같은 `KeyE`를 각각 독립적으로 읽으므로 E를 누르면 상승과 회수 홀드가 **동시에** 진행된다 |
+| 상승 때문에 거리 이탈 취소가 날 수 있는가 | ⚠ **가능하다.** `InteractionSystem`의 거리 판정은 **3D**(`Math.hypot(dx, dy, dz)`)라 수직 상승만으로도 `interactRadiusMeters`를 벗어나 `outOfRange` 취소가 걸릴 수 있다. 실제 발생 여부는 아직 확정되지 않은 `interactRadiusMeters`와 상승 속도에 달려 있다 |
+| 입력을 소비하는가, 읽기만 하는가 | **읽기만 한다.** 두 getter 모두 `heldCodes` 조회일 뿐 키 상태를 소거하지 않는다. 따라서 어느 한쪽이 다른 쪽을 가로채지 않으며, 바인딩을 바꿀 때 이 파일의 getter 한 줄만 고치면 된다 |
+
+**후속 결정 항목:** 회수 키를 `E`에서 분리할지, 상승 병행 키를 옮길지, 또는
+회수 중 수직 입력을 억제할지. 셋 다 입력 규칙 결정이므로 **이 PR에서는 추측으로
+바꾸지 않았다.** 17차 결의 2로 `F` 키가 키맵에서 미배정 반환된 상태다(후보).
 
 ### INT-RENDER-013 — [ART][RENDER] 수심 확장: 시작 협곡 레이아웃 수직 데이터 변경 (리드 확인 요청)
 
@@ -265,6 +341,21 @@ lifecycle 이벤트 발행자(`depthChargeEnteredWater`·`depthChargeExploded`)�
 | 실측 발견 blocker | ① **침수 미발생** — production의 어떤 DamageRequest도 `causesFlooding=true`를 보내지 않는다(폭뢰 시스템 주석: '침수 기여량은 공식 params 소유'). 피격→침수 기여량 공식 param이 C9 15필드에 없어 침수 루프(단계·침수 파괴)는 브라우저에서 도달 불가 — 수치 발명 없이는 해소 불가, 기획 결정 필요 ② **잠망경 심도에서 direct 불가** — 폭뢰가 관측 y=0에 기폭돼 잠망경(y≈9)에서는 수직 offset만으로 near가 상한(심도별 피해 기하는 관측 y 규약의 결과 — 밸런스 위험 항목) ③ 근접 폭발 밀려남(8m)이 폭발 반대 방향(상향 성분)이라 폭격 중 잠항이 상쇄될 수 있음(y 7.94 평형 관측) |
 | 개발 리드 결정 | `C_COMBAT_PARAMS_DEFINED=true` · `C_RUNTIME_WIRED=true` · `C_BROWSER_EMPIRICAL_COMPLETE=true`(**침수 스테이지 제외 명시** — 기능 부재이지 실측 누락이 아님) · **`C_FINAL_COMPLETE=false` 유지**(침수 유발 경로 부재가 생존 루프의 공식 구성요소 미완이므로 최종 완료 선언 불가) |
 | 적용 커밋 | c943d35(승인값)·885839f(배선) + 문서 커밋 |
+
+### INT-CORE-020 — M1 보스 코어 · M2 단서/해금 계약 (리드 창 — 17차 결의 3 창 1)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (base = M0 병합 후 dev tip `d968514`, 브랜치 `claude/deep-dive-core-lead-uyg77p` 재시작) |
+| 신설 계약 | `contracts/boss.ts` — 패턴 등록부 4종 봉인·예고·`BossAttackRequest/Port`(요청만, 관측 3D 고정, 수치 비탑재)·`BossMotionPort`(기존 이동 포트 + 속도 노브 1)·`BossPhasePort`(게임플레이 약점 판정 소비 단면 정본 승격 — INT-GAME-008 해소)·`BossDamageSink`(보스 체력 원장 — 플레이어 단일 창구와 별개)·`BossCoreView`·`BossZoneGatePort` |
+| **보호 파일 변경 4건 (사유 명시)** | ① `contracts/events.ts` — `interactionCollected`(16차 결의 2-4 단일 InteractionSystem 배관)·`bossCluesChanged`·`bossDefeated` 신설: 기존 이벤트로 표현 불가(동일 의미 이벤트 없음 확인) ② `contracts/meta.ts` — `InteractionTargetKind` 4종: 상호작용 대상 공용 계약 ③ `contracts/params.ts` — `BossParams`·`BossPatternFlags`: 작업 2 규격의 params 계약 정본 위치 ④ `src/meta/save/` (툴링 소유) — **스키마 v2**: 개수만으로는 '동일 단서 중복 반영 금지'를 재접속 후 보장할 수 없어 id 목록이 필수. 소회의 11 결의 7(마이그레이션 동반) 이행 — v1→v2 함수·검증기·verifyTooling 사슬 테스트 동반. 기존 저장·기본값 안전(테스트 확인) |
+| 구현 (리드 소유) | `core/BossController`(DestroyerAIController **합성** — B5 단일 구현 보존, 예고 선행·1→2→3 순차·격파/플레이어 파괴 후 요청 0·피해 원장), `meta/BossProgressStore`(단서 id 원장·단조 해금·진입 게이트), `PveIntegration`(SaveSnapshotSource.progress·`BossVictoryBridge`), `config/bossParams(+Loader)`, `params/boss.json`(스코프 가드 1/1) |
+| Game 조립(적용 완료) | boss params 로드 1회 · 진행 복원(부팅 1회) · `interactionCollected` clue 구독 · 승리 브리지 등록 · SaveBridge 스냅샷에 progress · 디버그 핸들 `bossProgress` |
+| **창 2(게임플레이) 소비 지침** | ① `InteractionSystem`이 회수 확정 시 `interactionCollected {kind, targetId, x, z}` 발행(단서 id는 `params/boss.json unlock.clueIds` 3종) ② `BossAttackPort` 구현 — ram 접촉·projectile 비행(기존 어뢰 경로 역방향) 판정, 피해는 반드시 기존 `DamageReceiverPort.applyDamage` 경유, 수치는 boss params(`patterns.projectile.damage` 등) 직접 주입 ③ `BossMotionPort` 팩토리(기존 이동 코드 + `setMoveSpeed` 노브) ④ `BossWeakPointTarget`의 임시 배율 2.0/0.25를 params(`patterns.weakPointOpen.*`)로 교체, 명중 결과를 `BossDamageSink.applyBossDamage`(배율 적용 후 최종값)로 전달 ⑤ phase·weakPointOpen은 리드 코어 `phasePort` 소비 |
+| **창 3(그래픽스) 소비 지침** | `BossCoreView`(값 복사본)·`bossPhaseChanged`·`bossDefeated`·`bossCluesChanged` 구독 — 예고(telegraph) 연출이 회피 신호의 정본. 보스 전용 HUD 정본 신설 금지(기존 HUD 계층) |
+| 통합 잔여 patch (창 5) | 보스 개체 스폰(배치·진입 연출 도착 후): `new BossController({motion: gameplay.bossMotionPort, params: loadBossParams(), attackPort: gameplay.bossAttackPort, playerAlive: playerHull, bus, ...})` + 약점 판정 브리지(`BossWeakPointTarget.onHit → boss.applyBossDamage`) + 어뢰 발사 노출 연결(`torpedoFired → boss.notifyLastKnownPosition`) + 진입 게이트 소비(`bossProgress.requestEntry()`) |
+| 검증 | verify:meta **150/150**(M1·M2 26건 신설 — 작업 4 단언 전부) · verify:tooling **26/26**(마이그레이션 사슬 v0→v1→v2 승격) · gameplay 242/242 · scope 가드 보스 1/1 · 전 스위트 통과 |
+| 개발 리드 결정 | 승인 — 계약·코어·해금·보상 경로 확정. 보스 스폰·판정 배선은 창 2 산출물 도착 후 통합 창 순서(17차 결의 3: InteractionSystem → 보스 코어 → 병렬 2건) |
 
 ### INT-CORE-019 — C 최종 런타임 blocker 3건 마감: 침수 기여(v0.1.1)·소음 정책·목표 심도 기폭 — **C_FINAL_COMPLETE=true**
 

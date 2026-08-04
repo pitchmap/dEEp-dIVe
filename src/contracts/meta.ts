@@ -22,6 +22,54 @@ export type FactionId = 'hostile' | 'neutral' | 'patrol';
 /** 드롭 발생원 (6차 결의 4 — MVP 동사 '부순다'·'줍는다' 2종의 출처) */
 export type LootSource = 'cargoShip' | 'seabedCache' | 'wreckSalvage' | 'elite' | 'boss';
 
+/**
+ * E 키 상호작용 대상 4종 [확정 16차 결의 2-4 — 금괴·salvage·단서·심층
+ * 지점이 공유하는 단일 `InteractionSystem`, M2 배관 겸용].
+ * 회수 판정·프롬프트·홀드는 게임플레이 소유, 단서 진행·해금 게이트는
+ * 리드(`meta/BossProgressStore`), 보상 경제는 economy 판정 소유.
+ *
+ * **이 4종이 kind 정본이다** (INT-CORE-021). 게임플레이 내부 태그
+ * (`gold`·`deepSurvey`)는 후속 어댑터가 발행 시점에 정본 kind
+ * (`goldCache`·`deepSite`)로 변환한다 — 소비측에 내부 태그를 노출하지
+ * 않는다.
+ */
+export type InteractionTargetKind = 'goldCache' | 'salvage' | 'clue' | 'deepSite';
+
+/**
+ * `interactionCollected` 이벤트 payload — **두 ID의 의미 분리가 계약의
+ * 핵심이다** (INT-CORE-021).
+ *
+ *  - `targetId` = **월드 상호작용 대상의 고유 ID** (게임플레이
+ *    `InteractionCompletion.interactableId` 그대로). 모든 kind에서 같은
+ *    의미이며, **단서 ID로 해석해서는 안 된다.**
+ *  - `clueId` = `params/boss.json unlock.clueIds`의 **canonical 단서 ID**.
+ *    `kind === 'clue'`에서만 존재하며(다른 kind에는 타입 수준 금지 —
+ *    `clueId?: never`), interactable → clueId 매핑은 게임플레이 후속
+ *    어댑터 소유다. 소비 정본(`BossProgressStore`)은 `clueId`만 읽는다.
+ *  - 좌표는 공용 계약 규약대로 `x`·`z` (수평면). `completedAt`은 현재
+ *    소비처가 없어 계약에 두지 않는다 — 필요해지면 소비 위치·단위를
+ *    문서화한 뒤 추가한다.
+ */
+export type InteractionCollectedEvent =
+  | {
+      readonly kind: 'clue';
+      /** 월드 interactable 고유 ID — 단서 ID 아님 */
+      readonly targetId: string;
+      /** canonical 단서 ID (params/boss.json unlock.clueIds) */
+      readonly clueId: string;
+      readonly x: number;
+      readonly z: number;
+    }
+  | {
+      readonly kind: Exclude<InteractionTargetKind, 'clue'>;
+      /** 월드 interactable 고유 ID */
+      readonly targetId: string;
+      /** 단서 외 kind에는 clueId를 실을 수 없다 (타입 수준 금지) */
+      readonly clueId?: never;
+      readonly x: number;
+      readonly z: number;
+    };
+
 /** 재화 묶음 — 이원화 [확정 6차 결의 6]: 일반 크레딧 / 희귀 부품 */
 export interface CurrencyBundle {
   readonly credits: number;
