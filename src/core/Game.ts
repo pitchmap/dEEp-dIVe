@@ -30,7 +30,9 @@ import { LoadingTimer } from '../tools/LoadingTimer';
 import { STARTING_CANYON_LAYOUT } from '../world/startingCanyonLayout';
 import { STARTING_AREA_SALVAGE_PLACEMENTS } from '../world/salvagePlacements';
 import { MetaLoop } from '../meta/MetaLoop';
+import { BossProgressStore } from '../meta/BossProgressStore';
 import { defaultSaveStore } from '../meta/save/SaveStore';
+import { loadBossParams } from '../config/bossParamsLoader';
 import { loadEconomyParams } from '../tools/economyParams';
 import { loadAimingParams } from '../tools/aimingParams';
 import { loadCombatParams, combatParamsFullyDefined, type CombatParamsResult } from '../tools/combatParamsLoader';
@@ -52,6 +54,7 @@ import {
   MetaUiAdapter,
   GuardIncidentLedger,
   GuardSpawnBridge,
+  BossVictoryBridge,
   GuardSpawnCoordinator,
   NeutralIncidentBoundary,
   DebriefConfirmCommand,
@@ -109,6 +112,8 @@ export class Game {
   private officialParams: OfficialRuntimeParams | null = null;
   /** C9 전투 params 검증 결과 — 미확정은 null 유지 (INT-CORE-016) */
   private combatParams: CombatParamsResult | null = null;
+  /** M2 단서·보스 해금 진행 정본 (INT-CORE-020) — 저장 progress 블록과 왕복 */
+  private bossProgress: BossProgressStore | null = null;
   /** 출항당 1회 salvage 스포너 — 좌표는 SalvagePlacementSource 전용 */
   private salvageSpawner: SortieSalvageSpawner | null = null;
   /** 경비 사건 중복 방지 원장 — 요청·스폰 공용 단일 저장소 (INT-CORE-012) */
@@ -234,6 +239,7 @@ export class Game {
         // C9 params 검증 결과 (읽기 전용) — 미확정 목록으로 unwired 근거를
         // 실측에서 확인한다. 이 핸들로 상태를 바꾸는 경로는 없다.
         combatParams: this.combatParams,
+        bossProgress: this.bossProgress,
         gameplay,
         flooding: this.floodingCore,
         sortieFailure: this.sortieFailure,
@@ -382,6 +388,37 @@ export class Game {
     console.info(
       `[Game] 세이브 로드: ${loaded.source}${loaded.recovered ? ' (백업 복구)' : ''} — ` +
         `크레딧 ${loaded.data.credits} · 희귀 부품 ${loaded.data.rareParts}`,
+    );
+
+    // ⓪-b2 M2 단서·보스 해금 진행 (INT-CORE-020/021) — 공인 보스 params
+    //      로드는 composition root 1회. 진행 복원도 지갑과 같은 규약(부팅 1회).
+    //      단서 진행의 정본(원장·중복 방지·저장 복원·해금·게이트)은
+    //      BossProgressStore 하나다. interactableId→clueId 매핑·이벤트 발행은
+    //      게임플레이 어댑터(무상태) 소유 — 여기서는 kind==='clue'의
+    //      canonical `clueId`만 소비한다. `targetId`는 월드 interactable
+    //      ID이므로 단서 ID로 해석하지 않는다 (현재 dev 발행자 0 —
+    //      구독 배선은 계약대로 상시).
+    const bossParams = loadBossParams();
+    const bossProgress = new BossProgressStore(
+      {
+        requiredClues: bossParams.unlock.requiredClues.value,
+        clueIds: bossParams.unlock.clueIds,
+      },
+      this.bus,
+    );
+    bossProgress.restore(loaded.data.progress);
+    this.bossProgress = bossProgress;
+    this.registerUnsubscribe(
+      this.bus.on('interactionCollected', (payload) => {
+        if (payload.kind === 'clue') bossProgress.collectClue(payload.clueId);
+      }),
+    );
+    // 격파 → 진행 기록 + 기존 lootDropped 보상 경로 (수치는 params/boss.json)
+    this.registry.register(
+      new BossVictoryBridge(bossProgress, {
+        credits: bossParams.reward.credits.value,
+        rareParts: bossParams.reward.rareParts.value,
+      }),
     );
 
     // ⓪-c 업그레이드 배율 → 유효 파라미터. params 원본은 불변이며 파생
@@ -658,6 +695,11 @@ export class Game {
         },
         get equippedGear() {
           return gameplay.equipment.slots.filter((slot) => slot !== null);
+        },
+        get progress() {
+          // M2 진행 정본 스냅샷 — 격파 순간의 rarePart 저장에 데모 완료
+          // 기록이 함께 실린다 (INT-CORE-020)
+          return bossProgress.snapshot();
         },
       },
       loaded.data,

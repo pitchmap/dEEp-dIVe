@@ -80,6 +80,17 @@ import type {
   ShipIdentificationSource,
   ShipIdentificationView,
 } from '../../contracts/identification';
+import { BossController } from '../../core/BossController';
+import { BossProgressStore } from '../BossProgressStore';
+import { BossVictoryBridge, SaveBridge } from '../../core/PveIntegration';
+import { validateBossParams } from '../../config/bossParams';
+import { BOSS_PATTERN_KINDS } from '../../contracts/boss';
+import type { SonarScopeReadModel } from '../../contracts/sonar';
+import type { BossAttackRequest, BossMotionPort } from '../../contracts/boss';
+import type { BossParams } from '../../contracts/params';
+import { SaveStore, type StorageLike } from '../save/SaveStore';
+import { createDefaultSave, validateSaveData } from '../save/saveSchema';
+import { migrateToCurrent } from '../save/migrations';
 import { UpgradePurchaseSystem } from '../../systems/economy/UpgradePurchaseSystem';
 import { EquipmentSystem } from '../../systems/EquipmentSystem';
 import type { EquipmentCatalog, UpgradeEntry } from '../../tools/economyMath';
@@ -144,7 +155,7 @@ function buildLoop(lossRatio = 0.5): {
   return { bus, port, loop, events };
 }
 
-export function runMetaVerification(): VerificationResult[] {
+export function runMetaVerification(options: { bossJson?: unknown } = {}): VerificationResult[] {
   const results: VerificationResult[] = [];
   const check = (name: string, passed: boolean, detail: string): void => {
     results.push({ name, passed, detail });
@@ -2301,6 +2312,579 @@ export function runMetaVerification(): VerificationResult[] {
         `report=${report === null ? 'null' : 'created'}, state=${loop.metaState}`,
       );
     }
+  }
+
+  /* ═══ M1 보스 코어 · M2 단서/해금 (17차 결의 3 창 1 — INT-CORE-020) ═══ */
+  {
+    // 러너가 주입한 production boss.json — 공인 검증기 단일 경로로 해석
+    const productionBossParams = validateBossParams(options.bossJson);
+    // 보스 이동 포트 스텁 — 기존 SurfaceShipMotionPort 스텁 + 속도 노브 기록
+    interface BossMotionLog {
+      moves: number;
+      speedCalls: Array<number | null>;
+    }
+    const buildBossMotion = (
+      options: { targetPosition?: { x: number; y: number; z: number } | null } = {},
+    ): { port: BossMotionPort; log: BossMotionLog } => {
+      const log: BossMotionLog = { moves: 0, speedCalls: [] };
+      const port: BossMotionPort = {
+        getPosition: () => ({ x: 0, y: 0, z: 0 }),
+        getForward: () => ({ x: 0, z: -1 }),
+        turnToward: () => {},
+        moveForward: () => {
+          log.moves += 1;
+        },
+        maintainSurfaceHeight: () => {},
+        isWithinWorldBounds: () => true,
+        isTargetAlive: () => true,
+        getTargetPosition: () =>
+          options.targetPosition === undefined ? { x: 20, y: -2, z: 30 } : options.targetPosition,
+        setMoveSpeed: (speed) => {
+          log.speedCalls.push(speed);
+        },
+      };
+      return { port, log };
+    };
+    // 테스트 페이싱용 params — production 로드본의 구조를 유지한 채 값만 축소
+    // (검증 전용 픽스처 — production 경로로 import되지 않는다)
+    const testBossParams = (): BossParams => {
+      const params = structuredClone(productionBossParams);
+      params.patterns.intervalSeconds.value = 1;
+      params.patterns.intervalSeconds.range = [0.5, 15];
+      params.patterns.telegraphSeconds.value = 0.5;
+      params.patterns.telegraphSeconds.range = [0.2, 3];
+      params.patterns.ram.durationSeconds.value = 0.6;
+      params.patterns.weakPointOpen.openSeconds.value = 0.8;
+      return params;
+    };
+    const buildBoss = (
+      overrides: {
+        params?: BossParams;
+        targetPosition?: { x: number; y: number; z: number } | null;
+        playerAlive?: { isPlayerAlive: boolean } | null;
+        bus?: EventBus | null;
+      } = {},
+    ) => {
+      const params = overrides.params ?? testBossParams();
+      const motion = buildBossMotion({ targetPosition: overrides.targetPosition });
+      const requests: BossAttackRequest[] = [];
+      const boss = new BossController({
+        entityId: 9000,
+        targetEntityId: PLAYER_ENTITY_ID,
+        motion: motion.port,
+        params,
+        attackPort: {
+          requestAttack: (request) => {
+            requests.push(request);
+            return 'delivered';
+          },
+        },
+        playerAlive: overrides.playerAlive ?? null,
+        bus: overrides.bus ?? null,
+        spawnPosition: { x: 0, z: 0 },
+      });
+      boss.initialize();
+      const step = (seconds: number): void => {
+        const frames = Math.round(seconds / 0.05);
+        for (let i = 0; i < frames; i += 1) boss.update(0.05);
+      };
+      return { boss, motion, requests, params, step };
+    };
+
+    // ── 패턴 등록부: 정확히 4종, 소환·회전 근접 0 ──
+    check(
+      'M1 패턴 등록부: 정확히 4종 (돌진·투사체·약점 개방·최종 가속) — 봉인 목록 그대로',
+      BOSS_PATTERN_KINDS.length === 4 &&
+        (['ram', 'projectile', 'weakPointOpen', 'finalAcceleration'] as const).every((kind) =>
+          (BOSS_PATTERN_KINDS as readonly string[]).includes(kind),
+        ),
+      `등록=${BOSS_PATTERN_KINDS.join(',')}`,
+    );
+    {
+      const flags = productionBossParams.patterns.flags;
+      check(
+        'M1 패턴 플래그: production boss.json 플래그 키 정확히 4개',
+        Object.keys(flags).length === 4,
+        `키=${Object.keys(flags).join(',')}`,
+      );
+      // 봉인 강제 — 미지 패턴 키(소환)는 로더가 거부한다 (스텁·플래그 선점 금지)
+      let sealedMessage = '';
+      try {
+        const raw = structuredClone(options.bossJson) as Record<string, unknown>;
+        const patterns = raw['patterns'] as Record<string, unknown>;
+        (patterns['flags'] as Record<string, unknown>)['summonMinions'] = true;
+        validateBossParams(raw);
+      } catch (error) {
+        sealedMessage = error instanceof Error ? error.message : '';
+      }
+      check(
+        'M1 패턴 봉인: 미지 패턴 키(소환류) 로드 거부 — 16차 결의 1-3',
+        sealedMessage.includes('summonMinions'),
+        sealedMessage.slice(0, 80) || '거부되지 않음',
+      );
+    }
+
+    // ── 예고가 공격 요청보다 먼저 ──
+    {
+      const { boss, requests } = buildBoss();
+      let telegraphSeenBeforeFirstRequest = false;
+      for (let i = 0; i < 400 && requests.length === 0; i += 1) {
+        boss.update(0.05);
+        if (requests.length === 0 && boss.view().telegraph !== null) {
+          telegraphSeenBeforeFirstRequest = true;
+        }
+      }
+      check(
+        'M1 예고 선행: 첫 공격 요청 전에 예고 상태가 관측된다 (판정보다 예고 먼저)',
+        requests.length > 0 && telegraphSeenBeforeFirstRequest,
+        `요청=${requests.length}, 예고 선행=${telegraphSeenBeforeFirstRequest}`,
+      );
+      const first = requests[0];
+      check(
+        'M1 공격 요청: 관측 3D 표적 고정 + 단조 id (수치 비탑재)',
+        first !== undefined &&
+          first.targetPosition.x === 20 &&
+          first.targetPosition.y === -2 &&
+          first.targetPosition.z === 30 &&
+          first.attackId.includes('9000') &&
+          !('damage' in first) &&
+          !('speedMetersPerSecond' in first),
+        `first=${JSON.stringify(first ?? null).slice(0, 90)}`,
+      );
+    }
+
+    // ── 단계 전환 1→2→3 (체력 임계 + 예고, 동시 임계 통과도 순차) ──
+    {
+      const bus = new EventBus();
+      const phases: number[] = [];
+      bus.on('bossPhaseChanged', (payload) => phases.push(payload.phase));
+      const { boss, step, params } = buildBoss({ bus });
+      // 한 번에 3단계 임계(0.33)까지 관통 — 그래도 2 → 3 순차 전환이어야 한다
+      const maxHull = params.hull.maxHull.value;
+      boss.applyBossDamage({ damageId: 'burst', amount: maxHull * 0.75, kind: 'weakPoint' });
+      const phaseAfterBurst = boss.view().phase;
+      step(0.6); // 첫 phaseShift 예고 완료
+      const midPhase = boss.view().phase;
+      step(1.7); // 간격(1s) + 두 번째 예고(0.5s)
+      check(
+        'M1 단계 전환: 임계 2개 동시 관통에도 1→2→3 순차 (예고 각 1회, 건너뜀 없음)',
+        phaseAfterBurst === 1 && midPhase === 2 && boss.view().phase === 3 &&
+          phases.join('>') === '2>3',
+        `burst직후=${phaseAfterBurst}, 중간=${midPhase}, 최종=${boss.view().phase}, 이벤트=${phases.join('>')}`,
+      );
+      check(
+        'M1 최종 가속: 3단계 진입 시 패턴 간격에 params 배율 적용',
+        Math.abs(
+          boss.effectivePatternIntervalSeconds -
+            params.patterns.intervalSeconds.value * params.patterns.finalPhase.intervalMultiplier.value,
+        ) < 1e-9,
+        `유효 간격=${boss.effectivePatternIntervalSeconds}`,
+      );
+    }
+    {
+      // 가속 플래그 오프(비상 컷) → 3단계여도 배율 미적용 · 약점 판정 경로는 유지
+      const params = testBossParams();
+      params.patterns.flags.finalAcceleration = false;
+      const { boss, step } = buildBoss({ params });
+      boss.applyBossDamage({ damageId: 'cut', amount: params.hull.maxHull.value * 0.75, kind: 'hull' });
+      step(3);
+      check(
+        'M1 비상 컷(플래그 오프): finalAcceleration=false면 3단계에도 간격 배율 미적용',
+        boss.view().phase === 3 &&
+          boss.effectivePatternIntervalSeconds === params.patterns.intervalSeconds.value,
+        `phase=${boss.view().phase}, 간격=${boss.effectivePatternIntervalSeconds}`,
+      );
+    }
+
+    // ── 약점 개방 창 — phasePort 노출 (게임플레이 판정 소비 단면) ──
+    {
+      const params = testBossParams();
+      params.patterns.flags.ram = false;
+      params.patterns.flags.projectile = false; // weakPointOpen만 노출
+      const { boss, step } = buildBoss({ params });
+      let opened = false;
+      for (let i = 0; i < 200 && !opened; i += 1) {
+        boss.update(0.05);
+        if (boss.phasePort.weakPointOpen) opened = true;
+      }
+      const openDuringWindow = boss.phasePort.weakPointOpen;
+      step(1.2); // openSeconds(0.8) 경과
+      check(
+        'M1 약점 개방: 예고 후 params 시간 동안 개방 → 자동 폐쇄 (phasePort 단면)',
+        opened && openDuringWindow && !boss.phasePort.weakPointOpen,
+        `개방 관측=${opened}, 종료 후=${boss.phasePort.weakPointOpen}`,
+      );
+    }
+
+    // ── 돌진: 속도 노브 params 값 → 종료 시 복귀 ──
+    {
+      const params = testBossParams();
+      params.patterns.flags.projectile = false;
+      params.patterns.flags.weakPointOpen = false; // ram만 노출
+      const { boss, motion } = buildBoss({ params });
+      for (let i = 0; i < 200 && motion.log.speedCalls.length < 2; i += 1) boss.update(0.05);
+      check(
+        'M1 돌진: 기존 이동 포트 속도 노브로 params 돌진 속도 적용 → 종료 시 기본 복귀(null)',
+        motion.log.speedCalls[0] === params.patterns.ram.speedMetersPerSecond.value &&
+          motion.log.speedCalls[1] === null &&
+          motion.log.moves > 0,
+        `speedCalls=${JSON.stringify(motion.log.speedCalls)}, moves=${motion.log.moves}`,
+      );
+    }
+
+    // ── 보스 파괴 후 신규 공격 0 + 격파 이벤트 1회 + 피해 원장 ──
+    {
+      const bus = new EventBus();
+      let defeatedEvents = 0;
+      bus.on('bossDefeated', () => {
+        defeatedEvents += 1;
+      });
+      const { boss, requests, step, params } = buildBoss({ bus });
+      step(2.0); // 패턴 사이클 가동
+      const dup1 = boss.applyBossDamage({ damageId: 'hit-1', amount: 1, kind: 'hull' });
+      const dup2 = boss.applyBossDamage({ damageId: 'hit-1', amount: 1, kind: 'hull' });
+      const invalid = boss.applyBossDamage({ damageId: 'bad', amount: Number.NaN, kind: 'hull' });
+      const lethal = boss.applyBossDamage({
+        damageId: 'kill',
+        amount: params.hull.maxHull.value,
+        kind: 'weakPoint',
+      });
+      const afterKill = boss.applyBossDamage({ damageId: 'post', amount: 5, kind: 'hull' });
+      const requestsAtDefeat = requests.length;
+      step(10);
+      check(
+        'M1 보스 피해 원장: 중복 id 1회 반영·NaN 거부·격파 후 피해 무시',
+        dup1 === 'applied' && dup2 === 'ignoredDuplicate' && invalid === 'invalidDamage' &&
+          lethal === 'defeated' && afterKill === 'ignoredDefeated',
+        `dup=${dup1}/${dup2}, invalid=${invalid}, lethal=${lethal}, after=${afterKill}`,
+      );
+      check(
+        'M1 보스 격파: 신규 공격 요청 0 + bossDefeated 정확히 1회 + 예고·약점 해제',
+        requests.length === requestsAtDefeat && defeatedEvents === 1 &&
+          boss.view().defeated && boss.view().telegraph === null && !boss.phasePort.weakPointOpen,
+        `요청 ${requestsAtDefeat}→${requests.length}, 격파 이벤트=${defeatedEvents}`,
+      );
+    }
+
+    // ── 플레이어 파괴 후 신규 공격 0 (PlayerAliveSource 게이트 재사용) ──
+    {
+      const alive = { isPlayerAlive: true };
+      const { boss, requests, step } = buildBoss({ playerAlive: alive });
+      step(2.0);
+      alive.isPlayerAlive = false;
+      const requestsAtDeath = requests.length;
+      step(10);
+      check(
+        'M1 플레이어 파괴 후: 신규 예고·공격 요청 0 (기존 PlayerAliveSource 게이트)',
+        requests.length === requestsAtDeath && boss.view().telegraph === null,
+        `요청 ${requestsAtDeath}→${requests.length}`,
+      );
+    }
+
+    // ── 관측 게이트: 표적 미관측이면 패턴 미개시 ──
+    {
+      const { boss, requests, step } = buildBoss({ targetPosition: null });
+      step(10);
+      check(
+        'M1 관측 게이트: 표적 관측 불가면 공격 요청 0 (기존 attack 게이트 재사용)',
+        requests.length === 0 && boss.view().telegraph === null,
+        `요청=${requests.length}`,
+      );
+    }
+  }
+
+  /* ═══ M2 단서·해금·보상 (16차 결의 1-5·2-4 — 기존 저장 시스템 재사용) ═══ */
+  {
+    const clueOptions = { requiredClues: 3, clueIds: ['clue-a', 'clue-b', 'clue-c'] };
+
+    // ── 중복·미지 단서 거부 + 0/3 → 3/3 해금 ──
+    {
+      const bus = new EventBus();
+      const changes: Array<{ collected: number; unlocked: boolean }> = [];
+      bus.on('bossCluesChanged', (payload) =>
+        changes.push({ collected: payload.collected, unlocked: payload.unlocked }),
+      );
+      const store = new BossProgressStore(clueOptions, bus);
+      const beforeEntry = store.requestEntry();
+      const c1 = store.collectClue('clue-a');
+      const c1dup = store.collectClue('clue-a');
+      const unknown = store.collectClue('clue-x');
+      const midEntry = store.requestEntry();
+      const c2 = store.collectClue('clue-b');
+      const c3 = store.collectClue('clue-c');
+      check(
+        'M2 단서: 동일 단서 중복 반영 금지 + 미지 id 거부 (반영 시에만 이벤트)',
+        c1 === 'collected' && c1dup === 'duplicate' && unknown === 'unknownClue' &&
+          c2 === 'collected' && c3 === 'collected' && changes.length === 3,
+        `결과=${c1}/${c1dup}/${unknown}, 이벤트=${changes.length}`,
+      );
+      check(
+        'M2 해금 게이트: 3개 미만 진입 거부 → 3/3 시 개방',
+        beforeEntry === 'lockedMissingClues' && midEntry === 'lockedMissingClues' &&
+          store.unlocked && store.requestEntry() === 'granted' &&
+          changes[2]?.collected === 3 && changes[2]?.unlocked === true,
+        `before=${beforeEntry}, mid=${midEntry}, after=${store.requestEntry()}`,
+      );
+    }
+
+    // ── interactionCollected 구독 경로 (composition root 규약 재현) ──
+    //    Game.ts와 동일한 구독: kind==='clue'의 canonical `clueId`만 소비,
+    //    `targetId`(월드 interactable ID)는 진행 스토어에 전달하지 않는다.
+    {
+      const bus = new EventBus();
+      const store = new BossProgressStore(clueOptions, bus);
+      bus.on('interactionCollected', (payload) => {
+        if (payload.kind === 'clue') store.collectClue(payload.clueId);
+      });
+
+      // ① targetId ≠ clueId여도 저장되는 것은 clueId다
+      bus.emit('interactionCollected', {
+        kind: 'clue', targetId: 'world-clue-node-07', clueId: 'clue-a', x: 0, z: 0,
+      });
+      check(
+        'M2 구독: targetId≠clueId에도 canonical clueId가 기록된다',
+        store.collectedClueIds.includes('clue-a') && store.collectedCanonicalCount === 1,
+        `ids=${JSON.stringify(store.collectedClueIds)}`,
+      );
+
+      // ② targetId가 우연히 canonical id 모양이어도 clueId만 소비된다
+      //    (targetId를 단서 id로 오해하는 경로가 0임을 확인)
+      bus.emit('interactionCollected', {
+        kind: 'clue', targetId: 'clue-c', clueId: 'clue-b', x: 0, z: 0,
+      });
+      check(
+        'M2 구독: targetId가 canonical id 모양이어도 clueId만 기록 (오해 경로 0)',
+        store.collectedClueIds.includes('clue-b') && !store.collectedClueIds.includes('clue-c'),
+        `ids=${JSON.stringify(store.collectedClueIds)}`,
+      );
+
+      // ③ 미지 clueId는 거부되어 진행에 반영되지 않는다
+      bus.emit('interactionCollected', {
+        kind: 'clue', targetId: 'world-clue-node-08', clueId: 'clue-unknown', x: 0, z: 0,
+      });
+      // ④ 동일 clueId 재발행은 중복 0
+      bus.emit('interactionCollected', {
+        kind: 'clue', targetId: 'world-clue-node-07', clueId: 'clue-a', x: 0, z: 0,
+      });
+      // ⑤ 다른 targetId라도 같은 clueId면 중복 0 (반영 단위는 clueId)
+      bus.emit('interactionCollected', {
+        kind: 'clue', targetId: 'world-clue-node-99', clueId: 'clue-a', x: 0, z: 0,
+      });
+      check(
+        'M2 구독: 미지 clueId 거부 + 동일 clueId 중복 0 (다른 targetId 포함)',
+        store.collectedCanonicalCount === 2 &&
+          !store.collectedClueIds.includes('clue-unknown'),
+        `count=${store.collectedCanonicalCount}, ids=${JSON.stringify(store.collectedClueIds)}`,
+      );
+
+      // ⑥ clue가 아닌 kind는 진행 스토어에 도달하지 않는다
+      const beforeNonClue = store.collectedClueIds.length;
+      bus.emit('interactionCollected', { kind: 'goldCache', targetId: 'gold-01', x: 0, z: 0 });
+      bus.emit('interactionCollected', { kind: 'salvage', targetId: 'salvage-01', x: 0, z: 0 });
+      bus.emit('interactionCollected', { kind: 'deepSite', targetId: 'deep-01', x: 0, z: 0 });
+      check(
+        'M2 구독: 비clue kind(goldCache·salvage·deepSite)는 진행 영향 0',
+        store.collectedClueIds.length === beforeNonClue && !store.unlocked,
+        `len=${store.collectedClueIds.length}, unlocked=${store.unlocked}`,
+      );
+
+      // 타입 수준 금지 검사 — 비clue arm에는 clueId를 실을 수 없다
+      // (`clueId?: never` — 계약 위반은 컴파일 단계에서 차단된다)
+      const rejectNonClueClueId = (): void => {
+        // @ts-expect-error 비clue kind에 clueId 탑재는 계약 위반 (`clueId?: never`)
+        bus.emit('interactionCollected', { kind: 'goldCache', targetId: 'gold-02', clueId: 'clue-a', x: 0, z: 0 });
+      };
+      // clue arm은 clueId가 필수다
+      const rejectClueMissingClueId = (): void => {
+        // @ts-expect-error clue kind는 clueId 없이 발행할 수 없다
+        bus.emit('interactionCollected', { kind: 'clue', targetId: 'world-clue-node-07', x: 0, z: 0 });
+      };
+      void rejectNonClueClueId;
+      void rejectClueMissingClueId;
+      check(
+        'M2 구독 계약: 비clue clueId 금지·clue clueId 필수 (타입 수준 — 컴파일 통과가 증명)',
+        true,
+        'ts-expect-error 정적 검사',
+      );
+    }
+
+    // ── 재접속(저장 왕복) 후 유지 + 중복 방지 지속 ──
+    {
+      const store = new BossProgressStore(clueOptions, null);
+      store.collectClue('clue-a');
+      store.collectClue('clue-b');
+      store.collectClue('clue-c');
+      const saved = { ...createDefaultSave(), progress: store.snapshot() };
+      // 저장 → 직렬화 → 마이그레이션·검증 → 복원 (실제 재접속 경로 재현)
+      const reloaded = validateSaveData(migrateToCurrent(JSON.parse(JSON.stringify(saved))));
+      const restored = new BossProgressStore(clueOptions, null);
+      restored.restore(reloaded.progress);
+      check(
+        'M2 재접속: 단서·해금 상태 유지 + 재접속 후에도 같은 단서 중복 반영 금지',
+        restored.unlocked && restored.requestEntry() === 'granted' &&
+          restored.collectedClueIds.length === 3 &&
+          restored.collectClue('clue-a') === 'duplicate',
+        `unlocked=${restored.unlocked}, ids=${restored.collectedClueIds.length}`,
+      );
+    }
+
+    // ── 구버전(v1) 저장 안전 마이그레이션 ──
+    {
+      const v1 = {
+        schemaVersion: 1,
+        credits: 40,
+        rareParts: 2,
+        upgradeLevels: {},
+        equippedGear: [],
+        progress: { bossCluesFound: 2, bossUnlocked: false, bossDefeated: false },
+        settings: { keyboardLockNoticeShown: true },
+      };
+      const migrated = validateSaveData(migrateToCurrent(v1));
+      const empty = validateSaveData(migrateToCurrent({ ...v1, progress: { bossCluesFound: 0, bossUnlocked: false, bossDefeated: false } }));
+      check(
+        'M2 저장 v1→v2: 기존 저장 안전 기본값 — 개수 보존(legacy id)·플래그 이관·지갑 불변',
+        migrated.progress.bossCluesCollected.length === 2 &&
+          migrated.progress.bossCluesCollected.every((id) => id.startsWith('legacy-clue-')) &&
+          migrated.credits === 40 && migrated.rareParts === 2 &&
+          empty.progress.bossCluesCollected.length === 0 &&
+          validateSaveData(createDefaultSave()).progress.bossCluesCollected.length === 0,
+        `이관=${JSON.stringify(migrated.progress)}`,
+      );
+    }
+
+    // ── 승리 보상·데모 완료 기록 각 1회 (기존 lootDropped·저장 경로) ──
+    {
+      const { loop, bus } = buildLoop();
+      loop.beginSortiePrep();
+      loop.launchSortie();
+      const progress = new BossProgressStore(clueOptions, bus);
+      const bridge = new BossVictoryBridge(progress, { credits: 0, rareParts: 1 });
+      bridge.initialize(verificationContext(bus));
+      const storage = new Map<string, string>();
+      const storageLike: StorageLike = {
+        getItem: (key) => storage.get(key) ?? null,
+        setItem: (key, value) => {
+          storage.set(key, value);
+        },
+        removeItem: (key) => {
+          storage.delete(key);
+        },
+      };
+      const savedProgress: Array<{ defeated: boolean; rareParts: number }> = [];
+      const store = new SaveStore(storageLike);
+      const saveBridge = new SaveBridge(store, {
+        get wallet() {
+          return loop.wallet;
+        },
+        upgradeLevels: {},
+        equippedGear: [],
+        get progress() {
+          return progress.snapshot();
+        },
+      });
+      saveBridge.initialize(verificationContext(bus));
+      const unsubscribeProbe = bus.on('saveRequested', () => {
+        const raw = storage.get('deepDive.save.current');
+        if (raw === undefined) return;
+        const parsed = JSON.parse(raw) as { progress: { bossDefeated: boolean }; rareParts: number };
+        savedProgress.push({ defeated: parsed.progress.bossDefeated, rareParts: parsed.rareParts });
+      });
+      let lootEvents = 0;
+      bus.on('lootDropped', () => {
+        lootEvents += 1;
+      });
+      const walletBefore = loop.wallet.rareParts;
+      bus.emit('bossDefeated', { bossId: 'boss-abyss-01', x: 1, z: 2 });
+      bus.emit('bossDefeated', { bossId: 'boss-abyss-01', x: 1, z: 2 }); // 중복 격파 방어
+      unsubscribeProbe();
+      saveBridge.dispose();
+      bridge.dispose();
+      check(
+        'M2 승리: 보상 lootDropped(boss) 1회 + 희귀 부품 즉시 확정 + rarePart 저장 1회',
+        lootEvents === 1 && loop.wallet.rareParts === walletBefore + 1 && savedProgress.length === 1,
+        `loot=${lootEvents}, 지갑=${walletBefore}→${loop.wallet.rareParts}, 저장=${savedProgress.length}`,
+      );
+      check(
+        'M2 데모 완료 기록: 격파 저장 스냅샷에 bossDefeated=true + 보상 포함 (같은 저장 1회)',
+        savedProgress[0]?.defeated === true && savedProgress[0]?.rareParts === walletBefore + 1 &&
+          progress.defeated,
+        `저장 내용=${JSON.stringify(savedProgress[0] ?? null)}`,
+      );
+    }
+  }
+
+  /* ═══ INT-RENDER-014 소나 스코프 읽기 모델 계약 (타입 정적 검사) ═══ */
+  {
+    // 적합 표본 — unwired 자세 그대로 (blips 빈 배열·타이머 0·safe 고정)
+    const unwiredModel: SonarScopeReadModel = {
+      unwired: true,
+      noiseFactor: 0,
+      blips: [],
+      activePingRemainingSeconds: 0,
+      cooldownRemainingSeconds: 0,
+      pingReady: false,
+      ringState: 'safe',
+    };
+    // 적합 표본 — 패시브 접촉(거리 미상 null) + 액티브 반사 접촉
+    const wiredModel: SonarScopeReadModel = {
+      unwired: false,
+      noiseFactor: 0.4,
+      blips: [
+        {
+          targetId: 'destroyer-1',
+          kind: 'ship',
+          bearingRadians: 1.2,
+          bearingSpreadRadians: 0.3,
+          distanceMeters: null,
+          fromActivePing: false,
+        },
+        {
+          targetId: 'torpedo-7',
+          kind: 'torpedo',
+          bearingRadians: -0.5,
+          bearingSpreadRadians: 0,
+          distanceMeters: 120,
+          fromActivePing: true,
+        },
+      ],
+      activePingRemainingSeconds: 2.5,
+      cooldownRemainingSeconds: 0,
+      pingReady: true,
+      ringState: 'searching',
+    };
+
+    // 금지 검사 ① — blip에 월드 좌표를 실을 수 없다 (렌더 역산 금지)
+    const rejectWorldCoordinates = (): SonarScopeReadModel => ({
+      ...unwiredModel,
+      blips: [
+        {
+          targetId: 'destroyer-1',
+          kind: 'ship',
+          bearingRadians: 0,
+          bearingSpreadRadians: 0,
+          distanceMeters: null,
+          fromActivePing: false,
+          // @ts-expect-error blip에 월드 좌표 탑재는 계약 위반 (방위·거리 표현만)
+          x: 10,
+        },
+      ],
+    });
+    // 금지 검사 ② — 침묵 항행 boolean을 모델에 실을 수 없다 (17차 결의 4)
+    const rejectSilentRunningFlag = (): SonarScopeReadModel => ({
+      ...unwiredModel,
+      // @ts-expect-error 침묵 항행 인지 금지 — noiseFactor 단일 의존
+      silentRunning: true,
+    });
+    void rejectWorldCoordinates;
+    void rejectSilentRunningFlag;
+
+    check(
+      'INT-RENDER-014 소나 계약: unwired 자세·패시브 null 거리·핑 타이머 표현 + 월드좌표·침묵 boolean 타입 금지',
+      unwiredModel.blips.length === 0 && !unwiredModel.pingReady &&
+        wiredModel.blips[0]?.distanceMeters === null &&
+        wiredModel.blips[1]?.fromActivePing === true,
+      'ts-expect-error 정적 검사 + 표본 적합',
+    );
   }
 
   return results;

@@ -393,8 +393,22 @@ B 선행개발          = 가능 (선행개발 상태로만)
   - **[INT-CORE-014 적용 요청 — 그래픽스]** `SurvivalReadModel`만 소비(내부 객체 비노출·값 변경 불가). **실패 화면=`sortieFailed` / 귀환 화면=`sortieEnded`** 로 데이터·화면 완전 분리(C7). 침수량·피해량을 결정하지 않으며 경고는 `warningIds` 키로만 온다
   - **[INT-CORE-014 적용 요청 — 빌드·툴]** `params/combat.json` C9 [COMBAT] 확장: 선체 기준값·survivalState 경계 2종·폭뢰 direct/near 피해·침수 3단계 경계/확산율/피해율·(도입 시)압력 4종. **전부 미확정이며 임의 수치 금지.** `verify:sprint-c` 신설은 툴링 몫 — 리드는 없는 script를 실행하지 않았다
   - **계층 경계 [확정]:** 상위(src/meta)가 하위 세션 내부 상태를 읽는 코드, 하위가 메타 상태를 참조하는 코드는 리뷰 반려 대상 — 통신은 SortieSessionPort + 이벤트 3종뿐
-- **마지막 업데이트:** C 최종 런타임 blocker 3건 마감 (INT-CORE-019 — 침수 기여 v0.1.1·속도 소음 정책·목표 심도 기폭 + production 재실측 완주. **C_FINAL_COMPLETE=true** · C_SILENT_RUNNING_INTERACTIVE=false 후속)
-- **담당 브랜치:** `claude/sprint-c-runtime-closeout` (통합 tip `bd87828` 정확 기준 — 이전 리드 세션: `claude/deep-dive-core-lead-uyg77p`)
+  - **M1 보스 코어 · M2 단서/해금 (INT-CORE-020 — 17차 결의 3 창 1, base = M0 병합 dev `d968514`):**
+    - **계약**: `contracts/boss.ts` 신설(패턴 4종 봉인·예고·공격 요청/포트·이동 노브·phasePort 정본 승격·피해 원장·진입 게이트) + events 3종(interactionCollected·bossCluesChanged·bossDefeated) + `BossParams`/`params/boss.json`(스코프 가드 1/1, D10 비상 컷 = 플래그 오프) + 공인 로더(`config/bossParams(+Loader)` — 미지 패턴 키 거부)
+    - **코어**: `core/BossController` — DestroyerAIController **합성** 계보(신규 범용 AI 0·B5 판정 보존), 3단계 × 4패턴, 체력 임계+예고 순차 전환, 격파/플레이어 파괴 후 요청 0, 밸런스 상수 0
+    - **M2**: `meta/BossProgressStore`(단서 id 원장 — 재접속 후에도 중복 반영 금지, 3/3 단조 해금, 진입 게이트) + 저장 스키마 **v2**(개수→id 목록, v1→v2 마이그레이션 동반 — 툴링 소유 파일 변경 사유 INT-CORE-020) + `BossVictoryBridge`(기존 lootDropped('boss')·rarePart 저장 경로 — 보상·데모 완료 기록 각 1회) + Game 조립(로드 1회·부팅 복원·clue 구독·브리지)
+    - **검증**: verify:meta **150/150**(M1·M2 26건 — 작업 4 단언 전부) · tooling **26/26** · gameplay 242/242 · 전 스위트 통과
+    - **대기(통합 patch)**: 보스 개체 스폰·약점 판정 브리지·BossAttackPort/BossMotionPort 구현은 창 2 InteractionSystem·판정 도착 후 통합 창 순서(17차 병합 순서) — 지침은 INT-CORE-020
+  - **두 번째 통합 PR 준비 (INT-CORE-021·INT-RENDER-014 — PR #9 병합 후):**
+    - **PR #9 수신**: dev `bd59d0a`(InteractionSystem 병합 tip)를 리드 브랜치에 **일반 merge**(충돌 0). 수신 확인 — `systems/interaction/InteractionSystem`(공유 회수 절차)·`interactHold`·GameplaySystems 조립·params null=unwired·M2 후속 파일(단서 진행) dev 부재·리드 산출물 전부 보존
+    - **이벤트 의미 확정 (M-4)**: `interactionCollected` payload = `InteractionCollectedEvent` discriminated union — `targetId`(월드 interactable ID — 단서 ID로 해석 금지) / `clueId`(canonical 단서 ID — clue kind 필수, 비clue `clueId?: never`). kind 정본 4종(`goldCache|salvage|clue|deepSite`) — 게임플레이 내부 태그 변환·interactableId→clueId 매핑은 게임플레이 조립 어댑터(무상태·후속). **⚠ 발행자 0** — InteractionSystem은 로컬 콜백만, EventBus 발행은 후속 게임플레이 어댑터(INTERACTION_EVENTBUS_WIRED=false)
+    - **정본 소유권 (M-5)**: 단서 진행 원장·중복 방지·저장 복원·해금·게이트 = `BossProgressStore` 단일. 게임플레이 `CluePickupProgress`류 영속·복원·중복 방지는 병합 대상 아님(중복 정본 금지). Game 구독을 `collectClue(payload.clueId)`로 정정(구 targetId 전달 = 오해 경로)
+    - **소나 계약 (M-6)**: `contracts/sonar.ts` 신설 — `SonarScopeReadModel`(unwired 자세·noiseFactor 단일 의존(침묵 boolean 금지)·blips 방위/번짐/거리|null/fromActivePing(월드 좌표 금지)·핑 타이머·ringState=DetectionStage 재사용). **계약 정의만 — 공급자·소비자 dev 부재, 그래픽스 구현 완료 아님**
+    - **감사**: 저장 v2 — dev 전역 v1 전제 코드 0건(`bossCluesFound`는 스키마·마이그레이션·테스트에만), C 필드 보존. params/boss.json 전량 [초기 테스트값] 표기 유지(APPROVED 아님 — requiredClues 3만 6차 결의 확정). **M0 미종결** — `docs/measurements/M0_gpu_baseline.md` dev 부재, feat/render·툴링 브랜치에 **중복 정본 2본 존재**(병합 시 정합 확인 필요), INT-RENDER-013 실 GPU 증적 대기 — 승인 플래그 불변(M0_FORMALLY_CLOSED=false)
+    - **검증**: verify:meta **156/156**(구독 경로 6종 + ts-expect-error 정적 2종 + 소나 계약 검사 신설) · gameplay 253/253 · tooling 26/26 · typecheck·build·size(6.8%)·scope·sprint-a/b/c 전부 통과
+    - **게이트**: M1_RUNTIME_WIRED=false·M1_EXIT_GATE_PASSED=false·M2_PROGRESS_GATE_PASSED=false — production 스폰·배선 없음. 침묵 항행 구현 금지(보스전 완주 판정 전 — 17차 결의 4)·M3 시작 금지 유지
+- **마지막 업데이트:** 두 번째 통합 PR 준비 완료 — interactionCollected 의미 확정(targetId/clueId 분리)·단서 진행 정본 소유권 단일화·SonarScopeReadModel 계약(INT-CORE-021·INT-RENDER-014, M-4~M-6). 이전: M1 보스 코어·M2 단서/해금 계약 마감(INT-CORE-020)
+- **담당 브랜치:** `claude/deep-dive-core-lead-uyg77p` (base = dev `bd59d0a` merge — PR #9 수신)
 
 ## 게임플레이
 
