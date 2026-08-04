@@ -30,6 +30,20 @@ export interface FixedNumber {
   note?: string;
 }
 
+/**
+ * 승인 대기 튜닝 수치 — **공식 값이 아직 없어 value: null이 허용**된다
+ * (C9 null 규약 재사용: null = 미확정, 키 누락 = 로드 거부, null→0 변환
+ * 금지). 허용 범위(range)·단위는 계약으로 먼저 고정하고, 기획 승인 시
+ * value만 채운다 — 소비 시스템은 null이면 해당 축을 unwired로 유지한다.
+ */
+export interface NullableTunable {
+  value: number | null;
+  /** [최소, 최대] 허용 범위 — 승인값이 이 범위를 벗어나면 로드 거부 */
+  range: [number, number];
+  unit: string;
+  note?: string;
+}
+
 /** params/movement.json — 관성·선회·속력 (§5.1~5.2) */
 export interface MovementParams {
   /** 정지 관성 1.5초 [0.5~2.0] */
@@ -159,6 +173,16 @@ export interface BossParams {
     /** 3단계 진입 체력 비율 임계 (이하 진입) */
     phase3AtHullRatio: Tunable;
   };
+  /**
+   * 평상시(비돌진) 이동 — 게임플레이 `BossMotionPort` 구현이 소비한다
+   * (M1 Runtime Closure — INT-CORE-022). null = 이동 unwired(보스 정지).
+   * 관계 제약: moveSpeedMetersPerSecond(확정 시) ≤ patterns.ram.speed —
+   * 돌진이 평상시보다 빨라야 한다(로더 강제).
+   */
+  movement: {
+    moveSpeedMetersPerSecond: NullableTunable;
+    turnRateRadiansPerSecond: NullableTunable;
+  };
   patterns: {
     flags: BossPatternFlags;
     /** 패턴 간 간격 (초) — 3단계에서 finalPhase.intervalMultiplier 적용 */
@@ -169,6 +193,11 @@ export interface BossParams {
       /** 돌진 속도 (m/s) — 기존 이동 포트의 속도 노브로 주입 */
       speedMetersPerSecond: Tunable;
       durationSeconds: Tunable;
+      /**
+       * 돌진 접촉 시 플레이어 선체 피해 (C9 선체 120 스케일).
+       * null = 돌진 unwired(이동·예고만, 피해 0 — 임시 피해 발명 금지)
+       */
+      contactDamage: NullableTunable;
     };
     projectile: {
       /** 투사체 속도 (m/s) — 기존 어뢰 직진 경로 재사용 시 주입 */
@@ -182,6 +211,12 @@ export interface BossParams {
       weakPointDamageMultiplier: Tunable;
       /** 닫힘 중 일반 선체 명중 피해 배율 */
       closedHullDamageMultiplier: Tunable;
+      /**
+       * 약점 명중 판정 반경 (m, 통짜 캡슐 근사 — 회의 11 결의 5).
+       * null = 판정 unwired(반경 0 — 약점 명중·격파 경로 미성립).
+       * 구 게임플레이 임시값 6은 공식값으로 승격되지 않았다(후보일 뿐).
+       */
+      hitRadiusMeters: NullableTunable;
     };
     finalPhase: {
       /** 3단계 이동·돌진 속도 배율 */

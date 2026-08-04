@@ -70,6 +70,20 @@ export type InteractionCollectedEvent =
       readonly z: number;
     };
 
+/**
+ * 월드 interactable ID → canonical 단서 ID 매핑 계약 (INT-CORE-022).
+ *
+ *  - **작성 정본 = 단서 interactable 배치와 같은 월드 데이터 모듈**
+ *    (`src/world/` — 배치를 만드는 쪽이 매핑을 만든다. 기획 승인 수치·ID).
+ *  - 값은 `params/boss.json unlock.clueIds`에 실재하는 canonical ID만
+ *    허용한다 — 검증은 툴링 검증기 + 조립부 주입 시 대조, 최종 방어는
+ *    `BossProgressStore.collectClue`의 unknownClue 거부(3중 방어).
+ *  - 게임플레이 발행 어댑터는 이 매핑을 주입받아 조회만 한다(무상태) —
+ *    매핑에 없는 단서 대상은 **발행하지 않는다**(성공 위장 금지).
+ *  - `targetId`를 문자열 조작으로 clueId로 변환하는 코드는 계약 위반이다.
+ */
+export type ClueIdByInteractableId = Readonly<Record<string, string>>;
+
 /** 재화 묶음 — 이원화 [확정 6차 결의 6]: 일반 크레딧 / 희귀 부품 */
 export interface CurrencyBundle {
   readonly credits: number;
