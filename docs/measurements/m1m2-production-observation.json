@@ -1,0 +1,66 @@
+{
+  "ev": [
+    {
+      "id": "S1-boot",
+      "detail": "meta=BASE fixtureLoaded=false bossSpawned=false bossView=null clues=0/3 unlocked=false"
+    },
+    {
+      "id": "S2-scope-provider",
+      "detail": "scope.unwired=false (false=production provider 표시) blips=[ship,ship] pingReady=true ring=safe"
+    },
+    {
+      "id": "S3-sortie",
+      "detail": "meta=SORTIE pose=(0,0,0) bossSpawned=false bossView=null"
+    },
+    {
+      "id": "S4-E-ascend",
+      "detail": "E 홀드 1.4s: y 0 → 0.55 (상승 0.55m) · Shift 1.4s: → 0.32 (하강 -0.23m)"
+    },
+    {
+      "id": "S5-F-hold-no-target",
+      "detail": "대상 없는 위치에서 F hold 2.6s → 발행 0건 (이전 0) · interaction.available=false candidate=null unwired=false"
+    },
+    {
+      "id": "S6-Q-press",
+      "detail": "press 전 ping=0s ready=true → 후 ping=2.8s ready=false cd=24.8s · active blip=[ship,ship,goldCache,salvage,salvage,clue,clue,clue]"
+    },
+    {
+      "id": "S7-active-exploration",
+      "detail": "핑 노출 중 blips=[ship,ship,goldCache,salvage,salvage,clue,clue,clue] · fromActivePing=[ship,ship,goldCache,salvage,salvage,clue,clue,clue] · passive=[]"
+    },
+    {
+      "id": "S8-passive-exploration-0",
+      "detail": "passive 목록에 exploration kind 포함 = 0건"
+    },
+    {
+      "id": "S9-terrain-blip-0",
+      "detail": "blip kind 집합 = [ship,goldCache,salvage,clue] · terrain kind 포함 = 0건"
+    },
+    {
+      "id": "S10-Q-hold-repeat",
+      "detail": "Q 2.0s 홀드(OS repeat 포함) 후 ping=1s cd=23s — 쿨다운이 리셋되지 않으면 추가 ping 0 (첫 press 직후 cd=24.8s → 홀드 후 23s, 단조 감소)"
+    },
+    {
+      "id": "S11-cooldown-reject",
+      "detail": "쿨다운 잔여 22.8s 상태에서 requestActivePing() → '[object Object]' · ping 잔여 변화 없음(1→0.8)"
+    },
+    {
+      "id": "S12-torpedo-blip",
+      "detail": "좌클릭 발사 후 blips=[ship,ship,goldCache,salvage,salvage,clue,clue,clue] (torpedo 포함 0건)"
+    },
+    {
+      "id": "S13-farming-clue-separation",
+      "detail": "단서 회수 이벤트 0건 · lootDropped=[] · 지갑 credits=0 (clue kind는 PAYABLE_KINDS 밖 — noReward)"
+    },
+    {
+      "id": "S14-save-reload",
+      "detail": "재접속 후 clues=0/3 unlocked=false ids=[] bossSpawned=false fixtureLoaded=false"
+    },
+    {
+      "id": "S15-errors",
+      "detail": "콘솔 오류 0건 · 페이지 오류 0건"
+    }
+  ],
+  "consoleErrors": [],
+  "pageErrors": []
+}
