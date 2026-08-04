@@ -21,6 +21,8 @@ import { PerformanceOverlay } from '../ui/PerformanceOverlay';
 import { ControlsHud } from '../ui/ControlsHud';
 import { DetectionHud } from '../ui/DetectionHud';
 import { EconomyHud } from '../ui/EconomyHud';
+import { ExplorationHud } from '../ui/ExplorationHud';
+import { InteractionPromptHud } from '../ui/InteractionPromptHud';
 import { SortieFailureScreen } from '../ui/SortieFailureScreen';
 import { SortieReturnScreen } from '../ui/SortieReturnScreen';
 import { SurvivalHud } from '../ui/SurvivalHud';
@@ -170,6 +172,10 @@ export class Game {
   private bossSpawned = false;
   /** 출항 경계 보스 런타임 정리 (조립부 factory 재사용 — 두 번째 출항 대비) */
   private disposeBossRuntimeForSortie: (() => void) | null = null;
+  /** F 홀드 프롬프트 HUD — InteractionReadModel 표시 전용 (판정 무소유) */
+  private interactionPromptHud: InteractionPromptHud | null = null;
+  /** 탐사 안내 HUD — 단서 진행·표식 범례·보스 구역 상태 표시 전용 */
+  private explorationHud: ExplorationHud | null = null;
   /** 출항당 1회 salvage 스포너 — 좌표는 SalvagePlacementSource 전용 */
   private salvageSpawner: SortieSalvageSpawner | null = null;
   /** 경비 사건 중복 방지 원장 — 요청·스폰 공용 단일 저장소 (INT-CORE-012) */
@@ -450,6 +456,10 @@ export class Game {
         // (개체·약점 등록·구역 edge)는 위 resetSortieSession이 이미 비웠고,
         // 다음 스폰 허가에서 같은 factory가 controller를 새로 만든다.
         this.disposeBossRuntimeForSortie?.();
+        // 표시 전용 HUD도 출항 경계에서 접는다 — 이전 출항의 홀드 링·배너가
+        // 새 출항에 남지 않게. 진행 수(단서 N/M)는 정본이 소유하므로 건드리지 않는다.
+        this.interactionPromptHud?.reset();
+        this.explorationHud?.reset();
         const spawnReport = this.salvageSpawner?.beginSortie();
         if (spawnReport) {
           if (spawnReport.status === 'spawned') {
@@ -779,6 +789,35 @@ export class Game {
       noiseContribution: interactionParams.hold.noiseContribution.value,
     });
 
+    //     [L-2 발견 가능성] F 홀드 프롬프트 HUD — 위 회수 판정을 **바꾸지 않고**
+    //     정본 `InteractionReadModel`만 그대로 표시한다. 후보 허용 목록은 world
+    //     배치에서 그대로 넘긴다(HUD가 targetId 문자열을 만들지 않는다).
+    //     거리·홀드 시간·완료 판정은 전부 InteractionSystem 소유로 남는다.
+    const interactionPromptHud = new InteractionPromptHud(this.container);
+    interactionPromptHud.attachSource({
+      interactionView: () => gameplay.interactionReadModel(),
+    });
+    interactionPromptHud.attachClueTargets(
+      BOSS_CLUE_PLACEMENTS.map((placement) => placement.targetId),
+    );
+    this.interactionPromptHud = interactionPromptHud;
+    //     완료 피드백은 **정본이 실제로 반영했을 때만** 뜬다 — 리드
+    //     BossProgressStore가 새 단서를 반영할 때 발행하는 이벤트 하나만
+    //     소비한다(중복 회수는 발행 0이므로 피드백도 0).
+    this.registerUnsubscribe(
+      this.bus.on('bossCluesChanged', ({ collected, required }) => {
+        interactionPromptHud.notifyClueCollected(collected, required);
+      }),
+    );
+
+    //     [L-3 발견 가능성] 탐사 안내 HUD — 단서 진행 정본은 BossProgressStore
+    //     하나이고, 구역 잠금 표시도 `requestEntry()` 결과 그대로다(해금 조건
+    //     재구현 0). 구역 좌표는 world 정본 값을 그대로 찍는다.
+    const explorationHud = new ExplorationHud(this.container);
+    explorationHud.attachProgress(bossProgress);
+    explorationHud.attachBossZone(BOSS_ZONE);
+    this.explorationHud = explorationHud;
+
     //     [순서 5] 보스 구역 — 좌표는 world 정본이며 여기서 다시 쓰지 않는다.
     gameplay.attachBossZone(BOSS_ZONE);
 
@@ -844,6 +883,7 @@ export class Game {
       this.bossController?.dispose();
       this.bossController = null;
       this.bossSpawned = false;
+      explorationHud.setEncounterActive(false);
     };
     const spawnBossIfGranted = (): void => {
       // 이미 스폰됐으면 재요청하지 않는다 — 구역 체류·재진입 모두 1회.
@@ -868,9 +908,19 @@ export class Game {
       //   1회 적용했고 여기서 다시 곱하지 않는다. 약점 표적 등록은
       //   `spawnBoss()` 내부가 이미 했으므로 조립부가 재등록하지 않는다.
       disposeDamageSink = gameplay.attachBossDamageSink(controller);
+      // 교전 표시는 **스폰 성공 이후에만** — 스폰 실패·거부는 표시하지 않는다.
+      explorationHud.setEncounterActive(true);
       console.info(`[Game] 보스 스폰 (${controller.bossId}) — 구역 ${BOSS_ZONE.id} 진입 허가`);
     };
-    this.registerUnsubscribe(gameplay.onBossZoneEntered(() => spawnBossIfGranted()));
+    //     구역 진입 edge — 진입 1회당 통지 1회다(체류 중 반복 없음). HUD 배너는
+    //     리드 게이트가 돌려준 결과를 그대로 받으며, 조립부가 허가를 다시
+    //     판단하거나 문구용으로 조건을 복제하지 않는다.
+    this.registerUnsubscribe(
+      gameplay.onBossZoneEntered(() => {
+        explorationHud.notifyZoneEntered(bossProgress.requestEntry());
+        spawnBossIfGranted();
+      }),
+    );
     //     발사 위치 통지 — 기존 어뢰 이벤트를 코어 내비게이션에 잇기만 한다.
     this.registerUnsubscribe(
       this.bus.on('torpedoFired', ({ originX, originZ }) => {
@@ -1256,12 +1306,20 @@ export class Game {
         survivalHud.setVisible(inSortie);
         detectionHud.update();
         survivalHud.update(deltaSeconds);
+        // 발견 가능성 HUD 2종 — 같은 출항 게이트·같은 프레임에서 갱신한다.
+        // 둘 다 정본 read model 표시 전용이라 판정 순서에 영향이 없다.
+        interactionPromptHud.setVisible(inSortie);
+        explorationHud.setVisible(inSortie);
+        interactionPromptHud.update(deltaSeconds);
+        explorationHud.update(deltaSeconds);
         failureScreen.update();
         returnScreen.update();
       },
       dispose: () => {
         detectionHud.dispose();
         survivalHud.dispose();
+        interactionPromptHud.dispose();
+        explorationHud.dispose();
         failureScreen.dispose();
         returnScreen.dispose();
       },
