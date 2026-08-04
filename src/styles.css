@@ -19,12 +19,21 @@ body {
   height: 100%;
 }
 
-/* 개발용 성능 오버레이 */
+/* 개발용 성능 오버레이 — 우측 상단 자산 HUD 아래.
+   좌상단은 소나 스코프(SonarScope, left/top 0.75rem · 18vh)가 쓰는 자리라
+   개발 모드에서 계기를 가렸다. --perf-overlay-top은 자산 HUD 실제 하단 +
+   12px를 PerformanceOverlay가 측정해 넣는다(자산 HUD 높이는 줄 수에 따라
+   변한다 — 고정 top으로 두면 겹치거나 뜬다). */
 .perf-overlay {
   position: fixed;
-  top: 8px;
-  left: 8px;
+  top: var(--perf-overlay-top, 12px);
+  right: 12px;
+  left: auto;
   z-index: 100;
+  box-sizing: border-box;
+  max-width: min(38vw, 22rem);
+  max-height: calc(100vh - var(--perf-overlay-top, 12px) - 12px);
+  overflow: hidden;
   padding: 8px 10px;
   font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color: #cfe8f5;
@@ -32,8 +41,18 @@ body {
   border: 1px solid rgba(120, 180, 210, 0.35);
   border-radius: 4px;
   pointer-events: none;
-  white-space: pre;
+  white-space: pre-wrap;
   user-select: none;
+}
+
+/* 접기 토글 — 상단 우측 정렬(새 단축키 없음, 클릭 전용) */
+.perf-overlay-toggle {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.perf-overlay-collapsed .perf-overlay-body {
+  display: none;
 }
 
 .perf-overlay button {
