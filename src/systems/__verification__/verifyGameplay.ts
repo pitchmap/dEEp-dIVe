@@ -3744,6 +3744,8 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     const nullValueBlock = (fields: readonly string[]): Record<string, { value: null }> =>
       Object.fromEntries(fields.map((field) => [field, { value: null }]));
     const nullCombatResult = validateCombatParams({
+      // 소나 표시 정책은 null을 두지 않는다 (기본 false) — C9 4블록과 규칙이 다르다.
+      depthChargeOnPassiveScope: { value: false },
       hull: nullValueBlock(['baseMaxHull', 'damagedRatioThreshold', 'criticalRatioThreshold']),
       depthCharge: nullValueBlock([
         'directRadiusMeters',

@@ -8,9 +8,11 @@
 import { execSync } from 'node:child_process';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
-const ROOT = new URL('..', import.meta.url).pathname;
+// check-build-size.mjs와 같은 이유 — Windows 드라이브 문자·퍼센트 인코딩.
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 function git(command) {
   try {

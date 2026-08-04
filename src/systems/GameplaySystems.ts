@@ -490,6 +490,9 @@ export class GameplaySystems implements GameSystem {
       null,
       params.combat.simultaneousDepthCharges.value,
     );
+    // 폭뢰 lifecycle 이벤트(입수·폭발) — 사운드·연출 전용 통지.
+    // 판정은 이 버스에 의존하지 않는다(구독 0건이어도 동작 동일).
+    this.depthCharges.attachEventBus(bus);
     this.enemyAttack = new EnemyAttackCoordinator(this.depthCharges, null, null);
     // [M2-1] 회수 절차 — 수치 미주입이면 unwired(임의 홀드 시간·반경 없음).
     //        회수 중 소음은 **기존 소음 경로에 더해진다**(별도 정본 없음).

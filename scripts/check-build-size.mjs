@@ -10,10 +10,18 @@
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import process from 'node:process';
 
-const DIST_DIR = new URL('../dist', import.meta.url).pathname;
+// URL.pathname을 그대로 쓰면 두 가지가 깨진다:
+//  1) Windows에서 드라이브 문자 앞에 슬래시가 남는다 (`/C:/…`) — 빌드가
+//     성공해도 stat()이 실패해 'dist 없음'으로 오판한다.
+//  2) 퍼센트 인코딩이 풀리지 않는다 (`My%20Project`) — 공백이 든 경로는
+//     Windows·Linux 양쪽에서 깨진다.
+// fileURLToPath()가 두 경우를 모두 처리한다. 드라이브 문자를 하드코딩하지
+// 않으므로 어느 드라이브·경로에서도 동작한다.
+const DIST_DIR = fileURLToPath(new URL('../dist', import.meta.url));
 const LIMIT_BYTES = 15 * 1024 * 1024; // 15MB (마스터 플랜 §12.1)
 const TOP_FILES = 10;
 
