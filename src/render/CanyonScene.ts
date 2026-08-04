@@ -34,7 +34,7 @@ import type {
   SubmarinePoseSource,
   TorpedoTubeSocketSource,
 } from '../contracts/systems';
-import { meshYawRadians } from '../core/conventions';
+import { bowDirectionXZ, meshYawRadians } from '../core/conventions';
 import type { EventBus, Unsubscribe } from '../core/EventBus';
 import type { ManagedScene } from '../core/SceneManager';
 import { STARTING_CANYON_LAYOUT } from '../world/startingCanyonLayout';
@@ -137,6 +137,36 @@ export interface AimAngleSource {
   readonly pitchRadians: number;
 }
 
+/**
+ * 보스 포즈 읽기 모델 — **묘화 위치 전용 값 복사본**.
+ *
+ * `BossCoreView`(상태)에는 위치가 없어 렌더가 스폰 좌표를 고정으로 쓰고 있었고,
+ * 그 결과 이동하는 게임플레이 보스와 시각물이 어긋났다. 이 단면은 조립부가
+ * 게임플레이 포트(`getPosition()`·`getForward()`)에서 읽어 값만 넘긴다 —
+ * 게임플레이 객체·엔티티·판정은 렌더에 노출되지 않는다.
+ *
+ * 축·부호 기준은 `core/conventions` 그대로다(전방 = `bowDirectionXZ`).
+ * 렌더는 이 값으로 이동 상태를 만들거나 속력을 역산하지 않는다.
+ */
+export interface BossPoseView {
+  readonly positionX: number;
+  readonly positionY: number;
+  readonly positionZ: number;
+  /** 선수(전진) 방향 XZ 단위 벡터 — `bowDirectionXZ` 규약과 동일 정의 */
+  readonly forwardX: number;
+  readonly forwardZ: number;
+}
+
+/**
+ * production 보스 공급 단면 — 상태와 포즈 두 읽기 모델만 노출한다.
+ * `poseView`가 없거나 null이면 production 시각물을 장착하지 않는다
+ * (없는 위치를 발명하지 않는다 — INT-RENDER-016 null 복귀 규칙과 동일).
+ */
+export interface BossViewSource {
+  coreView(): BossCoreView | null;
+  poseView?(): BossPoseView | null;
+}
+
 export class CanyonScene implements ManagedScene {
   private readonly scene = new THREE.Scene();
   private readonly layout: CanyonLayout;
@@ -209,8 +239,8 @@ export class CanyonScene implements ManagedScene {
    * `?bossSpike=1` fixture 장착물(false)은 이 규칙의 대상이 아니다.
    */
   private bossSpikeIsProduction = false;
-  /** 보스 정본 읽기 모델 폴링 소스 — production 조립부 주입 (미주입 = autoDemo/이벤트만) */
-  private bossViewSource: { coreView(): BossCoreView | null } | null = null;
+  /** 보스 정본 읽기 모델·포즈 폴링 소스 — production 조립부 주입 (미주입 = autoDemo/이벤트만) */
+  private bossViewSource: BossViewSource | null = null;
   // 경제·성장 UI QA 데모(?econdemo=1) — 실사용 배선 아님 (배지로 구분)
   private econDemo: EconomyUiQaDemo | null = null;
   // 스프린트 B 표시 규칙 UI 단위 검증 fixture(?bdemo=1) — production 아님
@@ -423,28 +453,36 @@ export class CanyonScene implements ManagedScene {
   }
 
   /**
-   * production 보스 시각물 지연 장착 — `BossCoreView` 공급자가 처음으로
-   * 비-null 뷰를 준 프레임에 1회 장착한다 (INT-CORE-022 소비 마감).
+   * production 보스 시각물 지연 장착 — `BossCoreView`·`BossPoseView` 공급자가
+   * 처음으로 둘 다 비-null인 프레임에 1회 장착한다 (INT-CORE-022 소비 마감).
    *
-   *  - 위치는 월드 배치 정본 `world/bossPlacement`의 스폰 포즈를 **읽기만**
-   *    한다 (묘화 위치 — 인계표 §3 렌더 경계). 자체 순찰·이동 발명 없음:
-   *    보스 포즈 read model이 계약에 없으므로 스폰 포즈 고정이 정직한
-   *    표현이다 (이동 params는 승인 대기 null — 보스 이동 unwired).
+   *  - 위치·방향은 **매 프레임 공급된 `BossPoseView` 그대로**다. 이전에는
+   *    포즈 read model이 없어 `world/bossPlacement`의 스폰 좌표를 고정으로
+   *    썼는데, 게임플레이 보스는 실제로 이동하므로 **보이는 보스와 어뢰 판정
+   *    표적이 어긋났다**(스폰 1초 뒤 이미 6.9m, 이후 12~23m — 판정 반경 6.0
+   *    밖). 시각물이 정본 포즈를 따라가야 조준이 성립한다.
+   *  - 렌더는 여전히 자체 이동·추적·보간·순찰을 만들지 않는다: 받은 좌표를
+   *    대입만 하고 위치 차분으로 속력을 계산하지도, 좌표를 복제 저장하지도
+   *    않는다.
    *  - 상태(phase·telegraph·weakPointOpen·defeated·피격)는 전부
    *    `applyCoreView`·공식 이벤트로만 구동된다. autoDemo 없음, 검수 키
    *    6/7 없음 (fixture 전용 — mountBossSpikeIfRequested 격리).
    */
   private mountProductionBossSpike(): void {
     try {
-      const staticSpawnPose: BossMotionStyle = {
+      const productionPose: BossMotionStyle = {
         update: (_deltaSeconds: number, root: THREE.Group): void => {
-          root.position.set(
-            BOSS_PLACEMENT.spawnX, BOSS_PLACEMENT.spawnY, BOSS_PLACEMENT.spawnZ,
-          );
-          root.rotation.y = meshYawRadians(BOSS_PLACEMENT.headingRadians);
+          const pose = this.bossViewSource?.poseView?.() ?? null;
+          // 값이 없는 프레임은 마지막 포즈를 유지한다 — 해제 판정은 update()
+          // 상위 게이트가 하고, 여기서 스폰 좌표로 되돌리지 않는다.
+          if (!pose) return;
+          root.position.set(pose.positionX, pose.positionY, pose.positionZ);
+          // 선수 방향 → 요 각: `conventions.bowDirectionXZ(h) = (-sin h, -cos h)`의
+          // 역함수다. 포즈 소스가 heading을 노출하지 않으므로 여기서 되돌린다.
+          root.rotation.y = meshYawRadians(Math.atan2(-pose.forwardX, -pose.forwardZ));
         },
       };
-      this.bossSpike = new BossSegmentSpike(staticSpawnPose, false);
+      this.bossSpike = new BossSegmentSpike(productionPose, false);
       this.bossSpikeIsProduction = true;
       this.scene.add(this.bossSpike.root);
       console.info('[CanyonScene] production 보스 시각물 장착 (BossCoreView 비-null 수신).');
@@ -617,11 +655,12 @@ export class CanyonScene implements ManagedScene {
   }
 
   /**
-   * 보스 정본 읽기 모델(`BossCoreView`) 폴링 소스 주입 — production 보스
-   * 조립 시 composition root가 1회 주입한다. 렌더는 phase·weakPointOpen·
-   * telegraph·defeated를 매핑만 한다 (판정·피해·단계 계산 0).
+   * 보스 정본 읽기 모델(`BossCoreView`) + 포즈(`BossPoseView`) 폴링 소스 주입 —
+   * production 보스 조립 시 composition root가 1회 주입한다. 렌더는
+   * phase·weakPointOpen·telegraph·defeated를 매핑하고 포즈를 대입만 한다
+   * (판정·피해·단계·이동 계산 0). 게임플레이 객체 자체는 넘어오지 않는다.
    */
-  attachBossViewSource(source: { coreView(): BossCoreView | null }): void {
+  attachBossViewSource(source: BossViewSource): void {
     this.bossViewSource = source;
   }
 
@@ -914,9 +953,14 @@ export class CanyonScene implements ManagedScene {
     //   null → 비-null: production 시각물 지연 장착 (fixture와 이중 장착 없음)
     //   비-null → null: production 장착물 해제 (fixture ?bossSpike=1는 유지)
     //   이후 재-비-null: 새 인스턴스 장착 — 이전 연출 상태 잔존 0
+    //   포즈까지 함께 요구한다: 위치를 모르는 채 시각물만 띄우면 다시
+    //   '보이는 보스 ≠ 판정 표적'이 되므로, 둘 중 하나라도 null이면 장착하지
+    //   않는다(스폰 좌표로 대신 세우지 않는다).
     const bossView = this.bossViewSource?.coreView() ?? null;
-    if (bossView && !this.bossSpike) this.mountProductionBossSpike();
-    else if (!bossView) this.unmountProductionBossSpike();
+    const bossPose = this.bossViewSource?.poseView?.() ?? null;
+    const productionBossVisible = bossView !== null && bossPose !== null;
+    if (productionBossVisible && !this.bossSpike) this.mountProductionBossSpike();
+    else if (!productionBossVisible) this.unmountProductionBossSpike();
     if (bossView && this.bossSpike) this.bossSpike.applyCoreView(bossView);
     this.bossSpike?.update(deltaSeconds);
   }
@@ -1366,6 +1410,20 @@ export class CanyonScene implements ManagedScene {
           telegraph: t >= 7 ? 'ram' : null,
           weakPointOpen: false,
           defeated: false,
+        };
+      },
+      // fixture는 이동을 검수하지 않는다 — 장착·해제 순환만 본다. 그래서
+      // 표본 포즈는 배치 스폰 좌표 고정이며, coreView와 같은 주기로 null이
+      // 된다(production 경로의 포즈 요구 규칙을 그대로 만족시킨다).
+      poseView: () => {
+        const t = ((performance.now() - start) / 1000) % 12;
+        if (t < 4 || t >= 9) return null;
+        return {
+          positionX: BOSS_PLACEMENT.spawnX,
+          positionY: BOSS_PLACEMENT.spawnY,
+          positionZ: BOSS_PLACEMENT.spawnZ,
+          forwardX: bowDirectionXZ(BOSS_PLACEMENT.headingRadians).x,
+          forwardZ: bowDirectionXZ(BOSS_PLACEMENT.headingRadians).z,
         };
       },
     });

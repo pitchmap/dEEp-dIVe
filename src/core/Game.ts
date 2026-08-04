@@ -21,6 +21,9 @@ import { PerformanceOverlay } from '../ui/PerformanceOverlay';
 import { ControlsHud } from '../ui/ControlsHud';
 import { DetectionHud } from '../ui/DetectionHud';
 import { EconomyHud } from '../ui/EconomyHud';
+import { BossHealthHud } from '../ui/BossHealthHud';
+import { ExplorationHud } from '../ui/ExplorationHud';
+import { InteractionPromptHud } from '../ui/InteractionPromptHud';
 import { SortieFailureScreen } from '../ui/SortieFailureScreen';
 import { SortieReturnScreen } from '../ui/SortieReturnScreen';
 import { SurvivalHud } from '../ui/SurvivalHud';
@@ -35,6 +38,22 @@ import { defaultSaveStore } from '../meta/save/SaveStore';
 import { loadBossParams } from '../config/bossParamsLoader';
 import { loadEconomyParams } from '../tools/economyParams';
 import { loadAimingParams } from '../tools/aimingParams';
+import { loadInteractionParams } from '../tools/interactionParamsLoader';
+import { loadSonarParams } from '../tools/sonarParamsLoader';
+import {
+  BOSS_PLACEMENT,
+  BOSS_WEAK_POINT_PLACEMENT,
+  BOSS_ZONE,
+} from '../world/bossPlacement';
+import {
+  BOSS_CLUE_PLACEMENTS,
+  CLUE_ID_BY_INTERACTABLE,
+} from '../world/bossCluePlacements';
+import { BossController } from './BossController';
+import type { BossPhasePort } from '../contracts/boss';
+import type { BossPhase } from '../contracts/meta';
+import type { InteractableTarget } from '../systems/interaction/InteractionSystem';
+import type { SonarContact } from '../systems/sonar/SonarScopeSystem';
 import { loadCombatParams, combatParamsFullyDefined, type CombatParamsResult } from '../tools/combatParamsLoader';
 import type { OfficialRuntimeParams } from '../contracts/officialParams';
 import { GuardShipAdapter } from './GuardShipAdapter';
@@ -80,6 +99,40 @@ const PERF_SAMPLE_INTERVAL_SECONDS = 1;
 /** 초기 로딩 스파이크가 최소 FPS 통계를 오염시키지 않도록 제외하는 워밍업 구간 (초) */
 const PERF_WARMUP_SECONDS = 2;
 
+/**
+ * [M1·M2 Runtime Closure §5 순서 3·4] world 단서 배치 ↔ 공식 clueId 대조.
+ *
+ * 세 정본이 각자 옳아도 **서로 어긋나면** 단서가 조용히 안 오른다:
+ * 배치(`BOSS_CLUE_PLACEMENTS`) · 매핑(`CLUE_ID_BY_INTERACTABLE`) ·
+ * 해금 목록(`params/boss.json unlock.clueIds`). 조립부는 셋을 잇는 유일한
+ * 지점이므로 여기서 한 번 대조하고, 어긋나면 **부팅을 중단**한다 —
+ * 무시하고 진행하면 '3/3이 안 되는데 원인을 알 수 없는' 상태가 된다.
+ * 값을 고치지 않는다(정본은 world·params이며 조립부는 읽기만 한다).
+ */
+function assertCluePlacementIntegrity(canonicalClueIds: readonly string[]): void {
+  const fail = (reason: string): never => {
+    throw new Error(`[Game] 단서 정본 불일치 — production 부팅 중단: ${reason}`);
+  };
+  const targetIds = BOSS_CLUE_PLACEMENTS.map((placement) => placement.targetId);
+  const mappingKeys = Object.keys(CLUE_ID_BY_INTERACTABLE);
+  const mappedClueIds = Object.values(CLUE_ID_BY_INTERACTABLE);
+
+  if (targetIds.length !== canonicalClueIds.length) {
+    fail(`배치 ${targetIds.length}개 ≠ 공식 단서 ${canonicalClueIds.length}종`);
+  }
+  if (new Set(targetIds).size !== targetIds.length) {
+    fail(`targetId 중복: ${targetIds.join(', ')}`);
+  }
+  const missingMapping = targetIds.filter((targetId) => !(targetId in CLUE_ID_BY_INTERACTABLE));
+  if (missingMapping.length > 0) fail(`매핑 누락 targetId: ${missingMapping.join(', ')}`);
+  const strayMapping = mappingKeys.filter((key) => !targetIds.includes(key));
+  if (strayMapping.length > 0) fail(`배치 없는 매핑 키: ${strayMapping.join(', ')}`);
+  const unknownClue = mappedClueIds.filter((clueId) => !canonicalClueIds.includes(clueId));
+  if (unknownClue.length > 0) fail(`공식 목록 밖 clueId: ${unknownClue.join(', ')}`);
+  const uncovered = canonicalClueIds.filter((clueId) => !mappedClueIds.includes(clueId));
+  if (uncovered.length > 0) fail(`매핑되지 않은 공식 clueId: ${uncovered.join(', ')}`);
+}
+
 export class Game {
   private readonly bus = new EventBus();
   private readonly stateMachine = new GameStateMachine(this.bus);
@@ -114,6 +167,18 @@ export class Game {
   private combatParams: CombatParamsResult | null = null;
   /** M2 단서·보스 해금 진행 정본 (INT-CORE-020) — 저장 progress 블록과 왕복 */
   private bossProgress: BossProgressStore | null = null;
+  /** M1 보스 코어 — 스폰 허가 이후에만 존재한다 (조립부 factory 소유) */
+  private bossController: BossController | null = null;
+  /** production 스폰 성공 여부 — BossCoreView 노출·update 게이트 */
+  private bossSpawned = false;
+  /** 출항 경계 보스 런타임 정리 (조립부 factory 재사용 — 두 번째 출항 대비) */
+  private disposeBossRuntimeForSortie: (() => void) | null = null;
+  /** F 홀드 프롬프트 HUD — InteractionReadModel 표시 전용 (판정 무소유) */
+  private interactionPromptHud: InteractionPromptHud | null = null;
+  /** 탐사 안내 HUD — 단서 진행·표식 범례·보스 구역 상태 표시 전용 */
+  private explorationHud: ExplorationHud | null = null;
+  /** 보스 체력 HUD — BossCoreView.hullRatio 표시 전용 (체력 정본 무소유) */
+  private bossHealthHud: BossHealthHud | null = null;
   /** 출항당 1회 salvage 스포너 — 좌표는 SalvagePlacementSource 전용 */
   private salvageSpawner: SortieSalvageSpawner | null = null;
   /** 경비 사건 중복 방지 원장 — 요청·스폰 공용 단일 저장소 (INT-CORE-012) */
@@ -210,6 +275,7 @@ export class Game {
     // 개발 모드 한정 통합 검증용 읽기 전용 핸들 — 실제 인스턴스를 그대로 노출한다
     // (더미 상태 소스 아님). 프로덕션 번들에서는 제거된다. InputTelemetry의
     // __deepDiveInput과 같은 관례 (D+10 통합 브라우저 검증에서 사용).
+    const composition = this;
     if (import.meta.env.DEV) {
       (globalThis as unknown as Record<string, unknown>)['__deepDiveDebug'] = {
         pose: gameplay.poseSource,
@@ -241,6 +307,32 @@ export class Game {
         combatParams: this.combatParams,
         bossProgress: this.bossProgress,
         gameplay,
+        // [M1·M2 Runtime Closure] production composition 실제 상태만 노출한다.
+        // 새 fixture·검수 명령을 만들지 않으며(관측 전용), 기기 식별자·개인정보를
+        // 싣지 않는다. DEV 번들 한정이라 production 빌드에는 나타나지 않는다.
+        runtimeClosure: {
+          fixtureLoaded: false,
+          get bossSpawned() {
+            return composition.bossSpawned;
+          },
+          get bossView() {
+            return composition.bossController?.view() ?? null;
+          },
+          get playerInBossZone() {
+            return gameplay.isPlayerInBossZone();
+          },
+          bossProgress: this.bossProgress,
+          clueTargetIds: BOSS_CLUE_PLACEMENTS.map((placement) => placement.targetId),
+          clueIdByInteractable: CLUE_ID_BY_INTERACTABLE,
+          bossZone: BOSS_ZONE,
+          get interaction() {
+            return gameplay.interactionReadModel();
+          },
+          get sonarScope() {
+            return gameplay.sonarScopeReadModel();
+          },
+          requestActivePing: () => gameplay.requestActivePing(),
+        },
         flooding: this.floodingCore,
         sortieFailure: this.sortieFailure,
         guardSpawn: this.guardSpawn,
@@ -317,6 +409,24 @@ export class Game {
       `[Game] C9 전투 params 로드·검증 완료 — 확정 여부 ${combatParamsFullyDefined(combat) ? '전량 확정' : '미확정 필드 존재(unwired 유지)'}`,
     );
 
+    //    [M1·M2 Runtime Closure §5 순서 1·2] 나머지 공식 로더 3종.
+    //    boss는 아래 ⓪-b2에서 이미 loadBossParams()로 1회 로드하고, 여기서는
+    //    interaction·sonar를 툴링 공인 로더로 각 1회 부른다. farming은 이미
+    //    로드한 economy 번들의 블록을 그대로 읽는다 — 같은 JSON을 두 번
+    //    파싱하지 않는다. 어느 값도 조립부가 복제·보정·fallback 하지 않으며,
+    //    null은 null 그대로 소비 측에 도달해 그 축만 unwired가 된다.
+    const interactionParams = loadInteractionParams();
+    const sonarParams = loadSonarParams();
+    const farmingParams = official.economy.farming;
+    console.info(
+      `[Game] Runtime Closure params 로드·검증 완료 — interaction ${
+        interactionParams.productionWired ? 'wired' : `unwired(${interactionParams.pendingFields.join(',')})`
+      } · sonar 액티브핑 ${sonarParams.activePingWired ? 'wired' : 'unwired'}` +
+        `/패시브방위 ${sonarParams.passiveBearingWired ? 'wired' : 'unwired'} · farming 상한 ${
+          farmingParams?.capComputable ? '계산 가능' : '계산 불가(무지급)'
+        }`,
+    );
+
     // ⓪ 상위 메타 루프 (리드 소유, src/meta — INT-CORE-006·007).
     //    하위 해역 세션은 SortieSessionPort 어댑터로만 접촉한다 (통신 3종 제한).
     //    이 어댑터가 계층 경계의 유일한 구현 지점이다 — 상위는 하위 내부 상태를
@@ -344,6 +454,16 @@ export class Game {
         // 지갑·업그레이드·loadout(영구분)은 건드리지 않는다 (INT-CORE-014).
         this.playerHull?.resetForNewSortie();
         this.sortieFailure?.resetForNewSortie();
+        // [M1] 보스 런타임도 출항 경계에서 폐기한다 — 이전 출항의 controller가
+        // 계속 돌거나 BossCoreView가 남지 않게. 게임플레이 쪽 출항 한정 상태
+        // (개체·약점 등록·구역 edge)는 위 resetSortieSession이 이미 비웠고,
+        // 다음 스폰 허가에서 같은 factory가 controller를 새로 만든다.
+        this.disposeBossRuntimeForSortie?.();
+        // 표시 전용 HUD도 출항 경계에서 접는다 — 이전 출항의 홀드 링·배너가
+        // 새 출항에 남지 않게. 진행 수(단서 N/M)는 정본이 소유하므로 건드리지 않는다.
+        this.interactionPromptHud?.reset();
+        this.explorationHud?.reset();
+        this.bossHealthHud?.reset();
         const spawnReport = this.salvageSpawner?.beginSortie();
         if (spawnReport) {
           if (spawnReport.status === 'spawned') {
@@ -399,6 +519,10 @@ export class Game {
     //      ID이므로 단서 ID로 해석하지 않는다 (현재 dev 발행자 0 —
     //      구독 배선은 계약대로 상시).
     const bossParams = loadBossParams();
+    //      [§5 순서 3·4 선행] world 단서 정본 ↔ 공식 clueIds 대조. 불일치를
+    //      조용히 무시하면 '진행이 안 오르는데 이유를 알 수 없는' 상태가 되므로
+    //      부팅을 중단한다. 여기서 고치지 않는다 — 정본은 world·params다.
+    assertCluePlacementIntegrity(bossParams.unlock.clueIds);
     const bossProgress = new BossProgressStore(
       {
         requiredClues: bossParams.unlock.requiredClues.value,
@@ -634,6 +758,338 @@ export class Game {
       },
     });
 
+    // ②-f [M1·M2 Runtime Closure] production composition (INT-CORE-022 §5).
+    //     역할 구현체는 전부 dev에 있다 — 여기서는 **연결만** 한다. 판정·수치·
+    //     AI·표현을 이 자리에서 만들지 않으며, 미확정 params 축은 null 그대로
+    //     흘려보내 그 축만 unwired로 남는다.
+
+    //     [순서 3] 단서 회수 대상 — world 배치를 공식 InteractableTarget으로
+    //     변환한다. targetId는 배치 정본 그대로이고 clueId를 복사하지 않는다
+    //     (매핑은 순서 4 소유). 거리·홀드 판정은 InteractionSystem 소유이므로
+    //     여기서는 좌표와 존재 여부만 넘긴다. 렌더 표식은 판정 소스가 아니다.
+    //     기존 salvage·금괴는 근접 자동 회수 경로(pickupRadiusMeters)를 쓰고
+    //     interactable source를 갖지 않는다 — 덮어쓸 기존 대상이 없으므로
+    //     단서 3개가 현재 production interactable 전부다.
+    const clueInteractables: readonly InteractableTarget[] = BOSS_CLUE_PLACEMENTS.map(
+      (placement) => ({
+        interactableId: placement.targetId,
+        kind: 'clue' as const,
+        positionX: placement.x,
+        positionY: placement.y,
+        positionZ: placement.z,
+        available: true,
+      }),
+    );
+    gameplay.attachInteractables(() => clueInteractables);
+    //     [순서 4] canonical 매핑 주입 — 조립부는 문자열을 만들지 않고 world
+    //     정본을 그대로 넘긴다. 매핑 없는 대상은 발행 0(`unmappedClue`)이고,
+    //     미지 clueId는 BossProgressStore가 최종 거부한다.
+    gameplay.attachClueIds(CLUE_ID_BY_INTERACTABLE);
+    //     [순서 21] 회수 절차 수치 — 툴링 로더 DTO의 hold 블록에서 값만 뽑아
+    //     계약 형태로 넘긴다. null은 null 그대로(그 축 unwired).
+    gameplay.attachInteractionParams({
+      holdSeconds: interactionParams.hold.holdSeconds.value,
+      interactRadiusMeters: interactionParams.hold.interactRadiusMeters.value,
+      noiseContribution: interactionParams.hold.noiseContribution.value,
+    });
+
+    //     [L-2 발견 가능성] F 홀드 프롬프트 HUD — 위 회수 판정을 **바꾸지 않고**
+    //     정본 `InteractionReadModel`만 그대로 표시한다. 후보 허용 목록은 world
+    //     배치에서 그대로 넘긴다(HUD가 targetId 문자열을 만들지 않는다).
+    //     거리·홀드 시간·완료 판정은 전부 InteractionSystem 소유로 남는다.
+    const interactionPromptHud = new InteractionPromptHud(this.container);
+    interactionPromptHud.attachSource({
+      interactionView: () => gameplay.interactionReadModel(),
+    });
+    interactionPromptHud.attachClueTargets(
+      BOSS_CLUE_PLACEMENTS.map((placement) => placement.targetId),
+    );
+    this.interactionPromptHud = interactionPromptHud;
+    //     완료 피드백은 **정본이 실제로 반영했을 때만** 뜬다 — 리드
+    //     BossProgressStore가 새 단서를 반영할 때 발행하는 이벤트 하나만
+    //     소비한다(중복 회수는 발행 0이므로 피드백도 0).
+    this.registerUnsubscribe(
+      this.bus.on('bossCluesChanged', ({ collected, required }) => {
+        interactionPromptHud.notifyClueCollected(collected, required);
+      }),
+    );
+
+    //     [L-3 발견 가능성] 탐사 안내 HUD — 단서 진행 정본은 BossProgressStore
+    //     하나이고, 구역 잠금 표시도 `requestEntry()` 결과 그대로다(해금 조건
+    //     재구현 0). 구역 좌표는 world 정본 값을 그대로 찍는다.
+    const explorationHud = new ExplorationHud(this.container);
+    explorationHud.attachProgress(bossProgress);
+    explorationHud.attachBossZone(BOSS_ZONE);
+    this.explorationHud = explorationHud;
+
+    //     보스 체력 HUD — 스폰 이후 상단 중앙. 체력 정본은 리드
+    //     `BossController.view().hullRatio` 하나이고 HUD는 그 값을 표시만
+    //     한다(새 체력 상태·피해 계산 0). 피격 강조는 공식 `bossHit`의 kind만
+    //     소비하며 체력을 건드리지 않는다.
+    const bossHealthHud = new BossHealthHud(this.container);
+    bossHealthHud.attachSource({
+      coreView: () =>
+        this.bossSpawned && this.bossController ? this.bossController.view() : null,
+    });
+    this.bossHealthHud = bossHealthHud;
+    this.registerUnsubscribe(
+      this.bus.on('bossHit', ({ kind }) => bossHealthHud.notifyHit(kind)),
+    );
+
+    //     [순서 5] 보스 구역 — 좌표는 world 정본이며 여기서 다시 쓰지 않는다.
+    gameplay.attachBossZone(BOSS_ZONE);
+
+    //     [순서 6·8] BossEncounter 생성 + 단계 지연 프록시.
+    //     프록시가 필요한 이유: 약점 개방 판정은 리드 `BossController`가
+    //     소유하는데, 그 controller는 스폰 허가 이후에만 생긴다. 그동안
+    //     `BossWeakPointTarget`은 phase port를 요구하므로, 조립부가 **정본으로
+    //     위임하는 얇은 프록시** 하나를 둔다. controller가 없는 동안에는
+    //     계약 기본값(1단계·개방 false)을 돌려줄 뿐 가짜 시간·가짜 전환을
+    //     만들지 않는다 — 프록시는 상태를 보유하지 않는다.
+    const composition = this;
+    const bossPhaseProxy: BossPhasePort = {
+      get phase(): BossPhase {
+        return composition.bossController?.phasePort.phase ?? 1;
+      },
+      get weakPointOpen(): boolean {
+        return composition.bossController?.phasePort.weakPointOpen ?? false;
+      },
+    };
+    //     약점 배치는 인계표 §5 순서 6의 인자 이름 그대로 둔다 — 본체 배치와
+    //     약점 배치가 서로 다른 정본이라는 사실이 호출부에서 드러나야 한다.
+    //     등록 자체는 `spawnBoss()`가 기존 어뢰 표적 등록소에 1회 수행하므로
+    //     조립부는 `BossWeakPointTarget`을 다시 등록하지 않는다(중복 0).
+    const weakPointPlacement = BOSS_WEAK_POINT_PLACEMENT;
+    gameplay.createBoss(
+      BOSS_PLACEMENT,
+      weakPointPlacement,
+      bossPhaseProxy,
+      {
+        moveSpeedMetersPerSecond: bossParams.movement.moveSpeedMetersPerSecond.value,
+        turnRateRadiansPerSecond: bossParams.movement.turnRateRadiansPerSecond.value,
+        projectileSpeedMetersPerSecond: bossParams.patterns.projectile.speedMetersPerSecond.value,
+        projectileDamage: bossParams.patterns.projectile.damage.value,
+        ramContactDamage: bossParams.patterns.ram.contactDamage.value,
+      },
+      {
+        hitRadiusMeters: bossParams.patterns.weakPointOpen.hitRadiusMeters.value,
+        weakPointDamageMultiplier:
+          bossParams.patterns.weakPointOpen.weakPointDamageMultiplier.value,
+        closedHullDamageMultiplier:
+          bossParams.patterns.weakPointOpen.closedHullDamageMultiplier.value,
+      },
+    );
+    //     생성 직후 공식 포트가 실제로 준비됐는지 확인한다. non-null 단언으로
+    //     덮으면 '연결된 줄 알았는데 아무 일도 없는' 상태가 되므로 중단한다.
+    const bossMotionPort = gameplay.bossMotionPort;
+    const bossAttackPort = gameplay.bossAttackPort;
+    if (!bossMotionPort || !bossAttackPort || !gameplay.bossWeakPoint) {
+      throw new Error(
+        '[Game] 보스 포트 준비 실패 — production 부팅 중단 ' +
+          `(motion=${bossMotionPort !== null} attack=${bossAttackPort !== null} ` +
+          `weakPoint=${gameplay.bossWeakPoint !== null})`,
+      );
+    }
+
+    //     [순서 7·9·11] 보스 수명주기 — 스폰 허가 이후에만 controller를 만들고,
+    //     제거·재출항에서 폐기한다. 같은 factory를 다시 부르므로 두 번째 출항도
+    //     동일 경로로 성립한다(첫 출항 전용 1회성 배선 아님).
+    let disposeDamageSink: (() => void) | null = null;
+    const disposeBossRuntime = (): void => {
+      disposeDamageSink?.();
+      disposeDamageSink = null;
+      this.bossController?.dispose();
+      this.bossController = null;
+      this.bossSpawned = false;
+      explorationHud.setEncounterActive(false);
+      //   약점 표적 정리 — `spawnBoss()`가 등록한 표적은 격파·재출항 뒤에도
+      //   표적 목록에 남아 있었다. 피해·이벤트는 이미 차단돼 있지만(제거된
+      //   보스에는 발행 0, 피해 sink 해제) 어뢰 명중 판정은 여전히 걸려
+      //   **어뢰가 빈 자리에서 소멸**한다. 등록소와 표적 모두 공개 API이므로
+      //   조립부가 수명주기를 맞춰 해제한다(중복 해제·미등록 해제 안전).
+      const weakPoint = gameplay.bossWeakPoint;
+      if (weakPoint) gameplay.targets.unregister(weakPoint);
+    };
+    const spawnBossIfGranted = (): void => {
+      // 이미 스폰됐으면 재요청하지 않는다 — 구역 체류·재진입 모두 1회.
+      if (this.bossSpawned) return;
+      if (bossProgress.requestEntry() !== 'granted') return;
+      if (!gameplay.spawnBoss()) return;
+      // 스폰 성공 이후에만 코어를 만든다 → BossCoreView 노출도 이 시점부터다.
+      const controller = new BossController({
+        entityId: BOSS_PLACEMENT.entityId,
+        targetEntityId: PLAYER_ENTITY_ID,
+        motion: bossMotionPort,
+        attackPort: bossAttackPort,
+        params: bossParams,
+        playerAlive: playerHull,
+        bus: this.bus,
+        spawnPosition: { x: BOSS_PLACEMENT.spawnX, z: BOSS_PLACEMENT.spawnZ },
+      });
+      controller.initialize();
+      this.bossController = controller;
+      this.bossSpawned = true;
+      //   [순서 9] 약점 명중 → 리드 체력 원장. 배율은 게임플레이가 이미
+      //   1회 적용했고 여기서 다시 곱하지 않는다. 약점 표적 등록은
+      //   `spawnBoss()` 내부가 이미 했으므로 조립부가 재등록하지 않는다.
+      disposeDamageSink = gameplay.attachBossDamageSink(controller);
+      // 교전 표시는 **스폰 성공 이후에만** — 스폰 실패·거부는 표시하지 않는다.
+      explorationHud.setEncounterActive(true);
+      console.info(`[Game] 보스 스폰 (${controller.bossId}) — 구역 ${BOSS_ZONE.id} 진입 허가`);
+    };
+    //     구역 진입 edge — 진입 1회당 통지 1회다(체류 중 반복 없음). HUD 배너는
+    //     리드 게이트가 돌려준 결과를 그대로 받으며, 조립부가 허가를 다시
+    //     판단하거나 문구용으로 조건을 복제하지 않는다.
+    this.registerUnsubscribe(
+      gameplay.onBossZoneEntered(() => {
+        explorationHud.notifyZoneEntered(bossProgress.requestEntry());
+        spawnBossIfGranted();
+      }),
+    );
+    //     발사 위치 통지 — 기존 어뢰 이벤트를 코어 내비게이션에 잇기만 한다.
+    this.registerUnsubscribe(
+      this.bus.on('torpedoFired', ({ originX, originZ }) => {
+        this.bossController?.notifyLastKnownPosition(originX, originZ);
+      }),
+    );
+    //     격파 → 개체 제거 + 코어 폐기. 승리 보상·저장은 기존 BossVictoryBridge
+    //     경로 그대로이며 여기서 새 보상 경로를 만들지 않는다.
+    this.registerUnsubscribe(
+      this.bus.on('bossDefeated', () => {
+        gameplay.boss?.markRemoved();
+        disposeBossRuntime();
+      }),
+    );
+    //     [순서 7 update] 코어 갱신 — 스폰된 동안에만 돈다. 이전 출항의
+    //     controller가 남아 계속 도는 일이 없도록 폐기 시 참조가 끊긴다.
+    this.registry.register({
+      id: 'bossRuntime',
+      initialize: () => {},
+      update: (deltaSeconds: number) => {
+        if (!this.bossSpawned) return;
+        this.bossController?.update(deltaSeconds);
+      },
+      dispose: () => disposeBossRuntime(),
+    });
+    this.disposeBossRuntimeForSortie = disposeBossRuntime;
+
+    //     [순서 12·13] 소나 접점·수치. 접점은 **기존 production 상태**에서만
+    //     파생한다 — 새 registry·fixture를 만들지 않고, 지형은 blip이 아니다
+    //     (배경층은 레이아웃 단일 소스 소유). 탐색 kind의 패시브 선노출 차단은
+    //     게임플레이 SonarScopeSystem이 kind로 수행하므로 여기서 거르지 않는다.
+    //     보스는 공식 정책대로 `ship`으로 분류된 기존 구현을 유지한다.
+    gameplay.attachSonarContacts(() => {
+      const contacts: SonarContact[] = [];
+      for (const ship of gameplay.shipWorldSource.shipViews) {
+        if (!ship.alive) continue;
+        contacts.push({
+          contactId: `ship-${ship.entityId}`,
+          kind: 'ship',
+          positionX: ship.positionX,
+          positionZ: ship.positionZ,
+          noiseEmitting: true,
+        });
+      }
+      const boss = gameplay.boss;
+      if (boss && this.bossSpawned && !boss.removed) {
+        const pose = boss.getPosition();
+        contacts.push({
+          contactId: `boss-${BOSS_PLACEMENT.entityId}`,
+          kind: 'ship',
+          positionX: pose.x,
+          positionZ: pose.z,
+          noiseEmitting: true,
+        });
+      }
+      for (const torpedo of gameplay.torpedo.torpedoes) {
+        contacts.push({
+          contactId: `torpedo-${torpedo.id}`,
+          kind: 'torpedo',
+          positionX: torpedo.x,
+          positionZ: torpedo.z,
+          noiseEmitting: true,
+        });
+      }
+      for (const charge of gameplay.depthCharges.charges_) {
+        contacts.push({
+          contactId: `depthCharge-${charge.chargeId}`,
+          kind: 'depthCharge',
+          positionX: charge.worldX,
+          positionZ: charge.worldZ,
+          noiseEmitting: true,
+        });
+      }
+      for (const salvage of gameplay.economy.salvageObjects) {
+        if (salvage.destroyed) continue;
+        contacts.push({
+          contactId: `salvage-${salvage.id}`,
+          // 재화 상자류는 금괴 보관함, 그 외 잔해는 salvage로 분류한다.
+          kind: salvage.kind === 'chest' ? 'goldCache' : 'salvage',
+          positionX: salvage.positionX,
+          positionZ: salvage.positionZ,
+          // 무소음 — 그래서 액티브 핑에서만 드러난다 (16차 결의 2-5).
+          noiseEmitting: false,
+        });
+      }
+      for (const target of clueInteractables) {
+        contacts.push({
+          contactId: `clue-${target.interactableId}`,
+          kind: 'clue',
+          positionX: target.positionX,
+          positionZ: target.positionZ,
+          noiseEmitting: false,
+        });
+      }
+      return contacts;
+    });
+    //     스코프 수치 = sonar.json 슬라이스 + combat 소유 패시브 정책 1필드.
+    //     combat 쪽 필드는 이미 로드한 결과에서 읽고 값을 복제하지 않는다.
+    gameplay.attachSonarScopeParams({
+      activePingDisplaySeconds: sonarParams.activePing.displaySeconds.value,
+      activePingDetectionGaugeRise: sonarParams.activePing.detectionGaugeRise.value,
+      activePingCooldownSeconds: sonarParams.activePing.cooldownSeconds.value,
+      passiveBearingSpreadRadiansAtMaxNoise:
+        sonarParams.passive.bearingSpreadRadiansAtMaxNoise.value,
+      depthChargeOnPassiveScope: combat.depthChargeOnPassiveScope,
+    });
+    //     테두리 상태색 입력 — 기존 탐지 정본을 그대로 잇는다(재계산 0).
+    gameplay.sonarScope.attachDetectionStageSource(gameplay.detectionStageSource);
+
+    //     [순서 20] 액티브 핑 입력 pump — production 유일 지점.
+    //     `consumeActivePingPressed()`는 edge 1회 소비이므로 프레임당 한 번만
+    //     부른다. 쿨다운 거부는 그대로 버린다(재시도 큐·상태 저장 없음).
+    this.registry.register({
+      id: 'activePingInput',
+      initialize: () => {},
+      update: () => {
+        if (gameplay.input.consumeActivePingPressed()) gameplay.requestActivePing();
+      },
+      dispose: () => {},
+    });
+
+    //     [순서 22] 파밍 상한 — 비율·평균 두 값에서 소비 측이 상한을 파생한다
+    //     (조립부가 48을 계산해 복제하지 않는다). 대상별 보상 금액 데이터는
+    //     아직 저장소에 없으므로 `attachFarmingRewards`는 부르지 않는다 —
+    //     임의 보상표를 만들지 않으며 그동안 파밍 지급은 0이다.
+    gameplay.attachFarmingRewardParams(
+      farmingParams
+        ? {
+            sectorCapRatioOfCombatAverage: farmingParams.sectorCapRatioOfCombatAverage.value,
+            combatRewardAverageCredits: farmingParams.combatRewardAverageCredits.value,
+          }
+        : null,
+    );
+
+    //     [순서 23] save 복원 단서 표식 동기화 — 저장된 단서는
+    //     `interactionCollected`가 재발행되지 않으므로 복원 직후 1회 맞춘다.
+    //     매핑 **역조회**로 targetId를 얻는다(문자열 추측 0). idempotent.
+    const collectedClueIds = new Set(bossProgress.collectedClueIds);
+    scene.markCluesCollected(
+      Object.entries(CLUE_ID_BY_INTERACTABLE)
+        .filter(([, clueId]) => collectedClueIds.has(clueId))
+        .map(([targetId]) => targetId),
+    );
+
     // ①-c 업그레이드 구매 판정 시스템 (게임플레이 소유 — 조립부가 공식
     //     카탈로그와 실지갑 읽기 단면을 주입한다). **단계의 단일 저장소** —
     //     저장·UI·유효 파라미터가 전부 이 시스템의 levelSnapshot에서 파생된다.
@@ -807,11 +1263,44 @@ export class Game {
       hudView: () => gameplay.detectionHudView(),
     });
     detectionHud.attachTrackingSource(guardAdapter);
-    //     소나 스코프(그래픽스 소유 계기)는 정본 계약 `SonarScopeReadModel`
-    //     (contracts/sonar.ts) **하나만** 소비한다. 게임플레이 공급자가 아직
-    //     dev에 없으므로 미주입 상태로 둔다 — 스코프는 '계기 미연결'을
-    //     표시한다(작동 위장 금지). 공급자 병합 시 배선 1줄:
-    //     `scene.attachSonarScopeSource({ scopeView: () => gameplay.sonarScopeView() })`
+    //     [§5 순서 14] 소나 스코프(그래픽스 소유 계기)는 정본 계약
+    //     `SonarScopeReadModel`(contracts/sonar.ts) **하나만** 소비한다.
+    //     공급자가 dev에 도착했으므로 read model만 넘긴다 — 월드 좌표·registry·
+    //     게임플레이 객체 자체는 렌더에 전달하지 않는다. params 미확정 축이
+    //     있으면 read model이 unwired로 나오고 스코프가 '계기 미연결'을
+    //     그대로 표시한다(조립부가 위장하지 않는다).
+    scene.attachSonarScopeSource({
+      scopeView: () => gameplay.sonarScopeReadModel(),
+    });
+    //     [§5 순서 15] BossCoreView + BossPoseView 공급 (INT-RENDER-016) —
+    //     스폰 성공 이후에만 비-null. 스폰 전·격파 폐기 후·재출항 리셋 후에는
+    //     null이라 production 보스 시각물이 장착되지 않는다. 계약에 spawned
+    //     필드를 더하지 않고 조립부 게이트로 해결한다.
+    //
+    //     포즈를 함께 주는 이유: 렌더는 포즈 read model이 없어 `BOSS_PLACEMENT`
+    //     스폰 좌표에 시각물을 고정하고 있었는데, 게임플레이 보스는 실제로
+    //     이동한다. 결정적 재현 결과 스폰 1초 뒤 6.90m, 12초 뒤 12~23m가
+    //     어긋나 판정 반경 6.0(+어뢰 0.35) 밖이었다 — 보이는 보스를 정확히
+    //     맞혀도 어뢰가 통과하고 bossHit·피해·격파가 전부 0이 됐다.
+    //     여기서는 게임플레이 **포트 값만** 복사해 넘긴다(객체 전달 0).
+    scene.attachBossViewSource({
+      coreView: () =>
+        this.bossSpawned && this.bossController ? this.bossController.view() : null,
+      poseView: () => {
+        if (!this.bossSpawned || !this.bossController) return null;
+        const boss = gameplay.boss;
+        if (!boss || boss.removed) return null;
+        const position = boss.getPosition();
+        const forward = boss.getForward();
+        return {
+          positionX: position.x,
+          positionY: position.y,
+          positionZ: position.z,
+          forwardX: forward.x,
+          forwardZ: forward.z,
+        };
+      },
+    });
     const survivalHud = new SurvivalHud(this.container);
     survivalHud.attachSource(playerHull, () => playerHull.consumeDamageFlash());
     const rendererCamera = this.renderer?.camera ?? null;
@@ -863,12 +1352,24 @@ export class Game {
         survivalHud.setVisible(inSortie);
         detectionHud.update();
         survivalHud.update(deltaSeconds);
+        // 발견 가능성 HUD 2종 — 같은 출항 게이트·같은 프레임에서 갱신한다.
+        // 둘 다 정본 read model 표시 전용이라 판정 순서에 영향이 없다.
+        interactionPromptHud.setVisible(inSortie);
+        explorationHud.setVisible(inSortie);
+        interactionPromptHud.update(deltaSeconds);
+        explorationHud.update(deltaSeconds);
+        // 보스 체력 HUD는 출항 게이트가 아니라 **보스 뷰 유무**로 뜬다 —
+        // 스폰 이후·격파 전에만 비-null이므로 조건을 여기서 다시 쓰지 않는다.
+        bossHealthHud.update(deltaSeconds);
         failureScreen.update();
         returnScreen.update();
       },
       dispose: () => {
         detectionHud.dispose();
         survivalHud.dispose();
+        interactionPromptHud.dispose();
+        explorationHud.dispose();
+        bossHealthHud.dispose();
         failureScreen.dispose();
         returnScreen.dispose();
       },
