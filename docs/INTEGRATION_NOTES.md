@@ -90,6 +90,19 @@
 
 ## 제안 목록
 
+### INT-RENDER-014 — [M1·M2] 보스 시각 read model·소나 액티브 핑 소스 계약 요청
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 그래픽스 창 |
+| 대상 시스템 | (신규 계약 요청 — 게임플레이 M1 보스·M2 핑 도착 시) `src/contracts/*` |
+| 필요한 변경 | ① **보스 시각 read model**: 그래픽스 `BossSegmentSpike`는 표현 API를 이미 노출한다 — `setWeakpointActive(bool)`·`setPhase(1|2|3)`·`notifyWeakpointHit()`·`notifyNormalHit()`. 게임플레이 보스 회색 상자(M1)의 판정 결과(약점 활성 창·명중 부위 구분·단계)를 이 형태로 통지하는 계약(이벤트 또는 read model) 정본을 요청. 렌더는 약점 판정·체력 임계값을 계산하지 않는다 ② **`SonarPingSource`**: 렌더 로컬 인터페이스(`src/render/SonarScope.ts` — `{pings: readonly {x,z,ageSeconds}[]}`)로 선정의. 게임플레이 액티브 핑 메커니즘(M2) 도착 시 정식 계약 이관 + `scene.attachSonarPingSource()` 1줄 배선. **미주입 = 미표시**(기능 위장 없음) |
+| 변경 이유 | M1 약점·단계 전환 표현(5상태)·M2 소나 스코프의 게임플레이 정본 연결. 스코프의 탐지·추적·소음·소음원은 기존 정본(DetectionHudView·TrackingStateSource·noiseChanged·ShipWorldSource) 재사용으로 이미 배선됨 — 신규 요청은 위 2건뿐 |
+| 영향을 받는 파일 | render: `SonarScope.ts`(신규)·`boss/BossSegmentSpike.ts`·`CanyonScene.ts`. 조립: `Game.ts` +2줄(소나 탐지·추적 소스 — DetectionHud와 동일 정본·동일 형태, 기존 배선 관례) |
+| 하위 호환 여부 | 깨지지 않음 — 전부 추가·미주입 안전(계약 무수정, 렌더 로컬 인터페이스는 AimAngleSource 관례) |
+| 개발 리드 결정 | **부분 해소 (PR #10)** — `src/contracts/sonar.ts`(SonarScopeReadModel)·`src/contracts/boss.ts`(BossCoreView·telegraph)·보스 이벤트 3종(bossPhaseChanged·bossWeakPointChanged·bossDefeated)으로 도착. 렌더는 정본 소비로 전환 완료 |
+| 적용 커밋 | feat/render — M0 실측 준비·M1/M2 최소 시각 소비자 + 정본 계약 소비 전환 커밋 |
+| **잔여 누락 (그래픽스 재보고)** | ① **보스 피격 통지(약점/일반 구분)** — `BossDamageRequest.kind`는 코어 입력 전용이라 렌더 노출 경로가 없다. 렌더 API(`notifyWeakpointHit`/`notifyNormalHit`)는 준비돼 있으니 이벤트(예: `bossDamaged {kind}`) 또는 BossCoreView 확장 결정 요청 ② **소나 공급자 미배선** — 게임플레이 `SonarScopeReadModel` 공급자 병합 시 `scene.attachSonarScopeSource()` 1줄(Game.ts 주석에 배선 지점 기재). 그 전까지 production 스코프는 '계기 미연결' 표시 |
 ### INT-GAME-017 — M1·M2 production 연결 (PR #9·#10 수신) + 잔여 blocker
 
 | 필드 | 내용 |
