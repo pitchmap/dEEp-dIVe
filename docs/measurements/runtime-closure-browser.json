@@ -6,9 +6,14 @@
   },
   "productionEntry": {
     "queryFlags": "none",
-    "fixtureLoaded": true
+    "fixtureState": "unknown",
+    "observationMode": "production-preview",
+    "fixtureSensitiveCriteria": [
+      "EC14",
+      "EC15"
+    ]
   },
-  "note": "⚠ fixture가 장착됐다 — 이 회차는 production 완료 판정에 쓸 수 없다",
+  "note": "fixture 판정 불가(디버그 핸들 없음) — production preview는 EC18·EC19 오류 관측에는 유효하지만, fixture 판정이 필요한 항목은 **dev-mode production composition 관측이 따로 필요하다**",
   "debugHandleAvailable": false,
   "results": [
     {
@@ -106,8 +111,8 @@
       "id": "EC14",
       "label": "production 소나 provider 표시 (계기 미연결 아님)",
       "auto": "probe",
-      "status": "unwired",
-      "detail": "스코프 read model이 미연결('계기 미연결') — unwired=true. pass로 올리지 않음"
+      "status": "blocked",
+      "detail": "production preview에는 DEV 디버그 핸들이 없어 fixture 장착 여부를 판정할 수 없다 — fixture 판정이 필요한 항목이므로 pass로 올리지 않는다. **dev-mode production composition 관측 필요**"
     },
     {
       "id": "EC15",

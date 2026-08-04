@@ -64,18 +64,18 @@
     "note": "출항 1회 최대 수입 참조값 — 위 dropTables·salvageSpawns에서 파생되며 검증기가 합계 일치를 확인한다(수치 중복 정의가 아니라 회귀 방지용 기대값)"
   },
   "farming": {
-    "$comment": "M2 4단계 파밍 보상 상한 — INT-CORE-022 / HANDOFF §2. **두 항목 모두 value: null.** sectorCapRatioOfCombatAverage 0.40은 16차 튜닝표 초기값이자 '기획 확인 후 입력' 절차 항목이라 확정값이 아니다(DECISIONS M-10) — 초기 후보를 확정값으로 위장하지 않는다. combatRewardAverageCredits는 기존 격침 보상표에서 파생하는 **산식 자체가 미결정**이다. 상한이 미확정이면 파밍은 지급하지 않는다 — '미확정 = 무제한'은 16차 결의가 명시적으로 거부한 방향이다. **clue 진행과 절대 혼합하지 않는다**: 단서는 재화가 아니고 이 블록은 진행도를 모른다. 신규 화폐 없음 — 기존 단일 재화에만 적립.",
+    "$comment": "M2 4단계 파밍 보상 상한 — INT-CORE-022 / HANDOFF §2. **두 항목 모두 [M1M2-INITIAL] 사용자 승인 초기값이 입력됐다** — 최초 production Runtime Closure 검증용이며 최종 밸런스 확정이 아니다. 파생 상한 = combatRewardAverageCredits 120 × sectorCapRatioOfCombatAverage 0.40 = **48 credits**(코드·다른 파일에 복제하지 않는다 — 소비 측이 두 값에서 파생한다). **clue 진행과 절대 혼합하지 않는다**: 단서는 재화가 아니고 이 블록은 진행도를 모른다. 신규 화폐 없음 — 기존 단일 재화에만 적립.",
     "sectorCapRatioOfCombatAverage": {
-      "value": null,
+      "value": 0.40,
       "range": [0.20, 0.60],
       "unit": "ratio",
-      "note": "해역당 파밍 상한 = 전투 보상 평균 × 이 비율. 초기 후보 0.40, **기획 확인 대기**"
+      "note": "[M1M2-INITIAL] 해역당 파밍 상한 = 전투 보상 평균 × 이 비율 — 사용자 승인 초기값. 최종 밸런스 확정 아님"
     },
     "combatRewardAverageCredits": {
-      "value": null,
+      "value": 120,
       "range": [10, 500],
       "unit": "credits",
-      "note": "상한 산정 기준이 되는 전투 보상 평균 — **산식 미결정, 기획 결정 대기**. null = 파밍 무지급 유지"
+      "note": "[M1M2-INITIAL] 상한 산정 기준이 되는 전투 보상 평균 — 사용자 승인 초기값. 파생 상한 = 120 × 0.40 = 48 credits. 최종 밸런스 확정 아님"
     }
   },
   "factionRewards": {

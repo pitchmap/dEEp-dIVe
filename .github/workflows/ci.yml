@@ -71,7 +71,13 @@ jobs:
         continue-on-error: true
         run: npm run verify:sprint-c
 
-      - name: M1·M2 Runtime Closure 검증 [BOSS][LOOP]
+      # 기본 PR CI는 보고 모드로만 돌린다 — blocked·unwired는 병렬 개발 중 정상 상태다.
+      # 최종 Exit 게이트는 통합 관리자가 production composition 완료 후 수동으로 실행한다:
+      #   npm run verify:runtime-closure -- --enforce-exit
+      #   (또는 DEEP_DIVE_ENFORCE_EXIT=1 npm run verify:runtime-closure)
+      # 강제 모드는 blocked·unwired·blockedByNullParam·fixtureLoaded·fixture unknown·
+      # 수동 증적 누락·Exit 19항목 미완을 전부 실패로 처리한다. 여기서는 돌리지 않는다.
+      - name: M1·M2 Runtime Closure 검증 (보고 모드) [BOSS][LOOP]
         run: npm run verify:runtime-closure
 
       - name: Runtime Closure 상태 JSON 업로드

@@ -55,6 +55,30 @@ export interface ClosureRunInput {
   cluePlacementsAbsenceReason: string | null;
   /** boss.json unlock.clueIds */
   bossUnlockClueIds: readonly string[];
+  /**
+   * `[M1M2-INITIAL]` 사용자 승인 초기값 — 러너가 상수로 주입한다.
+   * **검증기가 기대값을 들고 있어야** params가 조용히 바뀌었을 때 잡힌다.
+   */
+  approvedBossValues: {
+    readonly moveSpeed: number;
+    readonly turnRate: number;
+    readonly ramContactDamage: number;
+    readonly weakPointHitRadius: number;
+  };
+  /** `[M1M2-INITIAL]` 승인 초기값 — interaction·sonar·farming */
+  approvedValues: {
+    readonly holdSeconds: number;
+    readonly interactRadiusMeters: number;
+    readonly noiseContribution: number;
+    readonly pingDisplaySeconds: number;
+    readonly pingDetectionGaugeRise: number;
+    readonly pingCooldownSeconds: number;
+    readonly passiveBearingSpread: number;
+    readonly sectorCapRatio: number;
+    readonly combatRewardAverage: number;
+    /** 파생 상한 = 평균 × 비율. 코드·params 어디에도 복제하지 않고 여기서만 대조 */
+    readonly derivedSectorCapCredits: number;
+  };
   /** 이벤트·계약 정적 관측 */
   contracts: {
     readonly bossHitKindUnion: readonly string[];
@@ -69,6 +93,8 @@ export interface ClosureRunInput {
   };
   /** save v1→v2 마이그레이션 실행 결과 (러너가 실제 코드로 산출) */
   saveMigration: SaveMigrationObservation;
+  /** KeyQ = 액티브 소나 핑 정합 관측 (#14·#16 보완 커밋 대기 중일 수 있다) */
+  activePingKey: ActivePingKeyObservation;
   /** HANDOFF §5 16단계 배선 관측 (Game.ts 정적 스캔) */
   wiring: readonly WiringObservation[];
 }
@@ -98,6 +124,31 @@ export interface SaveMigrationObservation {
   readonly unknownClueDetail: string;
   /** 미래 버전(다운그레이드) 거부 여부 */
   readonly downgradeRejected: boolean;
+}
+
+/**
+ * KeyQ = 액티브 소나 핑 계약 관측.
+ *
+ * 각 항목은 '없음'과 '잘못 구현'을 구분한다 — 파일·API 부재는 `blocked`,
+ * 있는데 규칙 위반이면 `fail`이다. fixture에만 있으면 pass로 올리지 않는다.
+ */
+export interface ActivePingKeyObservation {
+  /** 게임플레이 `consumeActivePingPressed()`(또는 최종 동등 API) 선언 지점 */
+  readonly consumeApiSites: readonly string[];
+  /** production에서 KeyQ를 액티브 핑에 묶는 지점 */
+  readonly keyQBindingSites: readonly string[];
+  /** KeyQ가 다른 production 명령에 이미 묶여 있는 지점 (충돌 후보) */
+  readonly keyQConflictSites: readonly string[];
+  /** controlsConfig에 Q 도움말이 있는가 */
+  readonly controlsHelpSites: readonly string[];
+  /** `requestActivePing()` 연결 대상(소나 시스템 API) 선언 지점 */
+  readonly requestApiSites: readonly string[];
+  /** repeat 입력이 추가 요청을 만들지 않음을 검증하는 테스트 지점 */
+  readonly repeatGuardTestSites: readonly string[];
+  /** 쿨다운 거부를 검증하는 테스트 지점 */
+  readonly cooldownRejectTestSites: readonly string[];
+  /** fixture·데모에만 존재하는 지점 (production 증거로 인정하지 않는다) */
+  readonly fixtureOnlySites: readonly string[];
 }
 
 export interface WiringObservation {
@@ -206,15 +257,24 @@ export function runRuntimeClosureVerification(input: ClosureRunInput): ClosureRu
 
   /* ── 작업 1·2·3: params 로더 ─────────────────────────────── */
 
-  check('P1-interaction', 'interaction params — holdSeconds 확정 · 나머지 null 보존', () => {
+  check('P1-interaction', 'interaction params — [M1M2-INITIAL] 승인 초기값 정확 일치', () => {
     const hold = input.interaction.hold;
-    assert(hold.holdSeconds.value === 2.0, `holdSeconds 2.0 기대 (실제 ${hold.holdSeconds.value})`);
-    assert(hold.holdSeconds.unit === 'seconds', 'unit 필수');
-    // null이 0으로 바뀌지 않았는지 — 이게 이 검사의 핵심이다.
-    assert(hold.interactRadiusMeters.value === null, '반경은 승인 전 null 이어야 합니다');
-    assert(hold.noiseContribution.value === null, '소음 기여는 승인 전 null 이어야 합니다');
-    assert(hold.interactRadiusMeters.range.length === 2, 'range는 미확정이어도 계약으로 고정');
-    return `holdSeconds=2.0 · 반경 null · 소음 null · 미확정 ${input.interaction.pendingFields.length}건`;
+    const a = input.approvedValues;
+    assert(hold.holdSeconds.value === a.holdSeconds, `holdSeconds ${a.holdSeconds} 기대 (실제 ${hold.holdSeconds.value})`);
+    assert(
+      hold.interactRadiusMeters.value === a.interactRadiusMeters,
+      `interactRadiusMeters ${a.interactRadiusMeters} 기대 (실제 ${hold.interactRadiusMeters.value})`,
+    );
+    assert(
+      hold.noiseContribution.value === a.noiseContribution,
+      `noiseContribution ${a.noiseContribution} 기대 (실제 ${hold.noiseContribution.value})`,
+    );
+    // null→0 변환이 일어났다면 0이 들어왔을 자리 — 승인값이 0이 아니므로
+    // 이 단언이 그대로 변환 금지 회귀 검사가 된다.
+    assert(hold.noiseContribution.value !== 0, "소음 기여가 0이면 '소음 없는 회수'가 됩니다 (null→0 변환 의심)");
+    assert(hold.holdSeconds.unit === 'seconds' && hold.interactRadiusMeters.unit === 'meters', 'unit 유지');
+    assert(input.interaction.pendingFields.length === 0, `미확정 잔존 ${input.interaction.pendingFields.join(', ')}`);
+    return `holdSeconds=${hold.holdSeconds.value} · 반경=${hold.interactRadiusMeters.value} · 소음=${hold.noiseContribution.value} · 미확정 0`;
   });
 
   {
@@ -229,16 +289,24 @@ export function runRuntimeClosureVerification(input: ClosureRunInput): ClosureRu
     );
   }
 
-  check('P2-sonar', 'sonar params — 4항목 전부 null 보존 · 입력 키 부재', () => {
-    const s = input.sonar;
-    assert(s.activePing.displaySeconds.value === null, '핑 표시 시간은 기획 확인 전 null');
-    assert(s.activePing.detectionGaugeRise.value === null, '게이지 상승은 기획 확인 전 null');
-    assert(s.activePing.cooldownSeconds.value === null, '쿨다운은 기획 확인 전 null');
-    assert(s.passive.bearingSpreadRadiansAtMaxNoise.value === null, '방위 번짐은 승인 전 null');
-    for (const t of [s.activePing.displaySeconds, s.activePing.cooldownSeconds]) {
-      assert(t.unit.length > 0 && t.range.length === 2, 'unit·range는 미확정이어도 필수');
-    }
-    return `미확정 ${s.pendingFields.length}/4 — 16차 튜닝표 초기 후보(3.0/0.30/25)를 확정값으로 입력하지 않음`;
+  check('P2-sonar', 'sonar params — [M1M2-INITIAL] 승인 초기값 정확 일치 · 입력 키 부재', () => {
+    const sp = input.sonar;
+    const a = input.approvedValues;
+    assert(sp.activePing.displaySeconds.value === a.pingDisplaySeconds, `displaySeconds ${a.pingDisplaySeconds} 기대`);
+    assert(
+      sp.activePing.detectionGaugeRise.value === a.pingDetectionGaugeRise,
+      `detectionGaugeRise ${a.pingDetectionGaugeRise} 기대 (실제 ${sp.activePing.detectionGaugeRise.value})`,
+    );
+    assert(sp.activePing.cooldownSeconds.value === a.pingCooldownSeconds, `cooldownSeconds ${a.pingCooldownSeconds} 기대`);
+    assert(
+      sp.passive.bearingSpreadRadiansAtMaxNoise.value === a.passiveBearingSpread,
+      `bearingSpread ${a.passiveBearingSpread} 기대 (실제 ${sp.passive.bearingSpreadRadiansAtMaxNoise.value})`,
+    );
+    // 노출 대가·쿨다운이 0이면 '대가 없는 핑'이 된다 — null→0 회귀 검사.
+    assert(sp.activePing.detectionGaugeRise.value !== 0, '게이지 상승 0 = 대가 없는 핑 (null→0 변환 의심)');
+    assert(sp.activePing.cooldownSeconds.value !== 0, '쿨다운 0 = 연타 가능 (null→0 변환 의심)');
+    assert(sp.pendingFields.length === 0, `미확정 잔존 ${sp.pendingFields.join(', ')}`);
+    return `핑 ${sp.activePing.displaySeconds.value}s/${sp.activePing.detectionGaugeRise.value}/${sp.activePing.cooldownSeconds.value}s · 번짐 ${sp.passive.bearingSpreadRadiansAtMaxNoise.value}rad · 미확정 0`;
   });
 
   {
@@ -261,13 +329,23 @@ export function runRuntimeClosureVerification(input: ClosureRunInput): ClosureRu
     );
   }
 
-  check('P3-farming', 'economy farming — 두 항목 null 보존 · clue 혼합 없음', () => {
+  check('P3-farming', 'economy farming — 승인 초기값 · 파생 상한 48 · clue 혼합 없음', () => {
     const f = input.economyFarming;
+    const a = input.approvedValues;
     assert(f !== null, 'farming 블록이 economy.json에 있어야 합니다');
-    assert(f!.sectorCapRatioValue === null, '비율 0.40은 튜닝표 초기 후보 — 확정값으로 입력 금지');
-    assert(f!.combatRewardAverageValue === null, '평균 크레딧은 산식 미결정 — null 유지');
-    assert(!f!.capComputable, '상한을 계산할 수 없어야 합니다 (미확정)');
-    return '비율 null · 평균 null · 상한 계산 불가 → 파밍 무지급 유지';
+    assert(f!.sectorCapRatioValue === a.sectorCapRatio, `비율 ${a.sectorCapRatio} 기대 (실제 ${f!.sectorCapRatioValue})`);
+    assert(
+      f!.combatRewardAverageValue === a.combatRewardAverage,
+      `평균 ${a.combatRewardAverage} 기대 (실제 ${f!.combatRewardAverageValue})`,
+    );
+    assert(f!.capComputable, '두 값이 확정됐으므로 상한 계산이 가능해야 합니다');
+    // 파생 상한은 어디에도 저장하지 않는다 — 두 값에서 매번 계산해 대조한다.
+    const derived = f!.combatRewardAverageValue! * f!.sectorCapRatioValue!;
+    assert(
+      Math.abs(derived - a.derivedSectorCapCredits) < 1e-9,
+      `파생 상한 ${a.derivedSectorCapCredits} 기대 (실제 ${derived})`,
+    );
+    return `비율 ${f!.sectorCapRatioValue} × 평균 ${f!.combatRewardAverageValue} = **상한 ${derived} credits**`;
   });
 
   /* ── 작업 4: boss params (리드 로더 재사용) ───────────────── */
@@ -312,19 +390,29 @@ export function runRuntimeClosureVerification(input: ClosureRunInput): ClosureRu
     return `4필드 존재 · 미확정 ${pending.length}/4 [${pending.join(', ') || '없음'}] · range·unit 검증 통과`;
   });
 
-  check('B2-noAutoFill', 'boss 승인 전 숫자 자동 입력 0건 · fixture 숫자 production 복사 0건', () => {
-    // 승인 대기 4필드가 어느 시점에 조용히 채워졌다면 여기서 걸린다.
-    const filled = [
-      ['moveSpeed', input.boss.movement.moveSpeedMetersPerSecond.value],
-      ['turnRate', input.boss.movement.turnRateRadiansPerSecond.value],
-      ['ramContactDamage', input.boss.patterns.ram.contactDamage.value],
-      ['weakPointHitRadius', input.boss.patterns.weakPointOpen.hitRadiusMeters.value],
-    ].filter(([, v]) => v !== null);
+  check('B2-approvedValues', 'boss 승인 초기값 정확 일치 · 임의 입력 0건', () => {
+    // 승인 전에는 '전부 null'이 규칙이었다. 승인 후에는 **승인값과 정확히
+    // 일치**하는지가 규칙이다 — 어느 쪽이든 임의 입력은 여기서 걸린다.
+    const expected: readonly (readonly [string, number | null])[] = [
+      ['movement.moveSpeedMetersPerSecond', input.approvedBossValues.moveSpeed],
+      ['movement.turnRateRadiansPerSecond', input.approvedBossValues.turnRate],
+      ['patterns.ram.contactDamage', input.approvedBossValues.ramContactDamage],
+      ['patterns.weakPointOpen.hitRadiusMeters', input.approvedBossValues.weakPointHitRadius],
+    ];
+    const actual: readonly (readonly [string, number | null])[] = [
+      ['movement.moveSpeedMetersPerSecond', input.boss.movement.moveSpeedMetersPerSecond.value],
+      ['movement.turnRateRadiansPerSecond', input.boss.movement.turnRateRadiansPerSecond.value],
+      ['patterns.ram.contactDamage', input.boss.patterns.ram.contactDamage.value],
+      ['patterns.weakPointOpen.hitRadiusMeters', input.boss.patterns.weakPointOpen.hitRadiusMeters.value],
+    ];
+    const mismatch = actual.filter(([, value], i) => value !== expected[i]![1]);
     assert(
-      filled.length === 0,
-      `승인 대기 필드에 값이 들어있습니다: ${filled.map(([k, v]) => `${k}=${v}`).join(', ')} — 기획 승인 기록이 없으면 입력 금지`,
+      mismatch.length === 0,
+      `승인값과 불일치: ${mismatch
+        .map(([p, v]) => `${p}=${v} (기대 ${expected.find((e) => e[0] === p)?.[1]})`)
+        .join(', ')}`,
     );
-    return '승인 대기 4필드 전부 null — 자동 입력 0건';
+    return `4필드 승인값 일치 — ${actual.map(([p, v]) => `${p.split('.').pop()}=${v}`).join(' · ')}`;
   });
 
   /* ── 작업 5: clue mapping ────────────────────────────────── */
@@ -423,6 +511,52 @@ export function runRuntimeClosureVerification(input: ClosureRunInput): ClosureRu
     }
     return `${kinds.length}종: ${kinds.join(', ')}`;
   });
+
+  /* ── KeyQ = 액티브 소나 핑 정합 ──────────────────────────── */
+
+  {
+    const q = input.activePingKey;
+    const required: readonly (readonly [string, readonly string[]])[] = [
+      ['게임플레이 consume API', q.consumeApiSites],
+      ['requestActivePing 연결 대상', q.requestApiSites],
+      ['KeyQ 바인딩', q.keyQBindingSites],
+      ['controlsConfig Q 도움말', q.controlsHelpSites],
+      ['repeat 입력 가드 검증', q.repeatGuardTestSites],
+      ['쿨다운 거부 검증', q.cooldownRejectTestSites],
+    ];
+    const absent = required.filter(([, sites]) => sites.length === 0).map(([label]) => label);
+
+    if (q.keyQConflictSites.length > 0) {
+      // 있는데 틀린 것 — 이건 blocked가 아니라 fail이다.
+      note(
+        'Q1-activePingKey',
+        'KeyQ = 액티브 소나 핑 정합',
+        'fail',
+        `KeyQ가 기존 production 명령과 충돌합니다: ${q.keyQConflictSites.join(', ')}`,
+      );
+    } else if (absent.length === required.length && q.fixtureOnlySites.length > 0) {
+      note(
+        'Q1-activePingKey',
+        'KeyQ = 액티브 소나 핑 정합',
+        'blocked',
+        `fixture·데모에만 존재하고 production API가 없습니다 (${q.fixtureOnlySites.join(', ')}) — **fixture만으로 pass로 올리지 않는다**`,
+      );
+    } else if (absent.length > 0) {
+      note(
+        'Q1-activePingKey',
+        'KeyQ = 액티브 소나 핑 정합',
+        'blocked',
+        `미도착 ${absent.length}/${required.length}: ${absent.join(' · ')} — 게임플레이(#14)·그래픽스(#16) 보완 커밋 대기. 부재를 pass로 올리지 않는다`,
+      );
+    } else {
+      note(
+        'Q1-activePingKey',
+        'KeyQ = 액티브 소나 핑 정합',
+        'pass',
+        `consume=${q.consumeApiSites.join(',')} · request=${q.requestApiSites.join(',')} · KeyQ=${q.keyQBindingSites.join(',')} · 도움말=${q.controlsHelpSites.join(',')} · repeat 가드·쿨다운 거부 검증 존재 · 충돌 0`,
+      );
+    }
+  }
 
   /* ── 작업 8: composition wiring ──────────────────────────── */
 

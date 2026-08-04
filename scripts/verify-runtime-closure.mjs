@@ -89,10 +89,16 @@ if (!fileExists(CLUE_MODULE_REL)) {
 } else {
   try {
     const mod = await import(`../${CLUE_MODULE_REL}`);
-    const mapping = mod.CLUE_ID_BY_INTERACTABLE_ID ?? mod.clueIdByInteractableId ?? null;
-    const placements = mod.BOSS_CLUE_PLACEMENTS ?? mod.bossCluePlacements ?? null;
+    // 공식 정본 export 이름은 `CLUE_ID_BY_INTERACTABLE` 하나다 (INT-CORE-022 / PR #16).
+    // 이전 구현이 `..._ID` 접미사와 camelCase를 찾고 있어 정본이 도착해도
+    // '매핑을 찾지 못함'으로 빠질 수 있었다 — 정본 이름으로 정정한다.
+    const mapping = mod.CLUE_ID_BY_INTERACTABLE ?? null;
+    const placements = mod.BOSS_CLUE_PLACEMENTS ?? null;
     if (!mapping || !placements) {
-      cluePlacementsAbsenceReason = `${CLUE_MODULE_REL}는 있으나 매핑·배치 export를 찾지 못함`;
+      cluePlacementsAbsenceReason =
+        `${CLUE_MODULE_REL}는 있으나 정본 export를 찾지 못함 — ` +
+        `CLUE_ID_BY_INTERACTABLE=${mapping ? '있음' : '없음'}, BOSS_CLUE_PLACEMENTS=${placements ? '있음' : '없음'} ` +
+        `(실제 export: ${Object.keys(mod).join(', ') || '없음'})`;
     } else {
       cluePlacements = { clueIdByInteractableId: mapping, placements };
     }
@@ -275,6 +281,65 @@ const saveMigration = {
   downgradeRejected,
 };
 
+// ── KeyQ = 액티브 소나 핑 정합 관측 ──────────────────────────
+/** src/ 전체를 훑되 production/fixture를 구분한다 */
+function scanSources(predicate, { includeVerification = false } = {}) {
+  const hits = [];
+  const walk = (dir) => {
+    for (const entry of require('node:fs').readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith('.')) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (['node_modules', 'dist'].includes(entry.name)) continue;
+        walk(full);
+      } else if (entry.name.endsWith('.ts')) {
+        const rel = path.relative(projectRoot, full);
+        const isVerification = rel.includes('__verification__');
+        if (isVerification && !includeVerification) continue;
+        readFileSync(full, 'utf8')
+          .split('\n')
+          .forEach((line, i) => {
+            if (/^\s*(\/\/|\*)/.test(line)) return;
+            if (predicate(line, rel)) hits.push(`${rel}:${i + 1}`);
+          });
+      }
+    }
+  };
+  walk(path.join(projectRoot, 'src'));
+  return hits;
+}
+
+const isFixturePath = (rel) => /[Ff]ixture|[Dd]emo/.test(rel);
+
+function activePingKeyObservation() {
+  const consumeAll = scanSources((l) => /consumeActivePingPressed\s*\(/.test(l));
+  const requestAll = scanSources((l) => /requestActivePing\s*\(/.test(l));
+  const keyQAll = scanSources((l) => /'KeyQ'|"KeyQ"/.test(l));
+  const helpAll = scanSources((l, rel) => rel.endsWith(path.join('ui', 'controlsConfig.ts')) && /KeyQ|\bQ\b/.test(l));
+  // 충돌: KeyQ가 액티브 핑이 아닌 다른 명령에 묶인 지점
+  const conflicts = keyQAll.filter((site) => {
+    const [rel, lineNo] = site.split(':');
+    const line = readFileSync(path.join(projectRoot, rel), 'utf8').split('\n')[Number(lineNo) - 1] ?? '';
+    return !/ping|Ping|sonar|Sonar/.test(line);
+  });
+  return {
+    consumeApiSites: consumeAll.filter((s) => !isFixturePath(s)),
+    requestApiSites: requestAll.filter((s) => !isFixturePath(s)),
+    keyQBindingSites: keyQAll.filter((s) => !isFixturePath(s) && !conflicts.includes(s)),
+    keyQConflictSites: conflicts.filter((s) => !isFixturePath(s)),
+    controlsHelpSites: helpAll,
+    repeatGuardTestSites: scanSources(
+      (l) => /repeat/i.test(l) && /ping/i.test(l),
+      { includeVerification: true },
+    ),
+    cooldownRejectTestSites: scanSources(
+      (l) => /cooldown/i.test(l) && /(reject|거부|불가)/i.test(l),
+      { includeVerification: true },
+    ),
+    fixtureOnlySites: [...consumeAll, ...requestAll, ...keyQAll].filter(isFixturePath),
+  };
+}
+
 // ── HANDOFF §5 16단계 배선 관측 ───────────────────────────────
 const WIRING = [
   { step: 1, id: 'officialParams', label: '공식 params loader 결과 생성', impl: true, pattern: 'loadBossParams\\(' },
@@ -321,6 +386,25 @@ try {
     cluePlacements,
     cluePlacementsAbsenceReason,
     bossUnlockClueIds: bossJson.unlock?.clueIds ?? [],
+    // [M1M2-INITIAL] 사용자 승인 초기값 — 검증기가 기대값을 들고 대조한다.
+    approvedBossValues: {
+      moveSpeed: 7.0,
+      turnRate: 0.6,
+      ramContactDamage: 30,
+      weakPointHitRadius: 6.0,
+    },
+    approvedValues: {
+      holdSeconds: 2.0,
+      interactRadiusMeters: 6.0,
+      noiseContribution: 0.15,
+      pingDisplaySeconds: 3.0,
+      pingDetectionGaugeRise: 0.3,
+      pingCooldownSeconds: 25,
+      passiveBearingSpread: 0.45,
+      sectorCapRatio: 0.4,
+      combatRewardAverage: 120,
+      derivedSectorCapCredits: 48,
+    },
     contracts: {
       bossHitKindUnion: bossHitObservation().kinds,
       bossHitPayloadKeys: bossHitObservation().keys,
@@ -330,6 +414,7 @@ try {
       nonClueClueIdForbidden: nonClueClueIdForbidden(),
     },
     saveMigration,
+    activePingKey: activePingKeyObservation(),
     wiring,
   });
 } catch (error) {
@@ -415,6 +500,53 @@ writeFileSync(
   `${JSON.stringify({ schemaVersion: 1, checks, flags, blockers }, null, 2)}\n`,
 );
 
+// ── 최종 Exit 강제 모드 ───────────────────────────────────────
+//
+// 기본(병렬 개발) CI는 blocked·unwired를 허용한다. 통합 관리자가
+// production composition을 끝낸 뒤 `--enforce-exit`(또는 환경변수)로
+// 실행하면 그 관용이 사라진다 — 남은 blocked·unwired·미확정 params·
+// fixture 오염·미기록 manual 증거·Exit 미완료가 전부 실패다.
+const ENFORCE =
+  process.argv.includes('--enforce-exit') || process.env.DEEP_DIVE_ENFORCE_EXIT === '1';
+
+if (ENFORCE) {
+  const violations = [];
+  for (const c of checks) {
+    if (c.status === 'blocked') violations.push(`BLOCKED:${c.id}`);
+    if (c.status === 'unwired') violations.push(`UNWIRED:${c.id}`);
+    if (c.status === 'blockedByNullParam') violations.push(`NULL_PARAM:${c.id}`);
+  }
+
+  // 브라우저 하네스 결과를 함께 강제한다 — 정적 검증만으로 Exit를 열지 않는다.
+  const browserPath = path.join(projectRoot, 'docs', 'measurements', 'runtime-closure-browser.json');
+  if (!existsSync(browserPath)) {
+    violations.push('BROWSER_HARNESS_NOT_RUN:runtime-closure-browser.json 없음');
+  } else {
+    const browser = JSON.parse(readFileSync(browserPath, 'utf8'));
+    const fixtureState = browser.productionEntry?.fixtureState;
+    const sensitive = new Set(browser.productionEntry?.fixtureSensitiveCriteria ?? []);
+    if (fixtureState === true) violations.push('FIXTURE_LOADED:production 판정에 fixture가 섞였다');
+    for (const r of browser.results ?? []) {
+      if (fixtureState === 'unknown' && sensitive.has(r.id)) {
+        violations.push(`FIXTURE_STATE_UNKNOWN:${r.id} — fixture 판정이 필요한 항목`);
+      }
+      // manual 항목은 증거 기록(evidence)이 있어야 인정한다.
+      if (r.status === 'manual' && !r.evidence) violations.push(`MANUAL_EVIDENCE_MISSING:${r.id}`);
+      if (r.status !== 'pass' && r.status !== 'manual') violations.push(`EXIT_INCOMPLETE:${r.id}(${r.status})`);
+    }
+  }
+
+  console.log('\n=== 최종 Exit 강제 모드 (--enforce-exit) ===');
+  if (violations.length === 0) {
+    console.log('✅ 강제 조건 전부 충족 — Exit gate 통과 가능.');
+  } else {
+    console.error(`✖ 강제 모드 위반 ${violations.length}건:`);
+    for (const v of violations) console.error(`  ${v}`);
+    console.error('\n최종 Exit 게이트 미통과.');
+    process.exit(1);
+  }
+}
+
 if (failures.length > 0) {
   console.error(`\n✖ 실패 ${failures.length}건 — 계약 위반·잘못된 pass 승격·verifier 오류입니다.`);
   process.exit(1);
@@ -422,3 +554,8 @@ if (failures.length > 0) {
 console.log(
   '\n✅ fail 0건. blocked·unwired·blockedByNullParam은 병렬 개발 중 정상 상태이며 CI를 실패시키지 않습니다.',
 );
+if (!ENFORCE) {
+  console.log(
+    '   최종 통합용 강제 모드: `npm run verify:runtime-closure -- --enforce-exit` (또는 DEEP_DIVE_ENFORCE_EXIT=1)',
+  );
+}

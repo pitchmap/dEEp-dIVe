@@ -102,15 +102,25 @@ await page.goto(BASE, { waitUntil: 'load' });
 await page.waitForFunction(() => document.querySelector('canvas') !== null, { timeout: 20000 });
 await page.waitForTimeout(1200);
 
-/** 부팅 상태 관측 — 읽기 전용 디버그 핸들만 사용 */
+/**
+ * 부팅 상태 관측 — 읽기 전용 디버그 핸들만 사용.
+ *
+ * 디버그 핸들은 **DEV 빌드 전용**이다. `vite preview`(production 번들)에는
+ * 없으므로 fixture 여부를 판정할 수 없다 — 그 상태를 'fixture 장착'으로
+ * 읽으면 안 된다(F-1 오판). 아래는 핸들 유무를 먼저 알리고, 값 없음을
+ * `undefined`가 아니라 명시적으로 구분해 돌려준다.
+ */
 const probe = await page.evaluate(() => {
   const dbg = window.__deepDiveDebug ?? null;
   if (!dbg) return { debugHandleAvailable: false };
   const scene = dbg.scene ?? null;
   const gameplay = dbg.gameplay ?? null;
+  const has = (o, k) => o !== null && o !== undefined && k in o;
   return {
     debugHandleAvailable: true,
-    // fixture가 장착되지 않았음을 먼저 확인한다 — production 판정의 전제.
+    // 키 존재 여부와 값을 나눠 싣는다 — `undefined !== null`로 오판하지 않기 위해서.
+    sprintBFixtureObservable: has(scene, 'sprintBFixture'),
+    sonarFixtureObservable: has(scene, 'sonarFixture'),
     sprintBFixture: scene?.sprintBFixture ?? null,
     sonarFixture: scene?.sonarFixture ?? null,
     sonarScopeReadModel:
@@ -133,7 +143,28 @@ try {
 // 배선이 없으면 관측 자체가 불가능하다. 그것을 pass·0으로 적지 않는다.
 const scopeWired =
   probe.sonarScopeReadModel !== null && probe.sonarScopeReadModel?.unwired === false;
-const fixtureLoaded = probe.sprintBFixture !== null || probe.sonarFixture !== null;
+
+/**
+ * fixture 상태 3상 (F-1 수정).
+ *
+ *  - `true`    : 디버그 핸들이 있고 fixture 장착이 **명시적으로 확인**됨
+ *  - `false`   : 디버그 핸들이 있고 fixture 미장착이 **명시적으로 확인**됨
+ *  - `unknown` : 디버그 핸들이 없어 **판정할 수 없음**
+ *
+ * `unknown`을 `true`로 취급하지 않고, **미장착 증거로도 쓰지 않는다.**
+ * production preview(번들)에는 DEV 핸들이 없으므로 여기서는 대개 unknown이며,
+ * fixture 판정이 필요한 Exit 항목은 dev-mode production composition 관측이
+ * 따로 필요하다.
+ */
+function resolveFixtureState() {
+  if (!probe.debugHandleAvailable) return 'unknown';
+  const observable = probe.sprintBFixtureObservable || probe.sonarFixtureObservable;
+  if (!observable) return 'unknown';
+  return probe.sprintBFixture !== null || probe.sonarFixture !== null;
+}
+const fixtureState = resolveFixtureState();
+/** fixture 판정이 필요한 Exit 항목 — unknown이면 증거가 되지 못한다 */
+const FIXTURE_SENSITIVE = new Set(['EC14', 'EC15']);
 
 const results = CRITERIA.map((c) => {
   if (c.id === 'EC18') {
@@ -151,11 +182,20 @@ const results = CRITERIA.map((c) => {
     };
   }
   if (c.id === 'EC14') {
+    if (fixtureState === 'unknown') {
+      return {
+        ...c,
+        status: 'blocked',
+        detail:
+          'production preview에는 DEV 디버그 핸들이 없어 fixture 장착 여부를 판정할 수 없다 — ' +
+          'fixture 판정이 필요한 항목이므로 pass로 올리지 않는다. **dev-mode production composition 관측 필요**',
+      };
+    }
     return {
       ...c,
       status: scopeWired ? 'pass' : 'unwired',
       detail: scopeWired
-        ? 'sonarScopeReadModel().unwired === false — provider 연결됨'
+        ? 'sonarScopeReadModel().unwired === false — provider 연결됨 (fixture 미장착 확인됨)'
         : `스코프 read model이 미연결('계기 미연결') — ${probe.sonarScopeReadModel === null ? 'read model 자체 없음' : 'unwired=true'}. pass로 올리지 않음`,
     };
   }
@@ -178,10 +218,19 @@ const summary = {
   schemaVersion: 1,
   // 기기 고유 식별자·개인정보 없음 — 브라우저 종류만.
   environment: { browser: 'chromium (headless container)', viewport: '1280x720' },
-  productionEntry: { queryFlags: 'none', fixtureLoaded },
-  note: fixtureLoaded
-    ? '⚠ fixture가 장착됐다 — 이 회차는 production 완료 판정에 쓸 수 없다'
-    : 'fixture 미장착 — production 진입 경로 확인',
+  productionEntry: {
+    queryFlags: 'none',
+    // 3상: true | false | 'unknown'. unknown을 true로도 false로도 쓰지 않는다.
+    fixtureState,
+    observationMode: probe.debugHandleAvailable ? 'dev-handle' : 'production-preview',
+    fixtureSensitiveCriteria: [...FIXTURE_SENSITIVE],
+  },
+  note:
+    fixtureState === true
+      ? '⚠ fixture가 장착됐다 — 이 회차는 production 완료 판정에 쓸 수 없다'
+      : fixtureState === false
+        ? 'fixture 미장착이 명시적으로 확인됨 — production 진입 경로'
+        : 'fixture 판정 불가(디버그 핸들 없음) — production preview는 EC18·EC19 오류 관측에는 유효하지만, fixture 판정이 필요한 항목은 **dev-mode production composition 관측이 따로 필요하다**',
   debugHandleAvailable: probe.debugHandleAvailable,
   results,
 };
@@ -195,7 +244,17 @@ writeFileSync(
 
 const MARK = { pass: '✔', fail: '✖', manual: '◻', blocked: '⛔', unwired: '○' };
 console.log('=== M1·M2 Exit Criteria — production 브라우저 관측 ===');
-console.log(`fixture 장착: ${fixtureLoaded ? '예 (판정 불가)' : '아니오'} · 디버그 핸들: ${probe.debugHandleAvailable}\n`);
+console.log(
+  `fixture 상태: ${fixtureState} · 관측 모드: ${probe.debugHandleAvailable ? 'dev-handle' : 'production-preview'}`,
+);
+if (fixtureState === 'unknown') {
+  console.log(
+    '⚠ 디버그 핸들이 없어 fixture 판정 불가 — unknown을 장착·미장착 어느 쪽 증거로도 쓰지 않는다.',
+  );
+  console.log('  EC18·EC19(콘솔·페이지 오류)는 preview에서 계속 유효하게 관측된다.\n');
+} else {
+  console.log('');
+}
 for (const r of results) console.log(`${MARK[r.status]} [${r.status}] ${r.id} ${r.label}\n    → ${r.detail}`);
 
 const counts = results.reduce((acc, r) => ({ ...acc, [r.status]: (acc[r.status] ?? 0) + 1 }), {});
