@@ -2816,19 +2816,68 @@ export function runMetaVerification(options: { bossJson?: unknown } = {}): Verif
 
   /* ═══ INT-CORE-022 Runtime Closure 계약 (승인 대기 params·약점 이벤트·마이그레이션 정책) ═══ */
   {
-    // ── 승인 대기 4필드: null 보존 (null→0 변환 0) ──
+    // ── 사용자 승인 M1·M2 초기 튜닝값 4필드 ([M1M2-INITIAL] — RC 교차 감사
+    //    확정: 7.0 / 0.6 / 30 / 6.0). 구 '승인 대기 null 보존' 상태 단언은
+    //    승인 완료로 낡아 교체됐다. NullableTunable의 null 지원 자체·
+    //    null→0 변환 금지·타 미승인 params의 null 정책은 그대로 유지된다
+    //    (아래 키 누락·범위·관계 검사 + P계열 params 검증이 담당).
     {
-      const params = validateBossParams(structuredClone(options.bossJson));
+      // ① 공식 로더가 승인값을 정확히 보존하는가 — 승인값 fixture를
+      //    로더에 통과시켜 단언한다 (params/boss.json 입력은 툴링 PR 소유
+      //    이므로 이 검사는 JSON 입력 여부와 무관하게 로더 계약을 고정).
+      const APPROVED = {
+        moveSpeed: 7.0,
+        turnRate: 0.6,
+        ramContactDamage: 30,
+        hitRadiusMeters: 6.0,
+      } as const;
+      const approvedJson = structuredClone(options.bossJson) as Record<string, unknown>;
+      const setValue = (block: unknown, key: string, value: number): void => {
+        const entry = (block as Record<string, unknown>)[key] as Record<string, unknown>;
+        entry['value'] = value;
+      };
+      const movement = approvedJson['movement'];
+      setValue(movement, 'moveSpeedMetersPerSecond', APPROVED.moveSpeed);
+      setValue(movement, 'turnRateRadiansPerSecond', APPROVED.turnRate);
+      const patterns = approvedJson['patterns'] as Record<string, unknown>;
+      setValue(patterns['ram'], 'contactDamage', APPROVED.ramContactDamage);
+      setValue(patterns['weakPointOpen'], 'hitRadiusMeters', APPROVED.hitRadiusMeters);
+      const params = validateBossParams(approvedJson);
+      const move = params.movement.moveSpeedMetersPerSecond;
+      const turn = params.movement.turnRateRadiansPerSecond;
+      const ram = params.patterns.ram.contactDamage;
+      const radius = params.patterns.weakPointOpen.hitRadiusMeters;
+      const inRange = (entry: { value: number | null; range: [number, number] }): boolean =>
+        entry.value !== null && entry.value >= entry.range[0] && entry.value <= entry.range[1];
       check(
-        'RC params: 승인 대기 4필드(이동·선회·돌진 피해·약점 반경) null 보존 — 0 변환·fallback 없음',
-        params.movement.moveSpeedMetersPerSecond.value === null &&
-          params.movement.turnRateRadiansPerSecond.value === null &&
-          params.patterns.ram.contactDamage.value === null &&
-          params.patterns.weakPointOpen.hitRadiusMeters.value === null,
-        `값=${JSON.stringify([
-          params.movement.moveSpeedMetersPerSecond.value,
-          params.patterns.ram.contactDamage.value,
-          params.patterns.weakPointOpen.hitRadiusMeters.value,
+        'RC params: 사용자 승인 초기값 4필드 정확 보존 — 로더 경유·null 아님·0/fallback 변환 없음·범위 내·이동≤돌진',
+        move.value === APPROVED.moveSpeed &&
+          turn.value === APPROVED.turnRate &&
+          ram.value === APPROVED.ramContactDamage &&
+          radius.value === APPROVED.hitRadiusMeters &&
+          inRange(move) && inRange(turn) && inRange(ram) && inRange(radius) &&
+          (move.value as number) <= params.patterns.ram.speedMetersPerSecond.value,
+        `값=${JSON.stringify([move.value, turn.value, ram.value, radius.value])}, 돌진=${params.patterns.ram.speedMetersPerSecond.value}`,
+      );
+
+      // ② production boss.json 표류 방지 — 4필드는 '입력 전 null' 또는
+      //    '정확한 승인값'만 허용한다. 승인값과 다른 숫자가 들어오면
+      //    (예: 8.0) 여기서 잡힌다. 툴링 PR #15 병합 전(null)·후(승인값)
+      //    양쪽 상태에서 통과하며, 그 외 어떤 값도 통과하지 않는다.
+      const production = validateBossParams(structuredClone(options.bossJson));
+      const nullOrApproved = (value: number | null, approved: number): boolean =>
+        value === null || value === approved;
+      check(
+        'RC params: production boss.json 4필드 = null(입력 전) 또는 정확한 승인값 — 표류·임의 수치 0',
+        nullOrApproved(production.movement.moveSpeedMetersPerSecond.value, APPROVED.moveSpeed) &&
+          nullOrApproved(production.movement.turnRateRadiansPerSecond.value, APPROVED.turnRate) &&
+          nullOrApproved(production.patterns.ram.contactDamage.value, APPROVED.ramContactDamage) &&
+          nullOrApproved(production.patterns.weakPointOpen.hitRadiusMeters.value, APPROVED.hitRadiusMeters),
+        `production=${JSON.stringify([
+          production.movement.moveSpeedMetersPerSecond.value,
+          production.movement.turnRateRadiansPerSecond.value,
+          production.patterns.ram.contactDamage.value,
+          production.patterns.weakPointOpen.hitRadiusMeters.value,
         ])}`,
       );
     }
