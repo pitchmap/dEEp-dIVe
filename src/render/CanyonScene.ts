@@ -67,8 +67,8 @@ import { PropellerWake } from './PropellerWake';
 import { buildRockShellGeometry, buildSeabedGeometry } from './RockShell';
 import { parseRenderQuality, type RenderQuality } from './renderQuality';
 import { initSceneTextures, onSceneTexture } from './sceneTextures';
-import { SonarScope, type SonarDetectionSource, type SonarPingSource } from './SonarScope';
-import type { TrackingStateSource } from '../contracts/detection';
+import { SonarScope, type SonarScopeSource } from './SonarScope';
+import type { BossCoreView } from '../contracts/boss';
 import { SubmarineVisual } from './SubmarineVisual';
 import type { TorpedoStateSource } from './TorpedoVisuals';
 import { TorpedoVisuals } from './TorpedoVisuals';
@@ -199,6 +199,8 @@ export class CanyonScene implements ManagedScene {
   // QA 격리 경로 — 기지 화면 미리보기(?base=1)·보스 분절 스파이크(?bossSpike=1)
   private baseView: BaseSceneView | null = null;
   private bossSpike: BossSegmentSpike | null = null;
+  /** 보스 정본 읽기 모델 폴링 소스 — production 조립부 주입 (미주입 = autoDemo/이벤트만) */
+  private bossViewSource: { coreView(): BossCoreView | null } | null = null;
   // 경제·성장 UI QA 데모(?econdemo=1) — 실사용 배선 아님 (배지로 구분)
   private econDemo: EconomyUiQaDemo | null = null;
   // 스프린트 B 표시 규칙 UI 단위 검증 fixture(?bdemo=1) — production 아님
@@ -225,8 +227,8 @@ export class CanyonScene implements ManagedScene {
   private unsubscribeAimMode: Unsubscribe | null = null;
   // floodingChanged 구독 — X-ray 침수 표시 구동 (C5, severity 매핑만)
   private unsubscribeFlooding: Unsubscribe | null = null;
-  // noiseChanged 구독 — 소나 스코프 자기 소음 표시 (값 전달만)
-  private unsubscribeNoise: Unsubscribe | null = null;
+  // 보스 통지 이벤트 구독 (phase·weakPoint·defeated — 표현 매핑만)
+  private readonly unsubscribeBossEvents: Unsubscribe[] = [];
   /** 침수 X-ray 인스턴스 — severity > 0 최초 수신 시 잠수함에 지연 장착 */
   private floodingXray: XrayFloodingSpike | null = null;
 
@@ -323,6 +325,7 @@ export class CanyonScene implements ManagedScene {
     );
 
     this.shipDemoSnapshot = this.parseShipDemoSnapshot();
+    this.mountSonarDemoIfRequested();
     this.mountXraySpikeIfRequested();
     this.mountBossSpikeIfRequested();
     this.mountBaseViewIfRequested();
@@ -487,8 +490,6 @@ export class CanyonScene implements ManagedScene {
    */
   attachShipWorldSource(source: ShipWorldSource): void {
     this.shipWorldSource = source;
-    // 소나 패시브 소음원 — 같은 read model을 방위 표시로만 소비
-    this.sonarScope.attachContactsSource(source);
   }
 
   /**
@@ -545,19 +546,22 @@ export class CanyonScene implements ManagedScene {
     this.salvageVisuals.attachSource(source);
   }
 
-  /** 소나 스코프 탐지 뷰 — DetectionHud와 동일 소스 형태 (composition 1회) */
-  attachSonarDetectionSource(source: SonarDetectionSource): void {
-    this.sonarScope.attachDetectionSource(source);
+  /**
+   * 소나 스코프 공급자 주입 — 정본 계약 `SonarScopeReadModel`
+   * (src/contracts/sonar.ts) 폴링 단면 하나만 받는다. 게임플레이 공급자
+   * 도착 시 composition root가 1회 주입 — 미주입 동안 '계기 미연결'.
+   */
+  attachSonarScopeSource(source: SonarScopeSource): void {
+    this.sonarScope.attachSource(source);
   }
 
-  /** 소나 스코프 공격태세(테두리 적색) — TrackingStateSource 재사용 */
-  attachSonarTrackingSource(source: TrackingStateSource): void {
-    this.sonarScope.attachTrackingSource(source);
-  }
-
-  /** 액티브 핑 소스 — 게임플레이 핑 메커니즘 도착 시 주입 (미주입=미표시) */
-  attachSonarPingSource(source: SonarPingSource): void {
-    this.sonarScope.attachPingSource(source);
+  /**
+   * 보스 정본 읽기 모델(`BossCoreView`) 폴링 소스 주입 — production 보스
+   * 조립 시 composition root가 1회 주입한다. 렌더는 phase·weakPointOpen·
+   * telegraph·defeated를 매핑만 한다 (판정·피해·단계 계산 0).
+   */
+  attachBossViewSource(source: { coreView(): BossCoreView | null }): void {
+    this.bossViewSource = source;
   }
 
   /**
@@ -628,11 +632,17 @@ export class CanyonScene implements ManagedScene {
     this.unsubscribeFlooding = bus.on('floodingChanged', (payload) => {
       this.applyFloodingSeverity(payload.severity);
     });
-    // 소나 스코프 자기 소음 — noiseChanged 값(0~1)의 표시 전달만
-    this.unsubscribeNoise?.();
-    this.unsubscribeNoise = bus.on('noiseChanged', (payload) => {
-      this.sonarScope.setNoiseLevel(payload.level);
-    });
+    // 보스 통지 이벤트 — 발행 정본(bossPhaseChanged·bossWeakPointChanged·
+    // bossDefeated)을 표현으로만 매핑한다. 보스 시각물 미장착 시 무시.
+    this.unsubscribeBossEvents.forEach((unsubscribe) => unsubscribe());
+    this.unsubscribeBossEvents.length = 0;
+    this.unsubscribeBossEvents.push(
+      bus.on('bossPhaseChanged', ({ phase }) => this.bossSpike?.setPhase(phase)),
+      bus.on('bossWeakPointChanged', ({ active }) =>
+        this.bossSpike?.setWeakpointActive(active),
+      ),
+      bus.on('bossDefeated', () => this.bossSpike?.applyCoreViewDefeated()),
+    );
     // 조준경: 게임플레이가 발행한 조준 상태만 소비 — 렌더 독자 전환 없음
     this.unsubscribeAimMode?.();
     this.unsubscribeAimMode = bus.on('aimModeChanged', (payload) => {
@@ -798,8 +808,8 @@ export class CanyonScene implements ManagedScene {
     this.guardDirection?.update(deltaSeconds, this.renderer.camera);
     this.updateLeadIndicator();
     this.updateCargoShip(deltaSeconds);
-    // 소나 스코프 — 계약 포즈(선수 방위·수평 위치)와 read model만 전달
-    this.sonarScope.update(deltaSeconds, heading, x, z);
+    // 소나 스코프 — 정본 read model 폴링만 (월드 좌표 전달 없음)
+    this.sonarScope.update(deltaSeconds);
     this.updateFogByCameraDepth();
     // 부유물은 최종 카메라 위치 기준으로 되감는다 (조준 시점 포함)
     this.drift.update(
@@ -809,6 +819,9 @@ export class CanyonScene implements ManagedScene {
       this.renderer.camera.position.z,
     );
     this.xraySpike?.update(deltaSeconds);
+    // 보스 정본 읽기 모델 — 주입돼 있으면 매 프레임 매핑 (이벤트와 멱등 병행)
+    const bossView = this.bossViewSource?.coreView() ?? null;
+    if (bossView && this.bossSpike) this.bossSpike.applyCoreView(bossView);
     this.bossSpike?.update(deltaSeconds);
   }
 
@@ -953,8 +966,8 @@ export class CanyonScene implements ManagedScene {
     this.unsubscribeAimMode = null;
     this.unsubscribeFlooding?.();
     this.unsubscribeFlooding = null;
-    this.unsubscribeNoise?.();
-    this.unsubscribeNoise = null;
+    this.unsubscribeBossEvents.forEach((unsubscribe) => unsubscribe());
+    this.unsubscribeBossEvents.length = 0;
     this.sonarScope.dispose();
     this.floodingXray?.dispose();
     this.floodingXray = null;
@@ -1171,6 +1184,56 @@ export class CanyonScene implements ManagedScene {
       sinkProgress: progress,
       removed: false,
     });
+  }
+
+  /**
+   * 소나 스코프 **표시 규칙 검수 fixture** — `?sonardemo=1` (production 아님).
+   * 게임플레이 공급자가 없는 동안 계약 형태의 표본(`SonarScopeReadModel`)을
+   * 시간 순환으로 물려 blip 3종·번짐·거리 미상·핑·테두리 3색·소음을
+   * 브라우저에서 검수한다. 배지로 구분하며, 정식 공급자 주입 시(조립부
+   * attachSonarScopeSource) 이 경로는 사용하지 않는다.
+   */
+  private mountSonarDemoIfRequested(): void {
+    if (new URLSearchParams(window.location.search).get('sonardemo') !== '1') return;
+    const start = performance.now();
+    this.sonarScope.attachSource({
+      scopeView: () => {
+        const t = (performance.now() - start) / 1000;
+        const ring = Math.floor(t / 4) % 3;
+        const pingCycle = t % 12;
+        return {
+          unwired: false,
+          noiseFactor: (Math.sin(t * 0.5) + 1) / 2,
+          blips: [
+            { targetId: 'demo-ship', kind: 'ship', bearingRadians: 0.6 + t * 0.05,
+              bearingSpreadRadians: 0.3, distanceMeters: 60, fromActivePing: false },
+            { targetId: 'demo-passive', kind: 'ship', bearingRadians: -1.4,
+              bearingSpreadRadians: 0.5, distanceMeters: null, fromActivePing: false },
+            { targetId: 'demo-torpedo', kind: 'torpedo', bearingRadians: 2.4,
+              bearingSpreadRadians: 0.05, distanceMeters: 35, fromActivePing: false },
+            { targetId: 'demo-charge', kind: 'depthCharge', bearingRadians: -2.6,
+              bearingSpreadRadians: 0.08, distanceMeters: 25, fromActivePing: false },
+            ...(pingCycle < 3
+              ? [{ targetId: 'demo-ping', kind: 'ship' as const, bearingRadians: 1.6,
+                  bearingSpreadRadians: 0, distanceMeters: 80, fromActivePing: true }]
+              : []),
+          ],
+          activePingRemainingSeconds: pingCycle < 3 ? 3 - pingCycle : 0,
+          cooldownRemainingSeconds: pingCycle >= 3 && pingCycle < 9 ? 9 - pingCycle : 0,
+          pingReady: pingCycle >= 9,
+          ringState: ring === 0 ? 'safe' : ring === 1 ? 'searching' : 'detected',
+        };
+      },
+    });
+    const host = this.renderer.webgl.domElement.parentElement ?? document.body;
+    const badge = document.createElement('div');
+    badge.setAttribute('data-render-sonar-demo-badge', '');
+    badge.textContent = '소나 fixture — 표시 규칙 검수용 (게임플레이 실제 상태 아님)';
+    badge.style.cssText =
+      'position:absolute;left:0.75rem;top:20vh;z-index:33;padding:0.25rem 0.5rem;border:1px dashed #ffb347;border-radius:4px;background:rgba(6,16,22,0.85);color:#ffb347;font:0.7rem system-ui,sans-serif';
+    host.appendChild(badge);
+    this.disposables.push({ dispose: () => badge.remove() });
+    console.info('[CanyonScene] 소나 fixture 장착 (?sonardemo=1 — 표시 규칙 검수 전용).');
   }
 
   /**

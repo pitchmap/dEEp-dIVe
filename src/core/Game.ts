@@ -807,13 +807,11 @@ export class Game {
       hudView: () => gameplay.detectionHudView(),
     });
     detectionHud.attachTrackingSource(guardAdapter);
-    //     소나 스코프(그래픽스 소유 계기) — 같은 정본을 같은 형태로 소비한다:
-    //     탐지 뷰(테두리 황색·미연결 표시)와 추적 상태(공격태세 적색)만.
-    //     액티브 핑 소스는 게임플레이 핑 메커니즘 도착 시 주입(INT-RENDER-014).
-    scene.attachSonarDetectionSource({
-      hudView: () => gameplay.detectionHudView(),
-    });
-    scene.attachSonarTrackingSource(guardAdapter);
+    //     소나 스코프(그래픽스 소유 계기)는 정본 계약 `SonarScopeReadModel`
+    //     (contracts/sonar.ts) **하나만** 소비한다. 게임플레이 공급자가 아직
+    //     dev에 없으므로 미주입 상태로 둔다 — 스코프는 '계기 미연결'을
+    //     표시한다(작동 위장 금지). 공급자 병합 시 배선 1줄:
+    //     `scene.attachSonarScopeSource({ scopeView: () => gameplay.sonarScopeView() })`
     const survivalHud = new SurvivalHud(this.container);
     survivalHud.attachSource(playerHull, () => playerHull.consumeDamageFlash());
     const rendererCamera = this.renderer?.camera ?? null;

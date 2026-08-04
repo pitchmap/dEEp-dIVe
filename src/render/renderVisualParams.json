@@ -50,6 +50,9 @@
     "colorWary": "#e0b34a",
     "colorAttack": "#e05545",
     "contactColor": "#9fb4ba",
+    "blipTorpedoColor": "#e0985a",
+    "blipDepthChargeColor": "#e6d36a",
+    "pingCooldownDisplayCapSeconds": 10,
     "noiseRingColor": "#7fd8cf"
   },
   "bossSpike": {
@@ -57,6 +60,9 @@
     "weakpointHitFlashSeconds": 0.35,
     "normalHitFlashSeconds": 0.18,
     "phaseSurgeSeconds": 1.2,
+    "telegraphPulseHz": 1.5,
+    "telegraphCrouchAmplitudeScale": 0.55,
+    "finalPhaseCycleScale": 1.35,
     "swimCycleSeconds": 3.4,
     "tailSwingRadians": 0.42,
     "tailLagRadians": 0.9,

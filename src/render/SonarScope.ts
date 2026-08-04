@@ -1,45 +1,34 @@
 /**
  * 소나 스코프 — 좌측 상단 원형 다이제틱 계기 (2D 캔버스, 화면 높이 18% 이하).
  *
- * 경계 (판정 계산 금지 — 표시 매핑만):
- *  - 탐지 단계·게이지: 계약 `DetectionHudView`(hudView()) 소비만. unwired면
- *    빗금 + '계기 미연결'로 정지 상태를 그대로 노출한다 (작동 위장 금지).
- *  - 공격태세: 계약 `TrackingStateSource.trackedShips`의 state==='attack'
- *    존재 여부만 읽는다 — 렌더가 추적 단계를 재판정하지 않는다.
- *  - 패시브 소음원: `ShipWorldSource`의 실제 개체 위치 → 방위·개략 거리로
- *    **매핑**만 한다 (GuardDirectionIndicator와 같은 관례). 세력·식별
- *    정보는 표시하지 않는다 — 미식별 세력 조기 노출 금지(B2)와 합치.
- *  - 자기 소음: `noiseChanged` 이벤트 값(0~1)을 노이즈 그레인·링으로 표현.
- *    소음 정책·수치는 게임플레이 소유 — 여기서 재계산하지 않는다.
- *  - 액티브 핑: `SonarPingSource` 주입 시에만 대상 블립을 핑 표시 시간 동안
- *    그린다. **미주입 = 미표시** (게임플레이 핑 메커니즘 부재 시 기능을
- *    지어내지 않는다). 정식 계약 이관은 INT-RENDER-014.
+ * 정본 계약: `src/contracts/sonar.ts`의 `SonarScopeReadModel` **하나만 소비**한다.
+ *  - blip은 bearing·spread·distance·kind 형태 그대로 그린다 — 월드 좌표·
+ *    엔티티 시스템을 직접 읽어 방위·거리를 재계산하지 않는다.
+ *  - 자기 소음은 `noiseFactor` 하나 — 침묵 항행 등 원인 정보는 받지도
+ *    그리지도 않는다 [17차 결의 4].
+ *  - 폭뢰 blip 노출 필터(depthChargeOnPassiveScope)는 **공급 시점에 완료**돼
+ *    있다 — 렌더는 받은 blips를 kind로 걸러내거나 추가하지 않는다.
+ *  - 액티브 핑은 read model의 실제 상태(activePingRemainingSeconds·
+ *    fromActivePing)가 있을 때만 표시한다 — 가짜 핑 없음.
+ *  - 테두리는 `ringState`(DetectionStage 재사용): safe 청록 / searching 황 /
+ *    detected 적.
+ *  - unwired(또는 공급자 미주입) = 빗금 + '계기 미연결' — 작동 위장 금지.
  *
- * 성능: 캔버스 리드로우는 redrawHz로 상한 (기본 15Hz), WebGL 드로우 콜 0.
- * 수치는 전부 renderVisualParams.json artDirection.sonarScope 소유.
+ * 성능: 캔버스 리드로우 redrawHz 상한(기본 15Hz), WebGL 드로우 콜 0.
+ * 수치는 renderVisualParams.json artDirection.sonarScope 소유.
  */
 
-import type { DetectionHudView, TrackingStateSource } from '../contracts/detection';
-import type { ShipWorldSource } from '../systems/faction/ShipWorldSource';
+import type { SonarScopeReadModel } from '../contracts/sonar';
 import visualParams from './renderVisualParams.json';
 
 const SCOPE = visualParams.sonarScope;
 
-/** 탐지 뷰 소스 — DetectionHud와 동일 소비 형태 (호출마다 새 뷰) */
-export interface SonarDetectionSource {
-  hudView(): DetectionHudView;
-}
-
 /**
- * 액티브 핑 대상 소스 — 게임플레이가 핑 메커니즘을 구현하면 주입한다.
- * ageSeconds는 핑 발신 후 경과 시간(판정측 계산) — 렌더는 표시 시간만 관리.
+ * 읽기 모델 폴링 소스 — 게임플레이 공급자를 composition root가 주입한다
+ * (`detectionHudView()`와 같은 호출형 단면 관례). 미주입 = 계기 미연결 표시.
  */
-export interface SonarPingSource {
-  readonly pings: readonly {
-    readonly x: number;
-    readonly z: number;
-    readonly ageSeconds: number;
-  }[];
+export interface SonarScopeSource {
+  scopeView(): SonarScopeReadModel;
 }
 
 export class SonarScope {
@@ -47,12 +36,7 @@ export class SonarScope {
   private readonly canvas: HTMLCanvasElement;
   private readonly context: CanvasRenderingContext2D | null;
 
-  private detectionSource: SonarDetectionSource | null = null;
-  private trackingSource: TrackingStateSource | null = null;
-  private contactsSource: ShipWorldSource | null = null;
-  private pingSource: SonarPingSource | null = null;
-
-  private noiseLevel = 0;
+  private source: SonarScopeSource | null = null;
   private elapsed = 0;
   private redrawAccumulator = 0;
   private visible = true;
@@ -61,13 +45,12 @@ export class SonarScope {
     this.rootElement = document.createElement('div');
     this.rootElement.setAttribute('data-render-sonar-scope', '');
     // 좌측 상단 (16차 결의 — 함내 계기판 다이제틱, 화면 높이 18% 이하).
-    // production에서 이 구석은 비어 있다 — 조작 안내(약 33vh~)와 겹치지 않고,
-    // dev 전용 성능 오버레이·QA 배지와의 겹침은 개발 모드 한정이다.
+    // production에서 이 구석은 비어 있다 — dev 전용 성능 오버레이·QA 배지와의
+    // 겹침은 개발 모드 한정이다.
     this.rootElement.style.cssText = [
       'position:absolute',
       'left:0.75rem',
       'top:0.75rem',
-      // 화면 높이 18% 이하 (연출값 소유: sonarScope.sizeViewportHeightRatio)
       `width:${SCOPE.sizeViewportHeightRatio * 100}vh`,
       `height:${SCOPE.sizeViewportHeightRatio * 100}vh`,
       'pointer-events:none',
@@ -80,25 +63,9 @@ export class SonarScope {
     this.context = this.canvas.getContext('2d');
   }
 
-  attachDetectionSource(source: SonarDetectionSource): void {
-    this.detectionSource = source;
-  }
-
-  attachTrackingSource(source: TrackingStateSource): void {
-    this.trackingSource = source;
-  }
-
-  attachContactsSource(source: ShipWorldSource): void {
-    this.contactsSource = source;
-  }
-
-  attachPingSource(source: SonarPingSource): void {
-    this.pingSource = source;
-  }
-
-  /** `noiseChanged` 이벤트 값 주입 — 조립부(CanyonScene 구독)가 전달 */
-  setNoiseLevel(level: number): void {
-    this.noiseLevel = Math.min(Math.max(level, 0), 1);
+  /** 공급자 주입 — composition root 1회. 미주입 동안은 '계기 미연결' */
+  attachSource(source: SonarScopeSource): void {
+    this.source = source;
   }
 
   setVisible(visible: boolean): void {
@@ -107,19 +74,14 @@ export class SonarScope {
     this.rootElement.style.display = visible ? 'block' : 'none';
   }
 
-  /**
-   * 매 프레임 — 리드로우는 redrawHz 상한. 방위는 선수 기준(위 = 선수).
-   * @param headingRadians 계약 포즈의 선수 방위
-   * @param selfX/selfZ 계약 포즈의 수평 위치 (방위·개략 거리 매핑용)
-   */
-  update(deltaSeconds: number, headingRadians: number, selfX: number, selfZ: number): void {
+  /** 매 프레임 — 리드로우는 redrawHz 상한. 방위 기준(위 = 선수)은 공급값 그대로 */
+  update(deltaSeconds: number): void {
     if (!this.visible || !this.context) return;
     this.elapsed += deltaSeconds;
     this.redrawAccumulator += deltaSeconds;
     if (this.redrawAccumulator < 1 / SCOPE.redrawHz) return;
     this.redrawAccumulator = 0;
 
-    // 캔버스 픽셀 크기 동기화 (뷰포트 변화 대응)
     const sizePx = Math.max(this.rootElement.clientHeight, 40);
     if (this.canvas.width !== sizePx) {
       this.canvas.width = sizePx;
@@ -129,9 +91,7 @@ export class SonarScope {
     const center = sizePx / 2;
     const radius = center - 3;
 
-    const view = this.detectionSource?.hudView() ?? null;
-    const attackPosture =
-      this.trackingSource?.trackedShips.some((ship) => ship.state === 'attack') ?? false;
+    const view = this.source?.scopeView() ?? null;
 
     ctx.clearRect(0, 0, sizePx, sizePx);
     ctx.save();
@@ -139,7 +99,6 @@ export class SonarScope {
     ctx.arc(center, center, radius, 0, Math.PI * 2);
     ctx.clip();
 
-    // 배경 + 거리 링 2개
     ctx.fillStyle = 'rgba(4,14,19,0.82)';
     ctx.fillRect(0, 0, sizePx, sizePx);
     ctx.strokeStyle = 'rgba(110,160,165,0.18)';
@@ -150,8 +109,8 @@ export class SonarScope {
       ctx.stroke();
     }
 
-    if (view && view.unwired) {
-      // 계기 미연결 — 빗금 + 문구 (게이지 작동 위장 금지 관례)
+    if (!view || view.unwired) {
+      // 공급자 미주입 또는 params 미확정 — 빗금 + 문구 (작동 위장 금지)
       ctx.strokeStyle = 'rgba(150,170,175,0.25)';
       for (let x = -sizePx; x < sizePx; x += 10) {
         ctx.beginPath();
@@ -163,28 +122,41 @@ export class SonarScope {
       ctx.font = `${Math.max(9, sizePx * 0.07)}px system-ui, sans-serif`;
       ctx.textAlign = 'center';
       ctx.fillText('계기 미연결', center, center + 4);
-    } else {
-      this.drawSweep(ctx, center, radius);
-      this.drawContacts(ctx, center, radius, headingRadians, selfX, selfZ);
-      this.drawPings(ctx, center, radius, headingRadians, selfX, selfZ);
-      this.drawSelfNoise(ctx, center, radius);
+      ctx.restore();
+      this.strokeBorder(ctx, center, radius, SCOPE.colorSafe);
+      return;
     }
+
+    this.drawSweep(ctx, center, radius);
+    this.drawBlips(ctx, center, radius, view);
+    this.drawSelfNoise(ctx, center, radius, view.noiseFactor);
+    this.drawPingStatus(ctx, center, radius, view);
     ctx.restore();
 
-    // 테두리 상태색 — 적색: 공격태세 / 황색: 탐지 중 / 청록: 미탐지
-    const borderColor = attackPosture
-      ? SCOPE.colorAttack
-      : view && view.stage !== 'safe'
-        ? SCOPE.colorWary
-        : SCOPE.colorSafe;
-    ctx.strokeStyle = borderColor;
+    // 테두리 상태색 — ringState(DetectionStage) 그대로 매핑
+    const borderColor =
+      view.ringState === 'detected'
+        ? SCOPE.colorAttack
+        : view.ringState === 'searching'
+          ? SCOPE.colorWary
+          : SCOPE.colorSafe;
+    this.strokeBorder(ctx, center, radius, borderColor);
+  }
+
+  private strokeBorder(
+    ctx: CanvasRenderingContext2D,
+    center: number,
+    radius: number,
+    color: string,
+  ): void {
+    ctx.strokeStyle = color;
     ctx.lineWidth = 2.5;
     ctx.beginPath();
     ctx.arc(center, center, radius, 0, Math.PI * 2);
     ctx.stroke();
   }
 
-  /** 회전 스윕 라인 — 패시브 스코프의 다이제틱 연출 */
+  /** 회전 스윕 라인 — 패시브 스코프의 다이제틱 연출 (판정 무관) */
   private drawSweep(ctx: CanvasRenderingContext2D, center: number, radius: number): void {
     const angle =
       ((this.elapsed % SCOPE.sweepSecondsPerRevolution) / SCOPE.sweepSecondsPerRevolution) *
@@ -204,102 +176,95 @@ export class SonarScope {
     ctx.stroke();
   }
 
-  /** 월드 좌표 → 스코프 좌표 (위 = 선수). 개략 거리로 반경 클램프 */
-  private toScope(
-    center: number,
-    radius: number,
-    headingRadians: number,
-    selfX: number,
-    selfZ: number,
-    x: number,
-    z: number,
-  ): { px: number; py: number; clamped: boolean } {
-    const dx = x - selfX;
-    const dz = z - selfZ;
-    // 월드 방위(-Z=북 관례) → 선수 기준 상대각
-    const bearing = Math.atan2(-dx, -dz) - headingRadians;
-    const distance = Math.hypot(dx, dz);
-    const ratio = Math.min(distance / SCOPE.rangeMeters, 0.92);
-    return {
-      px: center + -Math.sin(bearing) * ratio * radius,
-      py: center - Math.cos(bearing) * ratio * radius,
-      clamped: distance > SCOPE.rangeMeters,
-    };
-  }
-
-  /** 패시브 소음원 — 방위 + 번짐 블롭 (세력·식별 미표시) */
-  private drawContacts(
+  /**
+   * blip — 공급된 bearing·spread·distance·kind 그대로 그린다.
+   *  - distance null(패시브 청음): 외곽 링 위 방위 호(번짐 폭 = spread)
+   *  - distance 있음: 해당 반경 위치의 블롭 (번짐 = spread 비례)
+   *  - fromActivePing: 또렷한 밝은 윤곽 (핑 반사 구분)
+   *  - kind별 색: ship / torpedo / depthCharge — 필터링·추가 없음
+   */
+  private drawBlips(
     ctx: CanvasRenderingContext2D,
     center: number,
     radius: number,
-    headingRadians: number,
-    selfX: number,
-    selfZ: number,
+    view: SonarScopeReadModel,
   ): void {
-    const views = this.contactsSource?.shipViews ?? [];
-    for (const view of views) {
-      if (!view.alive) continue;
-      const point = this.toScope(
-        center, radius, headingRadians, selfX, selfZ,
-        view.positionX, view.positionZ,
+    for (const blip of view.blips) {
+      const color =
+        blip.kind === 'torpedo'
+          ? SCOPE.blipTorpedoColor
+          : blip.kind === 'depthCharge'
+            ? SCOPE.blipDepthChargeColor
+            : SCOPE.contactColor;
+      // 화면 각: 위 = 선수 기준 방위 (공급값 그대로 — 재계산 없음)
+      const sin = Math.sin(blip.bearingRadians);
+      const cos = Math.cos(blip.bearingRadians);
+
+      if (blip.distanceMeters === null) {
+        // 거리 미상 — 외곽 링 위 방위 호 (폭 = 번짐)
+        const arcHalf = Math.max(blip.bearingSpreadRadians / 2, 0.04);
+        // 캔버스 호 각도(0 = +x축): 화면 점 (sin, -cos) 방향
+        const screenAngle = Math.atan2(-cos, sin);
+        ctx.strokeStyle = `${color}bb`;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(center, center, radius * 0.86, screenAngle - arcHalf, screenAngle + arcHalf);
+        ctx.stroke();
+        continue;
+      }
+
+      const ratio = Math.min(blip.distanceMeters / SCOPE.rangeMeters, 0.92);
+      const px = center + sin * ratio * radius;
+      const py = center - cos * ratio * radius;
+      const blur = Math.max(
+        radius * 0.035,
+        radius * blip.bearingSpreadRadians * ratio * 0.5,
       );
-      const blur = radius * SCOPE.contactBlurRadians * (point.clamped ? 1.6 : 1);
-      const gradient = ctx.createRadialGradient(
-        point.px, point.py, 0, point.px, point.py, blur,
-      );
-      gradient.addColorStop(0, `${SCOPE.contactColor}cc`);
-      gradient.addColorStop(1, `${SCOPE.contactColor}00`);
-      ctx.fillStyle = gradient;
-      ctx.beginPath();
-      ctx.arc(point.px, point.py, blur, 0, Math.PI * 2);
-      ctx.fill();
+      if (blip.fromActivePing) {
+        // 핑 반사 — 또렷한 점 + 밝은 윤곽 (번짐 없음)
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(px, py, radius * 0.03, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(190,245,238,0.9)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(px, py, radius * 0.055, 0, Math.PI * 2);
+        ctx.stroke();
+      } else {
+        const gradient = ctx.createRadialGradient(px, py, 0, px, py, blur);
+        gradient.addColorStop(0, `${color}cc`);
+        gradient.addColorStop(1, `${color}00`);
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(px, py, blur, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
   }
 
-  /** 액티브 핑 대상 — 소스 주입 시에만, 표시 시간 내 밝은 블립 + 페이드 */
-  private drawPings(
+  /** 자기 소음 — noiseFactor 하나만 소비 (원인 정보 없음) */
+  private drawSelfNoise(
     ctx: CanvasRenderingContext2D,
     center: number,
     radius: number,
-    headingRadians: number,
-    selfX: number,
-    selfZ: number,
+    noiseFactor: number,
   ): void {
-    const pings = this.pingSource?.pings ?? [];
-    for (const ping of pings) {
-      if (ping.ageSeconds > SCOPE.pingDisplaySeconds) continue;
-      const fade = 1 - ping.ageSeconds / SCOPE.pingDisplaySeconds;
-      const point = this.toScope(
-        center, radius, headingRadians, selfX, selfZ, ping.x, ping.z,
-      );
-      ctx.strokeStyle = `rgba(120,230,220,${0.9 * fade})`;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(point.px, point.py, 3 + (1 - fade) * 9, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.fillStyle = `rgba(170,245,238,${fade})`;
-      ctx.beginPath();
-      ctx.arc(point.px, point.py, 2.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  /** 자기 소음 — 중심 링 + 그레인 (noiseChanged 값의 표현) */
-  private drawSelfNoise(ctx: CanvasRenderingContext2D, center: number, radius: number): void {
+    const noise = Math.min(Math.max(noiseFactor, 0), 1);
     ctx.fillStyle = 'rgba(190,230,226,0.9)';
     ctx.beginPath();
     ctx.arc(center, center, 2, 0, Math.PI * 2);
     ctx.fill();
-    if (this.noiseLevel <= 0.01) return;
+    if (noise <= 0.01) return;
     const pulse = (this.elapsed % 1.2) / 1.2;
-    ctx.strokeStyle = `${SCOPE.noiseRingColor}${Math.round((1 - pulse) * this.noiseLevel * 160)
+    ctx.strokeStyle = `${SCOPE.noiseRingColor}${Math.round((1 - pulse) * noise * 160)
       .toString(16).padStart(2, '0')}`;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.arc(center, center, 3 + pulse * radius * 0.4 * this.noiseLevel, 0, Math.PI * 2);
+    ctx.arc(center, center, 3 + pulse * radius * 0.4 * noise, 0, Math.PI * 2);
     ctx.stroke();
-    // 노이즈 그레인 — 결정적(시간 파생) 스펙클, 개수 ∝ noiseLevel
-    const grains = Math.floor(this.noiseLevel * 26);
+    // 노이즈 그레인 — 결정적(시간 파생) 스펙클, 개수 ∝ noiseFactor
+    const grains = Math.floor(noise * 26);
     ctx.fillStyle = 'rgba(140,200,195,0.3)';
     const seed = Math.floor(this.elapsed * SCOPE.redrawHz);
     for (let i = 0; i < grains; i += 1) {
@@ -312,6 +277,45 @@ export class SonarScope {
         center + Math.sin(grainAngle) * grainRadius,
         1.5, 1.5,
       );
+    }
+  }
+
+  /**
+   * 액티브 핑 상태 — read model의 실제 상태만 표시 (가짜 핑 없음):
+   *  - activePingRemainingSeconds > 0: 확장 링 (잔여 시간 비례 페이드)
+   *  - pingReady: 하단 밝은 점 / cooldown: 잔여 비율 호
+   */
+  private drawPingStatus(
+    ctx: CanvasRenderingContext2D,
+    center: number,
+    radius: number,
+    view: SonarScopeReadModel,
+  ): void {
+    if (view.activePingRemainingSeconds > 0) {
+      const t = 1 - Math.min(view.activePingRemainingSeconds / SCOPE.pingDisplaySeconds, 1);
+      ctx.strokeStyle = `rgba(120,230,220,${0.55 * (1 - t)})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(center, center, Math.max(radius * t, 4), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    const indicatorY = center + radius * 0.68;
+    if (view.pingReady) {
+      ctx.fillStyle = 'rgba(150,235,225,0.95)';
+      ctx.beginPath();
+      ctx.arc(center, indicatorY, 3, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (view.cooldownRemainingSeconds > 0) {
+      // 쿨다운 잔여 — 남은 비율만큼 호를 감아 보여준다 (잔여/표시 상한 비)
+      const fraction = Math.min(
+        view.cooldownRemainingSeconds / Math.max(SCOPE.pingCooldownDisplayCapSeconds, 0.01),
+        1,
+      );
+      ctx.strokeStyle = 'rgba(150,200,195,0.7)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(center, indicatorY, 4, -Math.PI / 2, -Math.PI / 2 + fraction * Math.PI * 2);
+      ctx.stroke();
     }
   }
 

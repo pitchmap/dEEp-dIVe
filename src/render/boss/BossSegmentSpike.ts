@@ -28,6 +28,8 @@
  */
 
 import * as THREE from 'three';
+import type { BossCoreView, BossTelegraphKind } from '../../contracts/boss';
+import type { BossPhase as ContractBossPhase } from '../../contracts/meta';
 import visualParams from '../renderVisualParams.json';
 import type { BossMotionStyle } from './BossMotionStyle';
 
@@ -40,7 +42,7 @@ const PHASE_TINTS: ReadonlyArray<{ color: number; emissive: number }> = [
   { color: 0x5c3a34, emissive: 0x2a0800 },
 ];
 
-export type BossPhase = 1 | 2 | 3;
+export type BossPhase = ContractBossPhase;
 
 /** 단계 기본 emissive 사전 계산 — 프레임당 Color 할당 방지 */
 const PHASE_EMISSIVE_COLORS: readonly THREE.Color[] = PHASE_TINTS.map(
@@ -73,6 +75,10 @@ export class BossSegmentSpike {
   private weakpointHitRemaining = 0;
   private normalHitRemaining = 0;
   private phaseSurgeRemaining = 0;
+  /** 진행 중 예고 (BossCoreView.telegraph 소비값 — null = 없음) */
+  private telegraph: BossTelegraphKind | null = null;
+  /** 격파 상태 — 유영 정지·감광 (판정은 코어 소유, 여기서는 표현만) */
+  private defeated = false;
   /** 약점 플레이트 참조 — 명중 스케일 펄스용 */
   private weakpointMesh: THREE.Mesh | null = null;
 
@@ -200,6 +206,35 @@ export class BossSegmentSpike {
     this.normalHitRemaining = PARAMS.normalHitFlashSeconds;
   }
 
+  /**
+   * 예고 상태 — `BossCoreView.telegraph` 소비값 그대로 (지속·취소는 코어
+   * 소유). kind별로 색이 아닌 **자세·모션 채널**을 함께 바꿔 low 품질에서도
+   * 구분된다: ram=웅크림 / projectile=턱 반복 개방 / weakPointOpen=약점
+   * 프리펄스 / phaseShift=전신 느린 명멸+진폭 감쇠.
+   */
+  setTelegraph(kind: BossTelegraphKind | null): void {
+    this.telegraph = kind;
+  }
+
+  /**
+   * 정본 읽기 모델 소비 — production 조립부(또는 QA)가 매 프레임 전달한다.
+   * 판정·단계·피해 계산은 하지 않는다: 값 매핑뿐.
+   * (약점/일반 피격 구분 통지는 계약 부재 — INT-RENDER-014 후속. 도착 시
+   * notifyWeakpointHit/notifyNormalHit에 연결한다.)
+   */
+  applyCoreView(view: BossCoreView): void {
+    this.setPhase(view.phase);
+    this.setWeakpointActive(view.weakPointOpen);
+    this.setTelegraph(view.telegraph);
+    this.defeated = view.defeated;
+  }
+
+  /** 격파 통지(bossDefeated 이벤트 경로) — 유영 정지·감광 전환 */
+  applyCoreViewDefeated(): void {
+    this.defeated = true;
+    this.setTelegraph(null);
+  }
+
   update(deltaSeconds: number): void {
     this.elapsed += deltaSeconds;
     const t = this.elapsed;
@@ -210,12 +245,20 @@ export class BossSegmentSpike {
 
     // 단계 전환 서지 — 남은 시간 비율만큼 전신 진폭을 키운다 (모션 채널)
     const surgeT = Math.max(this.phaseSurgeRemaining, 0) / PARAMS.phaseSurgeSeconds;
-    const surge = 1 + surgeT * 0.9;
+    let surge = 1 + surgeT * 0.9;
+    // 예고별 자세·모션 채널 (색 단독 의존 금지 — low 품질 가독)
+    if (this.telegraph === 'ram' ) surge *= PARAMS.telegraphCrouchAmplitudeScale; // 웅크림
+    if (this.telegraph === 'phaseShift') surge *= PARAMS.telegraphCrouchAmplitudeScale;
+    // 최종 가속(3단계 진입 수정자 — 16차 결의 1-3)의 시각 피드백: 유영 주기 가속
+    const finalScale = this.phase === 3 ? PARAMS.finalPhaseCycleScale : 1;
+    // 격파 — 유영 정지 (진폭 0으로 수렴)
+    if (this.defeated) surge = 0;
 
     // ── 분절 사인파 — 위상차로 파도가 몸을 타고 흐르게 한다 ──
-    const swing = Math.sin(t * omega) * surge;
-    const lagged = Math.sin(t * omega - PARAMS.tailLagRadians) * surge;
-    const lagged2 = Math.sin(t * omega - PARAMS.tailLagRadians * 1.8) * surge;
+    const phaseTime = t * finalScale;
+    const swing = Math.sin(phaseTime * omega) * surge;
+    const lagged = Math.sin(phaseTime * omega - PARAMS.tailLagRadians) * surge;
+    const lagged2 = Math.sin(phaseTime * omega - PARAMS.tailLagRadians * 1.8) * surge;
 
     this.body.rotation.y = swing * 0.06;
     this.body.rotation.z = Math.sin(t * omega * 0.5) * PARAMS.bodyRollRadians;
@@ -223,9 +266,15 @@ export class BossSegmentSpike {
     this.tailBase.rotation.y = lagged * PARAMS.tailSwingRadians;
     this.tailFin.rotation.y = (lagged2 - lagged) * PARAMS.tailSwingRadians * 1.2;
 
-    // 턱 — 평시 미세 개폐, 약점 활성 시 크게 벌림 (개방 연출)
+    // 턱 — 평시 미세 개폐, 약점 활성 시 크게 벌림 (개방 연출).
+    // projectile 예고: 빠른 반복 개폐 — 발사 준비 자세 (모션 채널)
     const jawIdle = (Math.sin(t * 0.9) + 1) * 0.06;
-    const jawTarget = this.weakpointActive ? PARAMS.jawOpenRadians : jawIdle;
+    const jawTelegraph =
+      this.telegraph === 'projectile'
+        ? (Math.sin(t * Math.PI * 2 * PARAMS.telegraphPulseHz) + 1) * 0.5 * PARAMS.jawOpenRadians
+        : null;
+    const jawTarget =
+      jawTelegraph ?? (this.weakpointActive ? PARAMS.jawOpenRadians : jawIdle);
     this.jaw.rotation.x += (jawTarget - this.jaw.rotation.x) * Math.min(deltaSeconds * 5, 1);
 
     // 가슴지느러미 — 교대 플랩
@@ -261,19 +310,42 @@ export class BossSegmentSpike {
     } else {
       this.weakpointMesh?.scale.setScalar(1);
     }
-    // 몸통 발광 = 단계 기본 emissive + (일반 명중 회청) + (전환 백색) 중 최대
+    // 예고 명멸 — 느린 주기(명중 플래시와 구분), 약점 예고는 약점 프리펄스
+    let telegraphGlow = 0;
+    if (this.telegraph !== null && !this.defeated) {
+      telegraphGlow =
+        (0.5 + 0.5 * Math.sin(t * Math.PI * 2 * PARAMS.telegraphPulseHz)) * 0.3;
+      if (this.telegraph === 'weakPointOpen') {
+        // 약점 개방 예고 — 약점 플레이트 프리펄스 (개방 전 위치 학습)
+        this.weakpointMaterial.emissive.setRGB(
+          0.5 * telegraphGlow * 2, 0.18 * telegraphGlow * 2, 0.04 * telegraphGlow * 2,
+        );
+        telegraphGlow *= 0.4; // 몸통은 약하게
+      }
+    }
+    // 몸통 발광 = 단계 기본 emissive + (일반 명중 회청) + (전환 백색) +
+    // (예고 명멸) 중 최대 — 격파 시 발광 소등
     const baseEmissive = PHASE_EMISSIVE_COLORS[this.phase - 1] ?? PHASE_EMISSIVE_COLORS[0]!;
-    this.bodyMaterial.emissive.setRGB(
-      Math.max(baseEmissive.r, normalFlash * 0.32, surgeFlash * 0.55),
-      Math.max(baseEmissive.g, normalFlash * 0.38, surgeFlash * 0.55),
-      Math.max(baseEmissive.b, normalFlash * 0.42, surgeFlash * 0.55),
-    );
+    if (this.defeated) {
+      this.bodyMaterial.emissive.setRGB(0, 0, 0);
+      this.weakpointMaterial.emissive.setRGB(0, 0, 0);
+    } else {
+      this.bodyMaterial.emissive.setRGB(
+        Math.max(baseEmissive.r, normalFlash * 0.32, surgeFlash * 0.55, telegraphGlow),
+        Math.max(baseEmissive.g, normalFlash * 0.38, surgeFlash * 0.55, telegraphGlow),
+        Math.max(baseEmissive.b, normalFlash * 0.42, surgeFlash * 0.55, telegraphGlow * 0.8),
+      );
+    }
 
-    // QA 자동 시연 — 스파이크 단독 실행에서만 약점·단계 순환
+    // QA 자동 시연 — 스파이크 단독 실행에서만 약점·단계·예고 순환
     if (this.autoDemo) {
       const cycle = Math.floor(t / 6) % 3;
       this.setPhase((cycle + 1) as BossPhase);
       this.setWeakpointActive(Math.floor(t / 3) % 2 === 1);
+      const telegraphCycle = Math.floor(t / 1.5) % 8;
+      const kinds: (BossTelegraphKind | null)[] =
+        [null, 'ram', null, 'projectile', null, 'weakPointOpen', null, 'phaseShift'];
+      this.setTelegraph(kinds[telegraphCycle] ?? null);
     }
   }
 
