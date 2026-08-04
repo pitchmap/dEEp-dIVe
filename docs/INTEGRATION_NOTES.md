@@ -90,7 +90,20 @@
 
 ## 제안 목록
 
-### INT-RENDER-014 — [M1·M2] 보스 시각 read model·소나 액티브 핑 소스 계약 요청
+### INT-CORE-022 — M1·M2 Runtime Closure 계약 확정 (리드 창 — foundation 종료 후)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (base = dev `37afc1c` — PR #9·#10·#11·#12·#8 병합 완료 후. **실행 기준 문서: `docs/M1_M2_RUNTIME_CLOSURE_HANDOFF.md`**) |
+| 계약 확정 | ① `NullableTunable` + 보스 승인 대기 4필드(이동·선회·돌진 피해·약점 반경 — 전부 null, 범위·관계 제약 로더 강제, 수치는 기획 승인 대기) ② `ClueIdByInteractableId` 매핑 계약(정본 world 배치 모듈·3중 방어) ③ `SonarBlipKind` 확장(전투 3 + 탐색 4 = InteractionTargetKind 재사용, 액티브 핑 한정 공급) ④ `bossHit {kind}` 신설(게임플레이 발행·배율 적용 후·1건 1회) ⑤ `bossWeakPointChanged` 발행 정본을 리드 코어로 개정(전이 시 1회·격파 순서 고정 — BossController 구현 동반) ⑥ `BossCoreView` 정식 공유 read model 확정. 이로써 INT-GAME-016·017과 아래 구 INT-RENDER-015(구 014 중복 번호)의 잔여 계약 요청 전부에 회신 완료 |
+| 월드 파일 승인 | `src/world/bossPlacement.ts`·`bossCluePlacements.ts` **신설만** 그래픽스 창에 승인(기획 승인 좌표·매핑). `startingCanyonLayout.ts` 수정·밸런스 수치·판정 로직 탑재 금지 |
+| 입력 정책 | **E 상승 유지 / F hold 회수** (M-11 — 9차 키맵 무변경 + 17차 F 미배정 반환 활용) |
+| composition | Game.ts 배선 16단계 표 + unwired 동작 + 호출 순서 제약 — HANDOFF §5 (통합 관리자 실행, 리드는 명세만) |
+| Exit Criteria | production 브라우저 완주 19항목(HANDOFF §6) — fixture·unwired 화면 불인정. M0 실기기 검증은 병렬 위험 항목으로 분리(기능 구현 비차단·최종 데모 판정은 차단) |
+| 검증 | verify:meta **164/164**(신규 8건 — null 보존·키 누락 거부·범위/관계 거부·약점 이벤트 전이/순서·마이그레이션 정책 2건·소나 kind 타입) · gameplay 291/291 · tooling 36/36 · hud 34/34 · typecheck·build·size(7.0%)·scope·sprint-a/b/c 전부 통과 |
+| 개발 리드 결정 | 승인 — 세 역할 동시 착수 가능. 남은 기획 결정: 보스 수치 4종·interaction 2종·소나 번짐·farming 평균 산식 + 소나 핑 튜닝표 3종 확인 (HANDOFF §2) |
+
+### INT-RENDER-015 (구 014 — 리드 정본 014와 번호 중복이라 재부여) — [M1·M2] 보스 시각 read model·소나 액티브 핑 소스 계약 요청
 
 | 필드 | 내용 |
 |---|---|

@@ -407,8 +407,14 @@ B 선행개발          = 가능 (선행개발 상태로만)
     - **감사**: 저장 v2 — dev 전역 v1 전제 코드 0건(`bossCluesFound`는 스키마·마이그레이션·테스트에만), C 필드 보존. params/boss.json 전량 [초기 테스트값] 표기 유지(APPROVED 아님 — requiredClues 3만 6차 결의 확정). **M0 미종결** — `docs/measurements/M0_gpu_baseline.md` dev 부재, feat/render·툴링 브랜치에 **중복 정본 2본 존재**(병합 시 정합 확인 필요), INT-RENDER-013 실 GPU 증적 대기 — 승인 플래그 불변(M0_FORMALLY_CLOSED=false)
     - **검증**: verify:meta **156/156**(구독 경로 6종 + ts-expect-error 정적 2종 + 소나 계약 검사 신설) · gameplay 253/253 · tooling 26/26 · typecheck·build·size(6.8%)·scope·sprint-a/b/c 전부 통과
     - **게이트**: M1_RUNTIME_WIRED=false·M1_EXIT_GATE_PASSED=false·M2_PROGRESS_GATE_PASSED=false — production 스폰·배선 없음. 침묵 항행 구현 금지(보스전 완주 판정 전 — 17차 결의 4)·M3 시작 금지 유지
-- **마지막 업데이트:** 두 번째 통합 PR 준비 완료 — interactionCollected 의미 확정(targetId/clueId 분리)·단서 진행 정본 소유권 단일화·SonarScopeReadModel 계약(INT-CORE-021·INT-RENDER-014, M-4~M-6). 이전: M1 보스 코어·M2 단서/해금 계약 마감(INT-CORE-020)
-- **담당 브랜치:** `claude/deep-dive-core-lead-uyg77p` (base = dev `bd59d0a` merge — PR #9 수신)
+  - **M1·M2 Runtime Closure 계약 확정 (INT-CORE-022 — foundation 5PR 병합 후, base dev `37afc1c`):**
+    - **params**: `NullableTunable` 신설 + 보스 승인 대기 4필드(이동·선회·돌진 피해·약점 반경 — 전부 null·범위/관계 제약 로더 강제·null→0 금지). M2 params 경로 확정(interaction.json·sonar.json 신설, economy farming 확장 — 파일·로더는 툴링, 수치는 기획)
+    - **계약**: `ClueIdByInteractableId`(매핑 정본 = world 배치 모듈·3중 방어) · `SonarBlipKind` 전투 3+탐색 4(액티브 핑 한정 공급·지형은 blip 아님) · `bossHit {kind}` 신설(게임플레이 발행·배율 후·1건 1회) · `bossWeakPointChanged` 발행 정본을 리드 코어로 개정(BossController 전이 발행 구현 — 격파 시 false→bossDefeated 순서 meta 고정) · `BossCoreView` 정식 확정
+    - **정책**: 입력 E 상승 유지 / **F hold 회수**(M-11) · DetectionHud 제거는 provider 배선·실측 후(HANDOFF §7) · save 마이그레이션 정책 명문화(3 초과 캡 없음·legacy 해금 단조 유지·downgrade 미지원 — meta 검증 2건 추가)
+    - **인계**: `docs/M1_M2_RUNTIME_CLOSURE_HANDOFF.md` — composition 배선 16단계 표·역할별 배정·파일 소유표·Exit Criteria 19항목(production 브라우저 완주 — fixture 불인정)·기획 결정 요청서. 월드 신설 2파일(bossPlacement·bossCluePlacements)은 그래픽스 창 승인
+    - **검증**: meta **164/164**(+8) · gameplay 291/291 · tooling 36/36 · hud 34/34 · 전 스위트 통과
+- **마지막 업데이트:** M1·M2 Runtime Closure 계약 확정 (INT-CORE-022, M-7~M-13 — 세 역할 동시 착수 가능. 이전: INT-CORE-021 두 번째 통합 PR·교차 감사)
+- **담당 브랜치:** `claude/deep-dive-core-lead-uyg77p` (base = dev `37afc1c` — foundation 5PR 병합 tip)
 
 ## 게임플레이
 

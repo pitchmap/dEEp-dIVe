@@ -13,7 +13,7 @@
  *    중복 금지.
  */
 
-import type { BossParams, BossPatternFlags, FixedNumber, Tunable } from '../contracts/params';
+import type { BossParams, BossPatternFlags, FixedNumber, NullableTunable, Tunable } from '../contracts/params';
 
 export class BossParamValidationError extends Error {
   constructor(path: string, detail: string) {
@@ -53,6 +53,46 @@ function readTunable(parent: Record<string, unknown>, path: string, key: string)
     throw new BossParamValidationError(`${path}${key}.unit`, '단위 문자열이 필요합니다');
   }
   return { value, range: [min, max], unit, note: typeof raw['note'] === 'string' ? raw['note'] : undefined };
+}
+
+/**
+ * 승인 대기 수치 — value: null 허용 (C9 null 규약 재사용).
+ * 키 누락·range 누락은 거부한다: 정책 부재와 수치 미확정을 구분해야
+ * 소비 측이 null을 unwired로 안전하게 해석할 수 있다. null→0 변환 금지.
+ */
+function readNullableTunable(parent: Record<string, unknown>, path: string, key: string): NullableTunable {
+  const raw = parent[key];
+  if (!isRecord(raw)) {
+    throw new BossParamValidationError(`${path}${key}`, '{ value: 숫자|null, range, unit } 객체가 필요합니다 (키 누락 불가 — null과 누락은 다르다)');
+  }
+  if (!('value' in raw)) {
+    throw new BossParamValidationError(`${path}${key}.value`, 'value 키가 필요합니다 (미확정이면 null)');
+  }
+  const value = raw['value'];
+  const range = raw['range'];
+  const unit = raw['unit'];
+  if (!Array.isArray(range) || range.length !== 2 || range.some((r) => typeof r !== 'number' || !Number.isFinite(r))) {
+    throw new BossParamValidationError(`${path}${key}.range`, '[최소, 최대] 숫자 2개가 필요합니다 (허용 범위는 계약으로 선고정)');
+  }
+  const [min, max] = range as [number, number];
+  if (!(min <= max)) throw new BossParamValidationError(`${path}${key}.range`, `최소(${min}) ≤ 최대(${max}) 이어야 합니다`);
+  if (typeof unit !== 'string' || unit.length === 0) {
+    throw new BossParamValidationError(`${path}${key}.unit`, '단위 문자열이 필요합니다');
+  }
+  if (value !== null) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw new BossParamValidationError(`${path}${key}.value`, `숫자 또는 null이 필요합니다 (받은 값: ${JSON.stringify(value)})`);
+    }
+    if (value < min || value > max) {
+      throw new BossParamValidationError(`${path}${key}.value`, `조정 범위 [${min}, ${max}] 밖의 값입니다: ${value}`);
+    }
+  }
+  return {
+    value: value as number | null,
+    range: [min, max],
+    unit,
+    note: typeof raw['note'] === 'string' ? raw['note'] : undefined,
+  };
 }
 
 function readFixedNumber(parent: Record<string, unknown>, path: string, key: string): FixedNumber {
@@ -132,6 +172,18 @@ export function validateBossParams(raw: unknown): BossParams {
     }
   }
 
+  const movementBlock = requireBlock(raw, '', 'movement');
+  const moveSpeed = readNullableTunable(movementBlock, 'movement.', 'moveSpeedMetersPerSecond');
+  const turnRate = readNullableTunable(movementBlock, 'movement.', 'turnRateRadiansPerSecond');
+  for (const [key, entry] of [
+    ['moveSpeedMetersPerSecond', moveSpeed],
+    ['turnRateRadiansPerSecond', turnRate],
+  ] as const) {
+    if (entry.value !== null && entry.value <= 0) {
+      throw new BossParamValidationError(`movement.${key}.value`, `0보다 커야 합니다 (받은 값: ${entry.value})`);
+    }
+  }
+
   const patternsBlock = requireBlock(raw, '', 'patterns');
   const flags = readPatternFlags(patternsBlock, 'patterns.');
   const intervalSeconds = readTunable(patternsBlock, 'patterns.', 'intervalSeconds');
@@ -167,17 +219,37 @@ export function validateBossParams(raw: unknown): BossParams {
     throw new BossParamValidationError('reward.rareParts.value', '정수가 필요합니다');
   }
 
+  const ramSpeed = readTunable(ramBlock, 'patterns.ram.', 'speedMetersPerSecond');
+  // 관계 제약: 평상시 속도(확정 시)는 돌진 속도보다 빠를 수 없다 —
+  // '돌진 = 가속 패턴'이라는 16차 규격이 수치로도 성립해야 한다.
+  if (moveSpeed.value !== null && moveSpeed.value > ramSpeed.value) {
+    throw new BossParamValidationError(
+      'movement.moveSpeedMetersPerSecond.value',
+      `평상시 속도(${moveSpeed.value})가 돌진 속도(${ramSpeed.value})를 초과합니다`,
+    );
+  }
+  const ramContactDamage = readNullableTunable(ramBlock, 'patterns.ram.', 'contactDamage');
+  if (ramContactDamage.value !== null && ramContactDamage.value <= 0) {
+    throw new BossParamValidationError('patterns.ram.contactDamage.value', `0보다 커야 합니다 (받은 값: ${ramContactDamage.value})`);
+  }
+  const hitRadiusMeters = readNullableTunable(weakPointBlock, 'patterns.weakPointOpen.', 'hitRadiusMeters');
+  if (hitRadiusMeters.value !== null && hitRadiusMeters.value <= 0) {
+    throw new BossParamValidationError('patterns.weakPointOpen.hitRadiusMeters.value', `0보다 커야 합니다 (받은 값: ${hitRadiusMeters.value})`);
+  }
+
   return {
     id,
     name,
     hull: { maxHull, phase2AtHullRatio, phase3AtHullRatio },
+    movement: { moveSpeedMetersPerSecond: moveSpeed, turnRateRadiansPerSecond: turnRate },
     patterns: {
       flags,
       intervalSeconds,
       telegraphSeconds,
       ram: {
-        speedMetersPerSecond: readTunable(ramBlock, 'patterns.ram.', 'speedMetersPerSecond'),
+        speedMetersPerSecond: ramSpeed,
         durationSeconds: readTunable(ramBlock, 'patterns.ram.', 'durationSeconds'),
+        contactDamage: ramContactDamage,
       },
       projectile: {
         speedMetersPerSecond: readTunable(projectileBlock, 'patterns.projectile.', 'speedMetersPerSecond'),
@@ -187,6 +259,7 @@ export function validateBossParams(raw: unknown): BossParams {
         openSeconds: readTunable(weakPointBlock, 'patterns.weakPointOpen.', 'openSeconds'),
         weakPointDamageMultiplier: readTunable(weakPointBlock, 'patterns.weakPointOpen.', 'weakPointDamageMultiplier'),
         closedHullDamageMultiplier: readTunable(weakPointBlock, 'patterns.weakPointOpen.', 'closedHullDamageMultiplier'),
+        hitRadiusMeters,
       },
       finalPhase: {
         speedMultiplier: readTunable(finalPhaseBlock, 'patterns.finalPhase.', 'speedMultiplier'),
