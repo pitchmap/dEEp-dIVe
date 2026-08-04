@@ -103,17 +103,17 @@
 | 검증 | verify:meta **164/164**(신규 8건 — null 보존·키 누락 거부·범위/관계 거부·약점 이벤트 전이/순서·마이그레이션 정책 2건·소나 kind 타입) · gameplay 291/291 · tooling 36/36 · hud 34/34 · typecheck·build·size(7.0%)·scope·sprint-a/b/c 전부 통과 |
 | 개발 리드 결정 | 승인 — 세 역할 동시 착수 가능. 남은 기획 결정: 보스 수치 4종·interaction 2종·소나 번짐·farming 평균 산식 + 소나 핑 튜닝표 3종 확인 (HANDOFF §2) |
 
-### INT-RENDER-016 — [M1·M2 Runtime Closure] 보스 시각물 장착 시점 공급 규칙 확인 (조립부 권고 — 계약 무수정)
+### INT-RENDER-016 — [M1·M2 Runtime Closure] 보스 시각물 장착·해제 공급 규칙 (최종 결정 — 계약 무수정)
 
 | 필드 | 내용 |
 |---|---|
 | 요청자 | 그래픽스 창 (INT-CORE-022 이행 — world 2파일 신설 + 소비 마감) |
-| 대상 시스템 | `src/core/Game.ts` §5 배선표 순서 15 (`attachBossViewSource`) — 통합 관리자 |
+| 대상 시스템 | `src/core/Game.ts` §5 배선표 순서 15 (`attachBossViewSource`) — 통합 관리자 / `src/render/CanyonScene.ts` — 그래픽스 |
 | 배경 | `BossCoreView`에는 '스폰 여부' 필드가 없다. §5 순서대로면 BossController는 조립(보스 블록) 시점에 생성되어 `view()`가 스폰 전에도 비-null이다. 렌더는 **공급자가 처음으로 비-null 뷰를 준 프레임에** production 보스 시각물을 장착하므로, 스폰 전 뷰가 공급되면 '3/3 이전 스폰 0'(Exit 4) 검수 화면에 보스 몸체가 미리 보인다 |
-| 권고 (계약 변경 없이 해소) | 조립부 주입식을 `coreView: () => bossSpawned ? bossController.view() : null` 형태로 — `gameplay.spawnBoss()` 성공(`requestEntry 'granted'`) 이후에만 비-null 공급. 렌더는 받은 값만 신뢰한다(재추측 금지 원칙과 일치) |
-| 대안 | `BossCoreView`에 spawned/active 필드 추가(계약 개정 — 리드 결정 사안). 권고안이 더 작다 |
-| 하위 호환 | 깨지지 않음 — 렌더는 null 동안 유휴(현행 유지), 비-null 이후 상태 매핑 |
-| 개발 리드 결정 | (대기) |
+| **최종 결정 (리드 — Runtime Closure 교차 감사)** | ① composition은 **spawn 전 null source를 제공**한다 ② `spawnBoss()` 성공 후에만 `controller.view()`를 노출한다 ③ **reset·dispose 시 null로 복귀**한다 ④ 공유 계약(`BossCoreView`)에 spawned 필드를 **추가하지 않는다** |
+| 그래픽스 이행 (F-3 — PR #16 보완 커밋) | 렌더는 받은 값만 따른다: null→비-null = production 시각물 지연 장착 / 비-null 유지 = `applyCoreView` / **비-null→null = production 장착물 dispose + scene 제거 + 참조 null**(플래시·예고·약점·격파 연출 상태는 인스턴스와 함께 소멸) / 재-비-null = 새 인스턴스 장착. `?bossSpike=1` fixture 장착물은 해제 규칙 대상이 아니다. 해제 중복 호출 안전. 검수 fixture `?bossviewdemo=1`(배지 — null 4s→뷰 5s→null 3s 순환) |
+| 하위 호환 | 깨지지 않음 — 렌더는 null 동안 유휴, 비-null 이후 상태 매핑. 스폰·reset 판정은 렌더가 계산하지 않는다 |
+| 상태 | **결정 확정·그래픽스 측 이행 완료** — 잔여는 통합 관리자 배선(§5 순서 15에 위 공급식 적용) |
 
 ### INT-RENDER-015 (구 014 — 리드 정본 014와 번호 중복이라 재부여) — [M1·M2] 보스 시각 read model·소나 액티브 핑 소스 계약 요청
 

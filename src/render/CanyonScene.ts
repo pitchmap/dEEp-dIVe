@@ -203,6 +203,12 @@ export class CanyonScene implements ManagedScene {
   // QA 격리 경로 — 기지 화면 미리보기(?base=1)·보스 분절 스파이크(?bossSpike=1)
   private baseView: BaseSceneView | null = null;
   private bossSpike: BossSegmentSpike | null = null;
+  /**
+   * 현재 bossSpike가 production 지연 장착물인가 — INT-RENDER-016 최종 결정:
+   * 공급자 뷰가 null로 복귀하면(reset·dispose) production 장착물만 해제한다.
+   * `?bossSpike=1` fixture 장착물(false)은 이 규칙의 대상이 아니다.
+   */
+  private bossSpikeIsProduction = false;
   /** 보스 정본 읽기 모델 폴링 소스 — production 조립부 주입 (미주입 = autoDemo/이벤트만) */
   private bossViewSource: { coreView(): BossCoreView | null } | null = null;
   // 경제·성장 UI QA 데모(?econdemo=1) — 실사용 배선 아님 (배지로 구분)
@@ -331,6 +337,7 @@ export class CanyonScene implements ManagedScene {
 
     this.shipDemoSnapshot = this.parseShipDemoSnapshot();
     this.mountSonarDemoIfRequested();
+    this.mountBossViewDemoIfRequested();
     this.mountXraySpikeIfRequested();
     this.mountBossSpikeIfRequested();
     this.mountBaseViewIfRequested();
@@ -438,11 +445,30 @@ export class CanyonScene implements ManagedScene {
         },
       };
       this.bossSpike = new BossSegmentSpike(staticSpawnPose, false);
+      this.bossSpikeIsProduction = true;
       this.scene.add(this.bossSpike.root);
+      console.info('[CanyonScene] production 보스 시각물 장착 (BossCoreView 비-null 수신).');
     } catch (error) {
       this.bossSpike = null;
+      this.bossSpikeIsProduction = false;
       console.warn('[CanyonScene] 보스 시각물 장착 실패 — 기본 장면은 계속 작동합니다.', error);
     }
+  }
+
+  /**
+   * production 보스 시각물 해제 — 공급자 뷰가 null로 복귀한 프레임에 호출
+   * (INT-RENDER-016: reset·dispose 시 공급자가 null을 준다). 장착물 dispose +
+   * scene 제거 + 참조 null — 명중 플래시·예고·약점·격파 등 연출 상태는
+   * 인스턴스와 함께 소멸하며, 다음 비-null 수신 시 새 인스턴스가 장착된다.
+   * fixture(?bossSpike=1) 장착물은 대상이 아니다. 중복 호출 안전(무동작).
+   */
+  private unmountProductionBossSpike(): void {
+    if (!this.bossSpike || !this.bossSpikeIsProduction) return;
+    this.scene.remove(this.bossSpike.root);
+    this.bossSpike.dispose();
+    this.bossSpike = null;
+    this.bossSpikeIsProduction = false;
+    console.info('[CanyonScene] production 보스 시각물 해제 (BossCoreView null 복귀).');
   }
 
   /**
@@ -597,6 +623,22 @@ export class CanyonScene implements ManagedScene {
    */
   attachBossViewSource(source: { coreView(): BossCoreView | null }): void {
     this.bossViewSource = source;
+  }
+
+  /**
+   * save 복원 단서 표식 동기화 — 부팅 복원된 회수 완료 대상의 표식을 제거한다
+   * (저장된 단서는 `interactionCollected`가 재발행되지 않으므로 조립부가
+   * 복원 직후 1회 호출한다). 실시간 회수 경로(`interactionCollected` 구독)와
+   * **같은 내부 제거 함수**(`ClueMarkerVisuals.markCollected`)를 재사용한다.
+   *
+   *  - targetId 단위 — clueId 해석·역조회는 하지 않는다(매핑 역조회는
+   *    통합 관리자 소유, 렌더는 진행·save를 읽지 않는다).
+   *  - 미지 targetId·중복 targetId·반복 호출 전부 안전(무동작, idempotent).
+   *  - 표식 재생성은 씬 생성 시 배치 데이터로부터 이루어진다 — 씬 수명주기
+   *    그대로(회수는 저장 영속이라 같은 씬 안에서 되살리지 않는다).
+   */
+  markCluesCollected(targetIds: readonly string[]): void {
+    for (const targetId of targetIds) this.clueMarkers.markCollected(targetId);
   }
 
   /**
@@ -867,10 +909,14 @@ export class CanyonScene implements ManagedScene {
     );
     this.xraySpike?.update(deltaSeconds);
     // 보스 정본 읽기 모델 — 주입돼 있으면 매 프레임 매핑 (이벤트와 멱등 병행).
-    // production에서는 공급자가 처음으로 비-null 뷰를 준 시점(보스 활성)에
-    // 시각물을 지연 장착한다 — fixture(?bossSpike=1)와 이중 장착 없음.
+    // INT-RENDER-016 최종 결정: 공급자는 spawn 전·reset·dispose에 null을 주고
+    // spawn 성공 후에만 뷰를 준다 — 렌더는 받은 값만 따른다(판정 계산 0):
+    //   null → 비-null: production 시각물 지연 장착 (fixture와 이중 장착 없음)
+    //   비-null → null: production 장착물 해제 (fixture ?bossSpike=1는 유지)
+    //   이후 재-비-null: 새 인스턴스 장착 — 이전 연출 상태 잔존 0
     const bossView = this.bossViewSource?.coreView() ?? null;
     if (bossView && !this.bossSpike) this.mountProductionBossSpike();
+    else if (!bossView) this.unmountProductionBossSpike();
     if (bossView && this.bossSpike) this.bossSpike.applyCoreView(bossView);
     this.bossSpike?.update(deltaSeconds);
   }
@@ -1297,6 +1343,41 @@ export class CanyonScene implements ManagedScene {
     host.appendChild(badge);
     this.disposables.push({ dispose: () => badge.remove() });
     console.info('[CanyonScene] 소나 fixture 장착 (?sonardemo=1 — 표시 규칙 검수 전용).');
+  }
+
+  /**
+   * production 보스 장착·해제 규칙 **검수 fixture** — `?bossviewdemo=1`
+   * (production 아님, `?sonardemo` 관례). INT-RENDER-016 공급 규칙을 표본
+   * 순환(null 4s → 뷰 5s → null 3s)으로 물려 지연 장착 → null 복귀 해제 →
+   * 재장착(새 인스턴스)을 브라우저에서 검수한다. 정식 공급자 주입 시 이
+   * 경로는 사용하지 않는다.
+   */
+  private mountBossViewDemoIfRequested(): void {
+    if (new URLSearchParams(window.location.search).get('bossviewdemo') !== '1') return;
+    const start = performance.now();
+    this.attachBossViewSource({
+      coreView: () => {
+        const t = ((performance.now() - start) / 1000) % 12;
+        if (t < 4 || t >= 9) return null; // spawn 전 / reset 후 = null
+        return {
+          bossId: 'boss-abyss-01',
+          phase: 1,
+          hullRatio: 1,
+          telegraph: t >= 7 ? 'ram' : null,
+          weakPointOpen: false,
+          defeated: false,
+        };
+      },
+    });
+    const host = this.renderer.webgl.domElement.parentElement ?? document.body;
+    const badge = document.createElement('div');
+    badge.setAttribute('data-render-bossview-demo-badge', '');
+    badge.textContent = '보스 뷰 fixture — 장착·해제 규칙 검수용 (게임플레이 실제 상태 아님)';
+    badge.style.cssText =
+      'position:absolute;left:0.75rem;top:24vh;z-index:33;padding:0.25rem 0.5rem;border:1px dashed #ffb347;border-radius:4px;background:rgba(6,16,22,0.85);color:#ffb347;font:0.7rem system-ui,sans-serif';
+    host.appendChild(badge);
+    this.disposables.push({ dispose: () => badge.remove() });
+    console.info('[CanyonScene] 보스 뷰 fixture 장착 (?bossviewdemo=1 — 장착·해제 규칙 검수 전용).');
   }
 
   /**

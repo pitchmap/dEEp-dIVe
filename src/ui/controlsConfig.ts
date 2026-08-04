@@ -29,8 +29,10 @@ export const CONTROL_BINDINGS: readonly ControlBinding[] = [
   { label: 'Ctrl / E · Shift', action: '상승 · 하강', owner: 'gameplay' },
   // 입력 키 최종 정책 (M1·M2 인계표 §9 확정): F 홀드 = 상호작용·회수.
   // E는 상승 병행 키로 무변경 보존 — 상승·회수 동시 진행 충돌 제거.
-  // 액티브 핑 키는 인계표에 미확정이라 표기하지 않는다 (미확정 키 발명 금지).
   { label: 'F (홀드)', action: '상호작용 · 회수', owner: 'gameplay' },
+  // 액티브 소나 핑 = Q (Runtime Closure 교차 감사 확정 — 표기만, 판정·쿨다운
+  // 수치는 게임플레이·params 소유라 여기 싣지 않는다).
+  { label: 'Q', action: '액티브 소나 핑', owner: 'gameplay' },
   { label: 'Space', action: '카메라 리센터', owner: 'gameplay' },
   { label: '우클릭', action: '조준경 토글', owner: 'hud' },
   { label: '좌클릭', action: '조준 중 발사 · 비조준 시 카메라', owner: 'hud' },
