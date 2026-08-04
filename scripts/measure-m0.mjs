@@ -18,8 +18,9 @@
  */
 
 import { chromium } from 'playwright-core';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -134,6 +135,61 @@ const browser = await chromium.launch({
 });
 await waitForServer(browser);
 
+/**
+ * 실측 환경을 기록한다. **모르는 값은 null로 남긴다** — 0으로 적으면
+ * '측정했는데 0'과 '측정 못 함'이 구분되지 않는다.
+ */
+async function collectEnvironment() {
+  const page = await browser.newPage();
+  await page.goto(BASE, { waitUntil: 'load' });
+  const gpu = await page.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
+    if (!gl) return { vendor: null, renderer: null, glVersion: null, unmaskedAvailable: false };
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    return {
+      vendor: dbg ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
+      renderer: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+      glVersion: gl.getParameter(gl.VERSION),
+      unmaskedAvailable: Boolean(dbg),
+    };
+  });
+  const userAgent = await page.evaluate(() => navigator.userAgent);
+  const deviceMemory = await page.evaluate(() => navigator.deviceMemory ?? null);
+  await page.close();
+
+  let chromiumVersion = null;
+  try {
+    chromiumVersion = execFileSync(CHROMIUM, ['--version'], { encoding: 'utf8' }).trim();
+  } catch {
+    chromiumVersion = null; // 실행 못 하면 모른다 — 빈 문자열·0으로 적지 않는다
+  }
+
+  // SwiftShader·llvmpipe·SwANGLE 등은 **소프트웨어 래스터라이저**다.
+  // 실제 GPU 증적으로 인정하지 않는다.
+  const haystack = `${gpu.vendor ?? ''} ${gpu.renderer ?? ''}`.toLowerCase();
+  const softwarePatterns = ['swiftshader', 'llvmpipe', 'softpipe', 'swangle', 'software', 'mesa offscreen'];
+  const matched = softwarePatterns.filter((p) => haystack.includes(p));
+  const isSoftware = matched.length > 0;
+
+  return {
+    os: { platform: os.platform(), release: os.release(), arch: os.arch() },
+    cpu: { model: os.cpus()[0]?.model ?? null, cores: os.cpus().length },
+    totalMemoryBytes: os.totalmem(),
+    deviceMemoryGb: deviceMemory,
+    browser: { userAgent, chromiumVersion, executablePath: CHROMIUM },
+    gpu,
+    softwareRenderer: {
+      detected: isSoftware,
+      matchedPatterns: matched,
+      // 이 플래그가 true면 어떤 FPS도 실제 GPU 증적이 되지 못한다.
+      realGpuEvidence: !isSoftware,
+    },
+  };
+}
+
+const environment = await collectEnvironment();
+
 const rows = [];
 const allErrors = [];
 
@@ -168,16 +224,34 @@ await browser.close();
 shutdown();
 
 const report = {
-  measuredIn: 'headless-linux-container-chromium (SwiftShader)',
-  disclaimer:
-    '내장그래픽 노트북 2대 실측의 대체가 아니다. 절대 FPS를 하드웨어 기준으로 읽지 말 것 — 상대 비교·회귀 감지용.',
+  schemaVersion: 2,
+  // 측정 시각은 호출자가 채운다 — 러너가 Date를 박으면 결과 비교가 어려워진다.
+  environment,
+  disclaimer: environment.softwareRenderer.detected
+    ? '소프트웨어 래스터라이저(' +
+      environment.softwareRenderer.matchedPatterns.join(', ') +
+      ')로 측정됐다. **실제 GPU 증적이 아니다** — 내장그래픽 노트북 실측을 대체하지 않으며 절대 FPS·tier 비교에 사용 금지.'
+    : '실제 GPU로 측정됐다. 그래도 기기 1대 결과이므로 M0 인수(노트북 2대)를 단독으로 충족하지 않는다.',
   sampleMs: SAMPLE_MS,
+  // 기본 품질은 여기서 정하지 않는다 — 통합 관리자·그래픽스 판정 항목.
+  defaultQualityDecision: null,
   rows,
   consoleErrors: allErrors,
 };
 writeFileSync(path.join(projectRoot, 'docs', 'measurements', 'm0-measurement.json'), `${JSON.stringify(report, null, 2)}\n`);
 
-console.log('=== M0 계측 (컨테이너 Chromium — 노트북 실측 대체 아님) ===');
+console.log('=== M0 계측 ===');
+console.log(`OS       : ${environment.os.platform} ${environment.os.release} (${environment.os.arch})`);
+console.log(`CPU      : ${environment.cpu.model ?? '(미상)'} × ${environment.cpu.cores}`);
+console.log(`Browser  : ${environment.browser.chromiumVersion ?? '(버전 미상)'}`);
+console.log(`GPU      : ${environment.gpu.renderer ?? '(미상)'} / vendor=${environment.gpu.vendor ?? '(미상)'}`);
+console.log(`GL       : ${environment.gpu.glVersion ?? '(미상)'}`);
+if (environment.softwareRenderer.detected) {
+  console.log(
+    `⚠ 소프트웨어 래스터라이저 감지 (${environment.softwareRenderer.matchedPatterns.join(', ')}) — 실제 GPU 증적 아님`,
+  );
+}
+console.log('');
 console.log('tier    scenario        loadMs  avgFps  p95ms  worstMs  err');
 for (const r of rows) {
   console.log(
@@ -191,3 +265,6 @@ if (allErrors.length > 0) {
   process.exit(1);
 }
 console.log('\n✅ 전 조합 오류 0건.');
+console.log('');
+console.log(`M0_REAL_GPU_EVIDENCE_COMPLETE=${environment.softwareRenderer.realGpuEvidence}`);
+console.log('M0_DEFAULT_QUALITY_DECIDED=false  (기본 품질 자동 확정 금지 — 판정은 통합 관리자)');

@@ -9,7 +9,7 @@
 
 import { registerHooks } from 'node:module';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,6 +37,67 @@ try {
 } catch (error) {
   console.error('✖ 검증 실행 자체가 실패했습니다:', error);
   process.exit(1);
+}
+
+// ── 빌드 스크립트 경로 해석 (Windows 드라이브 문자·공백 경로) ────
+//
+// `new URL(...).pathname`을 쓰면 Windows에서 `/C:/…`가 되어 빌드가 성공해도
+// dist를 못 찾고, 퍼센트 인코딩(`%20`)이 풀리지 않아 공백이 든 경로가
+// 플랫폼 무관하게 깨진다. Windows에서 직접 돌리지 않고도 회귀를 잡을 수 있는
+// 지점이 여기다 — 스크립트 소스와 URL 변환 규칙을 직접 본다.
+
+{
+  const targets = ['scripts/check-build-size.mjs', 'scripts/print-project-status.mjs'];
+  const offenders = [];
+  const missingHelper = [];
+  const hardcodedDrive = [];
+  for (const rel of targets) {
+    const source = readFileSync(path.join(projectRoot, rel), 'utf8');
+    source.split('\n').forEach((line, index) => {
+      if (/^\s*(\/\/|\*)/.test(line)) return; // 설명 주석은 위반이 아니다
+      if (/import\.meta\.url\s*\)\s*\.pathname/.test(line)) offenders.push(`${rel}:${index + 1}`);
+      if (/['"][A-Za-z]:[\\/]/.test(line)) hardcodedDrive.push(`${rel}:${index + 1}`);
+    });
+    if (!/fileURLToPath/.test(source)) missingHelper.push(rel);
+  }
+  const clean = offenders.length === 0 && missingHelper.length === 0 && hardcodedDrive.length === 0;
+  results.push({
+    name: '빌드 스크립트: 파일 URL을 fileURLToPath로 해석 (pathname 직접 사용 금지)',
+    passed: clean,
+    detail: clean
+      ? `${targets.length}개 스크립트 fileURLToPath 사용 · pathname 직접 사용 0 · 드라이브 하드코딩 0`
+      : `pathname [${offenders.join(', ')}] / helper 미사용 [${missingHelper.join(', ')}] / 드라이브 하드코딩 [${hardcodedDrive.join(', ')}]`,
+  });
+
+  // 변환 규칙 자체 — 공백 해제는 리눅스에서도 그대로 재현된다.
+  const spaced = fileURLToPath(new URL('../dist', 'file:///home/user/My%20Project/scripts/x.mjs'));
+  const raw = new URL('../dist', 'file:///home/user/My%20Project/scripts/x.mjs').pathname;
+  results.push({
+    name: '빌드 스크립트: fileURLToPath가 퍼센트 인코딩을 해제 (pathname은 남긴다)',
+    passed: spaced.includes('My Project') && !spaced.includes('%20') && raw.includes('%20'),
+    detail: `pathname='${raw}' → fileURLToPath='${spaced}'`,
+  });
+}
+
+{
+  // dist 부재 시 실패 유지 / 존재 시 통과 — 실제 스크립트를 자식으로 돌린다.
+  const sizeScript = path.join(projectRoot, 'scripts', 'check-build-size.mjs');
+  const emptyRoot = mkdtempSync(path.join(tmpdir(), 'deepdive-dist-'));
+  try {
+    mkdirSync(path.join(emptyRoot, 'scripts'), { recursive: true });
+    copyFileSync(sizeScript, path.join(emptyRoot, 'scripts', 'check-build-size.mjs'));
+    const missing = spawnSync(process.execPath, [path.join(emptyRoot, 'scripts', 'check-build-size.mjs')], {
+      cwd: emptyRoot,
+      encoding: 'utf8',
+    });
+    results.push({
+      name: '빌드 스크립트: dist 부재 시 실패 유지 (build 전 통과 금지)',
+      passed: missing.status === 1 && /dist/.test(missing.stderr + missing.stdout),
+      detail: `exit=${missing.status}`,
+    });
+  } finally {
+    rmSync(emptyRoot, { recursive: true, force: true });
+  }
 }
 
 // ── 스코프 가드 스크립트 실검사 (자식 프로세스 + 픽스처) ──────────
