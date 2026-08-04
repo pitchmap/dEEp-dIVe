@@ -70,6 +70,10 @@ import {
   type BossPlacement,
 } from './boss/BossEncounter';
 import {
+  BossZoneEntrySource,
+  type BossZoneBounds,
+} from './boss/BossZoneEntrySource';
+import {
   BossWeakPointTarget,
   type BossPhasePort,
   type BossWeakPointParams,
@@ -298,7 +302,14 @@ export class GameplaySystems implements GameSystem {
   /** [M1] 보스 약점 명중 판정 — 기존 어뢰 단일 경로 재사용 (배치와 함께 생성) */
   private bossWeakPointTarget: BossWeakPointTarget | null = null;
   private bossWeakPointRegistered = false;
+  /**
+   * [M1] 보스 구역 진입 판정 — 경계 좌표는 월드 배치 모듈 소유이며 여기서는
+   * 읽기만 한다. 해금·허가 판정은 리드 `BossProgressStore`가 소유한다.
+   */
+  readonly bossZone: BossZoneEntrySource;
   private lastPublishOutcome: InteractionPublishOutcome | null = null;
+  /** `bossHit` 구독 해제 — 보스 재생성·dispose 시 중복 발행 차단 */
+  private bossHitUnsubscribe: (() => void) | null = null;
   /** [C4·M1] 플레이어 생사 정본 (리드 PlayerHullSystem) — 보스와 공유 */
   private aliveSource: PlayerAliveSource | null = null;
   /**
@@ -508,6 +519,8 @@ export class GameplaySystems implements GameSystem {
     //   ② 금괴·salvage 재화. 대상 타입별 회수 시스템을 만들지 않기 위해
     //   분기는 소비측에만 있다.
     this.interactionEvents = new InteractionEventAdapter(bus);
+    // [M1] 구역 경계는 조립부가 `BOSS_ZONE`으로 주입한다 — 미주입이면 항상 '밖'.
+    this.bossZone = new BossZoneEntrySource(this.player, null);
     this.farmingRewards = new SectorFarmingRewards(this.economy.wallet, null);
     this.interaction.onCompleted((entry) => {
       this.lastPublishOutcome = this.interactionEvents.publish(entry);
@@ -742,7 +755,39 @@ export class GameplaySystems implements GameSystem {
       this.aliveSource,
     );
     this.bossWeakPointTarget = new BossWeakPointTarget(phasePort, weakPoint, weakPointParams);
+    // [INT-CORE-022 §8] `bossHit` 발행 정본 = 게임플레이. 명중 판정이 확정된
+    //   1건당 1회, **배율 적용 후** 시점에 나간다. payload는 계약대로 kind
+    //   하나뿐이다 — 피해량·위치·공격자를 싣지 않아 렌더가 피해를 재계산할
+    //   수단 자체를 주지 않는다. `bossWeakPointChanged`는 리드 보스 코어가
+    //   발행 정본이므로 여기서 중복 발행하지 않는다.
+    this.bossHitUnsubscribe = this.bossWeakPointTarget.onHit((kind) => {
+      // 제거된 보스에는 발행하지 않는다 (격파 후 잔여 명중 차단).
+      if (this.bossEncounter?.removed === true) return;
+      this.bus.emit('bossHit', { kind });
+    });
     return this.bossEncounter;
+  }
+
+  /**
+   * 보스 구역 경계 주입 (조립부 — 월드 배치 모듈 `BOSS_ZONE`).
+   * 미주입이면 `isPlayerInBossZone()`이 항상 false다 — 좌표를 만들지 않는다.
+   */
+  attachBossZone(zone: BossZoneBounds | null): void {
+    this.bossZone.attachZone(zone);
+  }
+
+  /** 지금 플레이어가 보스 구역 안인가 (조립부·검증 읽기 단면) */
+  isPlayerInBossZone(): boolean {
+    return this.bossZone.isPlayerInBossZone();
+  }
+
+  /**
+   * 구역 진입 edge 구독 — 조립부가 이 통지를 받아
+   * `bossProgress.requestEntry()`를 부르고, `'granted'`일 때만
+   * `spawnBoss()`를 호출한다. 허가 판정을 여기서 하지 않는다.
+   */
+  onBossZoneEntered(listener: (zoneId: string) => void): () => void {
+    return this.bossZone.onZoneEntered(listener);
   }
 
   /** 생성된 보스 (배치 미주입이면 null) */
@@ -825,9 +870,21 @@ export class GameplaySystems implements GameSystem {
     this.sonarScope.attachParams(params);
   }
 
-  /** 액티브 핑 요청 (입력 어댑터·HUD 공용 진입점 — 경로를 나누지 않는다) */
+  /**
+   * 액티브 핑 요청 — 입력 어댑터·HUD 공용 진입점(경로를 나누지 않는다).
+   *
+   * ⚠ **최종 입력 키는 미확정이다.** INT-CORE-022 §9는 E(상승)·F(회수)만
+   * 확정했고 핑 키는 배정하지 않았다. 그래서 게임플레이는 키 getter를 만들지
+   * 않고 **command 표면까지만** 제공한다 — 키가 정해지면 조립부가 그 입력을
+   * 이 메서드에 연결한다. 1회 요청당 1회 처리하고 쿨다운 중에는 거부한다.
+   */
+  requestActivePing(): SonarPingOutcome {
+    return this.sonarScope.requestActivePing();
+  }
+
+  /** `requestActivePing()`의 기존 이름 (호출부 호환) */
   requestSonarPing(): SonarPingOutcome {
-    return this.sonarScope.requestPing();
+    return this.requestActivePing();
   }
 
   /** 17차 결의 4가 이름 붙인 소비 계약 */
@@ -1086,6 +1143,7 @@ export class GameplaySystems implements GameSystem {
     this.bossEncounter?.resetForNewSortie();
     this.bossWeakPointTarget?.resetForNewSortie();
     this.bossWeakPointRegistered = false;
+    this.bossZone.resetForNewSortie();
     // [M2-4] 해역 파밍 예산은 출항마다 다시 찬다 (MVP: 해역 = 출항 단위).
     this.farmingRewards.resetForNewSortie();
     // [M2-5] 핑 표시·쿨다운은 출항 한정 상태다.
@@ -1136,6 +1194,12 @@ export class GameplaySystems implements GameSystem {
     this.interaction.update(deltaSeconds);
     // 12.5) [M1] 보스 투사체 비행·명중 (이동·패턴 결정은 리드 코어 소유)
     this.bossEncounter?.update(deltaSeconds);
+    // 12.6) [M1] 약점 판정 위치를 본체에 동기 (INT-CORE-022 §3)
+    if (this.bossEncounter && this.bossWeakPointTarget) {
+      this.bossWeakPointTarget.syncTo(this.bossEncounter.getPosition());
+    }
+    // 12.7) [M1] 구역 진입 edge — 밖→안 전이에서만 통지(머무는 동안 0)
+    this.bossZone.update();
     // 13) [M2-5] 스코프 핑 표시·쿨다운 시각 진행 — 탐지 갱신 뒤에 둔다
     //     (핑이 올린 게이지가 같은 프레임에 반영되도록).
     this.sonarScope.update(deltaSeconds);
@@ -1216,6 +1280,9 @@ export class GameplaySystems implements GameSystem {
     this.enemyAttack.dispose();
     this.interaction.dispose();
     this.bossEncounter?.dispose();
+    this.bossHitUnsubscribe?.();
+    this.bossHitUnsubscribe = null;
+    this.bossZone.dispose();
     this.detachInput();
   }
 }

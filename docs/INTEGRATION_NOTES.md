@@ -90,6 +90,73 @@
 
 ## 제안 목록
 
+### INT-GAME-018 — M1·M2 Runtime Closure 게임플레이 마감 (INT-CORE-022 이행)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 창 (base = `dev@e01ffc5` 일반 merge 수신, 충돌 0) |
+| 근거 문서 | `docs/M1_M2_RUNTIME_CLOSURE_HANDOFF.md` (INT-CORE-022) §3·§4·§8·§9 |
+| 변경 범위 | `src/systems/**` **only** — core·contracts·render·tools·audio·meta/save·params·world·Game.ts 무수정 |
+| 개발 리드 결정 | (대기) |
+
+**이행 결과 (§8 게임플레이 배정 항목별)**
+
+| §8 배정 | 이행 |
+|---|---|
+| F hold 적용 (`interactHold` getter 1줄) | ✅ `KeyE`→`KeyF`. `ascend` 무변경. **추가 1줄**: `TRACKED_CODES`에 `KeyF` — 추적 목록에 없으면 keydown이 유실돼 getter가 영원히 false다(인계표가 명시하지 않은 필수 동반 변경) |
+| 승인 params 소비 (타입 정합 확인) | ✅ interaction 3축·boss 4축·sonar 4축·farming 2축 주입 경로 확인. `NullableTunable.value` 슬라이스를 그대로 받는 형태 |
+| 탐색 blip 공급 (4종, 액티브 중에만) | ✅ 패시브 자격을 kind에서 끊었다 — 소음을 내더라도 탐색 kind는 패시브에 나가지 않는다. `boss→'ship'` 유지, 지형 접점 없음 |
+| `bossHit` 발행 | ✅ `createBoss` 내부 `weakPoint.onHit` 구독, 배율 적용 후 1회, payload = kind 하나 |
+| 구역 경계 판정 (`isPlayerInBossZone()`) | ✅ + 진입 edge(밖→안 1회)·`onBossZoneEntered`·reset 초기화 |
+| 승리·패배·reset 재검증 | ✅ 기존 사슬에 보스·약점·구역 edge·소나·파밍 포함 확인 |
+| 결정적 검증 (기존 291 유지) | ✅ **311/311** (291 유지 + 신규 20) |
+
+**⛔ blocker — 게임플레이가 만들 수 없는 것**
+
+| # | 항목 | 소유 | 없을 때 현재 동작 |
+|---|---|---|---|
+| ~~B-1~~ | ~~액티브 핑 입력 키 미배정~~ → **해소** (교차 감사에서 `Q` 확정) | — | `KeyboardInput.consumeActivePingPressed()` press edge 구현 완료. 조립부는 `if (keyboard.consumeActivePingPressed()) gameplay.requestActivePing();` 한 줄만 추가하면 된다 |
+| B-2 | `params/boss.json` 승인 대기 4필드 (`movement.moveSpeedMetersPerSecond`·`movement.turnRateRadiansPerSecond`·`patterns.ram.contactDamage`·`patterns.weakPointOpen.hitRadiusMeters`) | 기획 승인 → 툴링 입력 | 축별 unwired — 보스 정지 / 돌진 무피해 / **약점 명중 불가(격파 경로 미성립)** |
+| B-3 | `params/interaction.json`·`params/sonar.json` 신설 + economy farming 확장 로더 | 툴링 (§2) | 회수·스코프·파밍 전부 unwired. **로더 미존재 동안 조립부가 그 줄을 쓰지 않는다**(인계표 §5 순서 2) |
+| B-4 | `src/world/bossPlacement.ts`·`bossCluePlacements.ts` 신설 | 그래픽스 (INT-CORE-022 승인) | 보스 미생성(`boss === null`)·구역 경계 미주입(항상 밖)·단서 발행 0 |
+| B-5 | `Game.ts` §5 배선표 실행 | 통합 관리자 | 포트·이벤트·소스 전부 구현 완료 상태로 대기 |
+
+**통합 관리자가 호출할 게임플레이 표면 (§5 배선표 대응)**
+
+```ts
+// 순서 3~4 — 단서
+gameplay.attachInteractables(() => CLUE_INTERACTABLES);
+gameplay.attachClueIds(CLUE_ID_BY_INTERACTABLE);      // ClueIdByInteractableId
+
+// 순서 5~9 — 보스 (BOSS_PLACEMENT 도착 후에만)
+gameplay.attachBossZone(BOSS_ZONE);
+gameplay.createBoss(BOSS_PLACEMENT, BOSS_WEAK_POINT_PLACEMENT, phasePortProxy,
+                    encounterParams, weakPointParams);
+const controller = new BossController({ motion: gameplay.bossMotionPort!, attackPort: gameplay.bossAttackPort!, ... });
+gameplay.attachBossDamageSink(controller);
+
+// 순서 11 — 수명주기
+gameplay.onBossZoneEntered(() => {
+  if (bossProgress.requestEntry() === 'granted') gameplay.spawnBoss();
+});
+
+// 순서 12~14 — 소나
+gameplay.attachSonarContacts(() => contacts);
+gameplay.attachSonarScopeParams(sonarParams);
+gameplay.sonarScope.attachDetectionStageSource(gameplay.detectionStageSource);
+// 핑 — Q press edge (확정). 입력 펌프 지점에서:
+if (keyboard.consumeActivePingPressed()) gameplay.requestActivePing();
+
+// M2 보상
+gameplay.attachInteractionParams(interactionParams);
+gameplay.attachFarmingRewards(rewards);
+gameplay.attachFarmingRewardParams(farmingParams);
+```
+
+**게이트:** `M1_EXIT_GATE_PASSED=false` · `M2_PROGRESS_GATE_PASSED=false` 유지.
+인계표 §6대로 **자동검증은 전제일 뿐 게이트가 아니다** — production 브라우저
+완주 19항목이 게이트다. 게임플레이 창은 production 실측을 수행하지 않았다.
+
 ### INT-CORE-022 — M1·M2 Runtime Closure 계약 확정 (리드 창 — foundation 종료 후)
 
 | 필드 | 내용 |
