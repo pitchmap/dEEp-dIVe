@@ -1,0 +1,148 @@
+{
+  "schemaVersion": 1,
+  "environment": {
+    "browser": "chromium (headless container)",
+    "viewport": "1280x720"
+  },
+  "productionEntry": {
+    "queryFlags": "none",
+    "fixtureLoaded": true
+  },
+  "note": "⚠ fixture가 장착됐다 — 이 회차는 production 완료 판정에 쓸 수 없다",
+  "debugHandleAvailable": false,
+  "results": [
+    {
+      "id": "EC1",
+      "label": "F hold로 canonical clue 3개 회수",
+      "auto": "wiring",
+      "status": "blocked",
+      "detail": "production 배선 미완 — 보스 spawn·clue 회수 경로가 Game.ts에 연결되어야 관측 가능. verify:runtime-closure의 배선 상태 참조"
+    },
+    {
+      "id": "EC2",
+      "label": "같은 clue 중복 진행 0 (다른 targetId 포함)",
+      "auto": "wiring",
+      "status": "blocked",
+      "detail": "production 배선 미완 — 보스 spawn·clue 회수 경로가 Game.ts에 연결되어야 관측 가능. verify:runtime-closure의 배선 상태 참조"
+    },
+    {
+      "id": "EC3",
+      "label": "save 후 재접속에도 3/3 유지",
+      "auto": "wiring",
+      "status": "blocked",
+      "detail": "production 배선 미완 — 보스 spawn·clue 회수 경로가 Game.ts에 연결되어야 관측 가능. verify:runtime-closure의 배선 상태 참조"
+    },
+    {
+      "id": "EC4",
+      "label": "3/3 이전 보스 구역 진입 차단 (spawn 0)",
+      "auto": "wiring",
+      "status": "blocked",
+      "detail": "production 배선 미완 — 보스 spawn·clue 회수 경로가 Game.ts에 연결되어야 관측 가능. verify:runtime-closure의 배선 상태 참조"
+    },
+    {
+      "id": "EC5",
+      "label": "3/3 이후 보스 정확히 1회 spawn",
+      "auto": "wiring",
+      "status": "blocked",
+      "detail": "production 배선 미완 — 보스 spawn·clue 회수 경로가 Game.ts에 연결되어야 관측 가능. verify:runtime-closure의 배선 상태 참조"
+    },
+    {
+      "id": "EC6",
+      "label": "BossController ↔ 이동·공격 포트 실연결 (이동·선회 관측)",
+      "auto": "wiring",
+      "status": "blocked",
+      "detail": "production 배선 미완 — 보스 spawn·clue 회수 경로가 Game.ts에 연결되어야 관측 가능. verify:runtime-closure의 배선 상태 참조"
+    },
+    {
+      "id": "EC7",
+      "label": "기존 어뢰 경로로 본체·약점 타격 성립",
+      "auto": "wiring",
+      "status": "blocked",
+      "detail": "production 배선 미완 — 보스 spawn·clue 회수 경로가 Game.ts에 연결되어야 관측 가능. verify:runtime-closure의 배선 상태 참조"
+    },
+    {
+      "id": "EC8",
+      "label": "약점 배율 정확히 1회 적용 (피해 원장 대조)",
+      "auto": "wiring",
+      "status": "blocked",
+      "detail": "production 배선 미완 — 보스 spawn·clue 회수 경로가 Game.ts에 연결되어야 관측 가능. verify:runtime-closure의 배선 상태 참조"
+    },
+    {
+      "id": "EC9",
+      "label": "보스 단계 1→2→3 순차 전환",
+      "auto": "wiring",
+      "status": "blocked",
+      "detail": "production 배선 미완 — 보스 spawn·clue 회수 경로가 Game.ts에 연결되어야 관측 가능. verify:runtime-closure의 배선 상태 참조"
+    },
+    {
+      "id": "EC10",
+      "label": "모든 공격 전 예고 표시 (telegraph 4종)",
+      "auto": "manual",
+      "status": "manual",
+      "detail": "시각 구분·정리 순서 판정 — 사람 눈이 필요하다. 자동 0·pass로 기록하지 않음"
+    },
+    {
+      "id": "EC11",
+      "label": "일반 피격·약점 피격 시각 구분 (bossHit 경로)",
+      "auto": "manual",
+      "status": "manual",
+      "detail": "시각 구분·정리 순서 판정 — 사람 눈이 필요하다. 자동 0·pass로 기록하지 않음"
+    },
+    {
+      "id": "EC12",
+      "label": "플레이어 패배 시 기존 sortieFailed 경로",
+      "auto": "wiring",
+      "status": "blocked",
+      "detail": "production 배선 미완 — 보스 spawn·clue 회수 경로가 Game.ts에 연결되어야 관측 가능. verify:runtime-closure의 배선 상태 참조"
+    },
+    {
+      "id": "EC13",
+      "label": "보스 승리 시 보상·저장 정확히 1회",
+      "auto": "wiring",
+      "status": "blocked",
+      "detail": "production 배선 미완 — 보스 spawn·clue 회수 경로가 Game.ts에 연결되어야 관측 가능. verify:runtime-closure의 배선 상태 참조"
+    },
+    {
+      "id": "EC14",
+      "label": "production 소나 provider 표시 (계기 미연결 아님)",
+      "auto": "probe",
+      "status": "unwired",
+      "detail": "스코프 read model이 미연결('계기 미연결') — unwired=true. pass로 올리지 않음"
+    },
+    {
+      "id": "EC15",
+      "label": "exploration blip 4종 (액티브 핑 노출 중에만)",
+      "auto": "wiring",
+      "status": "blocked",
+      "detail": "production 배선 미완 — 보스 spawn·clue 회수 경로가 Game.ts에 연결되어야 관측 가능. verify:runtime-closure의 배선 상태 참조"
+    },
+    {
+      "id": "EC16",
+      "label": "provider 연결·확인 후 DetectionHud 정리",
+      "auto": "manual",
+      "status": "manual",
+      "detail": "시각 구분·정리 순서 판정 — 사람 눈이 필요하다. 자동 0·pass로 기록하지 않음"
+    },
+    {
+      "id": "EC17",
+      "label": "reset·재출항 후 중복 spawn·보상·이벤트 0",
+      "auto": "wiring",
+      "status": "blocked",
+      "detail": "production 배선 미완 — 보스 spawn·clue 회수 경로가 Game.ts에 연결되어야 관측 가능. verify:runtime-closure의 배선 상태 참조"
+    },
+    {
+      "id": "EC18",
+      "label": "콘솔 오류 0",
+      "auto": "probe",
+      "status": "pass",
+      "detail": "콘솔 오류 0건"
+    },
+    {
+      "id": "EC19",
+      "label": "페이지 오류 0",
+      "auto": "probe",
+      "status": "pass",
+      "detail": "페이지 오류 0건"
+    }
+  ]
+}

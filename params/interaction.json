@@ -1,0 +1,23 @@
+{
+  "$comment": "M2 상호작용(F hold 회수) params — INT-CORE-022 / HANDOFF §2. 필드명은 계약 params.ts와 1:1이며 새 이름을 만들지 않는다. holdSeconds만 확정값(16차 튜닝표 2.0, HANDOFF '입력 가능')이고 나머지 2종은 근거가 없어 value: null(기획 승인 대기)이다. **null은 0이 아니다** — 반경 미확정이면 회수 판정이 성립하지 않고, 소음 기여 미확정이면 '소음 없는 회수'가 되어 결의에 반하므로 두 값 중 하나라도 null이면 interaction production은 unwired다. 검증: src/tools/interactionParams.ts.",
+  "hold": {
+    "holdSeconds": {
+      "value": 2.0,
+      "range": [1.0, 4.0],
+      "unit": "seconds",
+      "note": "F 홀드 유지 시간 — 16차 튜닝표 초기값. HANDOFF §2에서 '확정값 있음 — null 불요'로 명시된 유일한 M2 상호작용 수치"
+    },
+    "interactRadiusMeters": {
+      "value": null,
+      "range": [2, 12],
+      "unit": "meters",
+      "note": "회수 가능 거리 — **근거 없음, 기획 승인 대기**. E→F 거리 이탈 논의의 전제 수치라 임의값을 넣으면 이탈 판정이 통째로 거짓이 된다. null = 회수 unwired"
+    },
+    "noiseContribution": {
+      "value": null,
+      "range": [0, 1],
+      "unit": "ratio",
+      "note": "회수 중 가산 소음 — **근거 없음, 기획 승인 대기**. null을 0으로 읽으면 '소음 없는 회수'가 되어 결의에 반한다. null = 회수 자체 unwired 유지"
+    }
+  }
+}

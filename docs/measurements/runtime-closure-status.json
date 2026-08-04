@@ -1,0 +1,231 @@
+{
+  "schemaVersion": 1,
+  "checks": [
+    {
+      "id": "P1-interaction",
+      "name": "interaction params — holdSeconds 확정 · 나머지 null 보존",
+      "status": "pass",
+      "detail": "holdSeconds=2.0 · 반경 null · 소음 null · 미확정 2건"
+    },
+    {
+      "id": "P1-interactionWired",
+      "name": "interaction production 배선 가능 여부",
+      "status": "blockedByNullParam",
+      "detail": "**interaction production BLOCKED** — 미확정 hold.interactRadiusMeters, hold.noiseContribution. 반경 없이는 거리 판정이, 소음 기여 없이는 '소음 없는 회수'가 되어 회수 자체를 열 수 없다. null을 0으로 읽지 않았다"
+    },
+    {
+      "id": "P2-sonar",
+      "name": "sonar params — 4항목 전부 null 보존 · 입력 키 부재",
+      "status": "pass",
+      "detail": "미확정 4/4 — 16차 튜닝표 초기 후보(3.0/0.30/25)를 확정값으로 입력하지 않음"
+    },
+    {
+      "id": "P2-sonarActiveWired",
+      "name": "sonar 액티브 핑 축 배선 가능 여부",
+      "status": "blockedByNullParam",
+      "detail": "**액티브 핑 축 production wiring 불가** — 표시·노출 대가·쿨다운 중 미확정이 있어 반쪽 상태를 만들지 않는다. pass·0으로 기록하지 않음"
+    },
+    {
+      "id": "P2-sonarPassiveWired",
+      "name": "sonar 패시브 방위 축 배선 가능 여부",
+      "status": "blockedByNullParam",
+      "detail": "**패시브 방위 축 production wiring 불가** — 번짐 폭 미확정. 스코프는 '계기 미연결' 유지"
+    },
+    {
+      "id": "P3-farming",
+      "name": "economy farming — 두 항목 null 보존 · clue 혼합 없음",
+      "status": "pass",
+      "detail": "비율 null · 평균 null · 상한 계산 불가 → 파밍 무지급 유지"
+    },
+    {
+      "id": "B1-bossFields",
+      "name": "boss params 4필드 존재 · null 보존 · range·unit·관계",
+      "status": "pass",
+      "detail": "4필드 존재 · 미확정 4/4 [movement.moveSpeedMetersPerSecond, movement.turnRateRadiansPerSecond, patterns.ram.contactDamage, patterns.weakPointOpen.hitRadiusMeters] · range·unit 검증 통과"
+    },
+    {
+      "id": "B2-noAutoFill",
+      "name": "boss 승인 전 숫자 자동 입력 0건 · fixture 숫자 production 복사 0건",
+      "status": "pass",
+      "detail": "승인 대기 4필드 전부 null — 자동 입력 0건"
+    },
+    {
+      "id": "C1-clueMapping",
+      "name": "clue mapping 정본 검증 (src/world/bossCluePlacements.ts)",
+      "status": "blocked",
+      "detail": "정본 파일이 아직 없다 — src/world/bossCluePlacements.ts 미존재 (그래픽스 PR 대기). **그래픽스 PR 산출물이며 툴링이 만들지 않는다.** 파일 도착 시 자동으로 pass/fail 판정으로 전환된다. 파일 없음을 pass로 처리하지 않았다"
+    },
+    {
+      "id": "S1-migration",
+      "name": "save v1→v2 — legacy cap 없음 · id 보존 · 해금 단조",
+      "status": "pass",
+      "detail": "5개 케이스 · cap 없음 · 해금 단조 · 재저장 유지 · 미지 clue 처리 · 다운그레이드 거부"
+    },
+    {
+      "id": "E1-bossHit",
+      "name": "bossHit kind 2종 · 피해량·위치·공격자 없음",
+      "status": "pass",
+      "detail": "kind 2종 · payload {kind}만 · 피해량·위치·공격자 0"
+    },
+    {
+      "id": "E2-weakPointProducer",
+      "name": "bossWeakPointChanged 발행 정본 = BossController 단독",
+      "status": "pass",
+      "detail": "발행 지점 1건 전부 BossController: src/core/BossController.ts:427"
+    },
+    {
+      "id": "E3-interactionCollected",
+      "name": "interactionCollected — targetId/clueId 분리 유지",
+      "status": "pass",
+      "detail": "분리 유지 · 비-clue clueId 타입 수준 금지 — payload 키: kind, targetId, clueId, x, z"
+    },
+    {
+      "id": "E4-sonarBlipKind",
+      "name": "SonarBlipKind 7종 (전투 3 + 탐색 4)",
+      "status": "pass",
+      "detail": "7종: ship, torpedo, depthCharge, goldCache, salvage, clue, deepSite"
+    },
+    {
+      "id": "W1-officialParams",
+      "name": "[배선 1] 공식 params loader 결과 생성",
+      "status": "pass",
+      "detail": "production 호출 src/core/Game.ts:401"
+    },
+    {
+      "id": "W2-toolingLoaders",
+      "name": "[배선 2] 툴링 params 로더(interaction·sonar·farming) 호출",
+      "status": "unwired",
+      "detail": "구현체는 있으나 Game.ts에 production 호출 없음 (주석만 있는 배선은 pass 아님)"
+    },
+    {
+      "id": "W3-clueSource",
+      "name": "[배선 3] world clue placement 소비",
+      "status": "blocked",
+      "detail": "구현체 미도착 (타 역할 산출물) — 배선 대상이 아직 없다"
+    },
+    {
+      "id": "W4-clueIds",
+      "name": "[배선 4] clue mapping source 주입 (attachClueIds)",
+      "status": "blocked",
+      "detail": "구현체 미도착 (타 역할 산출물) — 배선 대상이 아직 없다"
+    },
+    {
+      "id": "W5-bossPlacement",
+      "name": "[배선 5] world boss placement 소비",
+      "status": "blocked",
+      "detail": "구현체 미도착 (타 역할 산출물) — 배선 대상이 아직 없다"
+    },
+    {
+      "id": "W6-bossEncounter",
+      "name": "[배선 6] BossEncounter 연결 (createBoss)",
+      "status": "unwired",
+      "detail": "구현체는 있으나 Game.ts에 production 호출 없음 (주석만 있는 배선은 pass 아님)"
+    },
+    {
+      "id": "W7-bossController",
+      "name": "[배선 7] BossController 생성",
+      "status": "unwired",
+      "detail": "구현체는 있으나 Game.ts에 production 호출 없음 (주석만 있는 배선은 pass 아님)"
+    },
+    {
+      "id": "W8-bossMotionPort",
+      "name": "[배선 8] BossMotionPort 연결",
+      "status": "unwired",
+      "detail": "구현체는 있으나 Game.ts에 production 호출 없음 (주석만 있는 배선은 pass 아님)"
+    },
+    {
+      "id": "W9-bossAttackPort",
+      "name": "[배선 9] BossAttackPort 연결",
+      "status": "unwired",
+      "detail": "구현체는 있으나 Game.ts에 production 호출 없음 (주석만 있는 배선은 pass 아님)"
+    },
+    {
+      "id": "W10-bossDamageSink",
+      "name": "[배선 10] BossDamageSink 연결",
+      "status": "unwired",
+      "detail": "구현체는 있으나 Game.ts에 production 호출 없음 (주석만 있는 배선은 pass 아님)"
+    },
+    {
+      "id": "W11-weakPointTarget",
+      "name": "[배선 11] BossWeakPointTarget 등록",
+      "status": "unwired",
+      "detail": "구현체는 있으나 Game.ts에 production 호출 없음 (주석만 있는 배선은 pass 아님)"
+    },
+    {
+      "id": "W12-interactables",
+      "name": "[배선 12] interactable source 연결",
+      "status": "unwired",
+      "detail": "구현체는 있으나 Game.ts에 production 호출 없음 (주석만 있는 배선은 pass 아님)"
+    },
+    {
+      "id": "W13-sonarProvider",
+      "name": "[배선 13] SonarScope provider 연결 (contacts·params)",
+      "status": "blockedByNullParam",
+      "detail": "필수 params 미확정 — 배선해도 동작하지 않으므로 배선하지 않는다"
+    },
+    {
+      "id": "W14-sonarRender",
+      "name": "[배선 14] SonarScope render consumer 연결",
+      "status": "unwired",
+      "detail": "구현체는 있으나 Game.ts에 production 호출 없음 (주석만 있는 배선은 pass 아님)"
+    },
+    {
+      "id": "W15-bossView",
+      "name": "[배선 15] BossCoreView render consumer 연결",
+      "status": "unwired",
+      "detail": "구현체는 있으나 Game.ts에 production 호출 없음 (주석만 있는 배선은 pass 아님)"
+    },
+    {
+      "id": "W16-bossSpawn",
+      "name": "[배선 16] boss spawn·victory·sortieFailed·reset 사슬",
+      "status": "unwired",
+      "detail": "구현체는 있으나 Game.ts에 production 호출 없음 (주석만 있는 배선은 pass 아님)"
+    },
+    {
+      "id": "C0-clueVerifierSelfTest",
+      "name": "clue mapping verifier 자체 테스트 (픽스처 — 정본 부재와 무관)",
+      "status": "pass",
+      "detail": "6종 전부 기대대로: ✔ 정상 매핑 / ✔ 같은 clue 다중 target (정책상 허용) / ✔ 미지 clueId 거부 / ✔ 필수 clueId 누락 거부 / ✔ 배치 정합 깨짐 거부 / ✔ non-clue 항목 거부"
+    }
+  ],
+  "flags": {
+    "TOOLING_RUNTIME_CLOSURE_INFRA_COMPLETE": true,
+    "INTERACTION_PARAMS_LOADER_IMPLEMENTED": true,
+    "SONAR_PARAMS_LOADER_IMPLEMENTED": true,
+    "ECONOMY_FARMING_PARAMS_LOADER_IMPLEMENTED": true,
+    "CLUE_MAPPING_VERIFIER_IMPLEMENTED": true,
+    "COMPOSITION_WIRING_VERIFIER_IMPLEMENTED": true,
+    "RUNTIME_CLOSURE_BROWSER_HARNESS_IMPLEMENTED": true,
+    "CLUE_PROGRESS_INTEGRATED": false,
+    "BOSS_PRODUCTION_SPAWNED": false,
+    "BOSS_ATTACK_PORT_WIRED": false,
+    "BOSS_MOTION_PORT_WIRED": false,
+    "BOSS_PRODUCTION_WIRED": false,
+    "M1_EXIT_GATE_PASSED": false,
+    "M2_PROGRESS_GATE_PASSED": false,
+    "M1_M2_INTEGRATED_COMPLETE": false,
+    "M3_START_ALLOWED": false
+  },
+  "blockers": [
+    "INTERACTION_BLOCKED_BY_NULL:hold.interactRadiusMeters|hold.noiseContribution",
+    "SONAR_ACTIVE_PING_BLOCKED_BY_NULL",
+    "SONAR_PASSIVE_BEARING_BLOCKED_BY_NULL",
+    "FARMING_CAP_BLOCKED_BY_NULL",
+    "CLUE_MAPPING_SOURCE_ABSENT:src/world/bossCluePlacements.ts",
+    "WIRING_2_NOT_WIRED:toolingLoaders",
+    "WIRING_3_NOT_WIRED:clueSource",
+    "WIRING_4_NOT_WIRED:clueIds",
+    "WIRING_5_NOT_WIRED:bossPlacement",
+    "WIRING_6_NOT_WIRED:bossEncounter",
+    "WIRING_7_NOT_WIRED:bossController",
+    "WIRING_8_NOT_WIRED:bossMotionPort",
+    "WIRING_9_NOT_WIRED:bossAttackPort",
+    "WIRING_10_NOT_WIRED:bossDamageSink",
+    "WIRING_11_NOT_WIRED:weakPointTarget",
+    "WIRING_12_NOT_WIRED:interactables",
+    "WIRING_13_NOT_WIRED:sonarProvider",
+    "WIRING_14_NOT_WIRED:sonarRender",
+    "WIRING_15_NOT_WIRED:bossView",
+    "WIRING_16_NOT_WIRED:bossSpawn"
+  ]
+}

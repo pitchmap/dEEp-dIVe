@@ -63,6 +63,21 @@
     "rareParts": 1,
     "note": "출항 1회 최대 수입 참조값 — 위 dropTables·salvageSpawns에서 파생되며 검증기가 합계 일치를 확인한다(수치 중복 정의가 아니라 회귀 방지용 기대값)"
   },
+  "farming": {
+    "$comment": "M2 4단계 파밍 보상 상한 — INT-CORE-022 / HANDOFF §2. **두 항목 모두 value: null.** sectorCapRatioOfCombatAverage 0.40은 16차 튜닝표 초기값이자 '기획 확인 후 입력' 절차 항목이라 확정값이 아니다(DECISIONS M-10) — 초기 후보를 확정값으로 위장하지 않는다. combatRewardAverageCredits는 기존 격침 보상표에서 파생하는 **산식 자체가 미결정**이다. 상한이 미확정이면 파밍은 지급하지 않는다 — '미확정 = 무제한'은 16차 결의가 명시적으로 거부한 방향이다. **clue 진행과 절대 혼합하지 않는다**: 단서는 재화가 아니고 이 블록은 진행도를 모른다. 신규 화폐 없음 — 기존 단일 재화에만 적립.",
+    "sectorCapRatioOfCombatAverage": {
+      "value": null,
+      "range": [0.20, 0.60],
+      "unit": "ratio",
+      "note": "해역당 파밍 상한 = 전투 보상 평균 × 이 비율. 초기 후보 0.40, **기획 확인 대기**"
+    },
+    "combatRewardAverageCredits": {
+      "value": null,
+      "range": [10, 500],
+      "unit": "credits",
+      "note": "상한 산정 기준이 되는 전투 보상 평균 — **산식 미결정, 기획 결정 대기**. null = 파밍 무지급 유지"
+    }
+  },
   "factionRewards": {
     "$comment": "세력별 격침 보상 **정책**만 둔다. 세력→드롭 테이블 매핑의 정본은 계약 src/contracts/faction.ts의 FACTION_RULES이며 여기에 복제하지 않는다(CLAUDE.md 규칙 6). 검증기가 계약과 이 정책의 일치를 기계적으로 대조한다 — 어긋나면 로드 거부. policy 의미: dropTable = 계약이 가리키는 공식 테이블로 보상 / none = **확정된 무보상**(0은 결정된 값) / pending = **공식 결정 없음**(값 없음 — 0이 아니라 미정. 발명 금지). null과 0을 구분하기 위해 none만 명시적 0을 싣고 pending은 수치 필드 자체를 갖지 않는다.",
     "hostile": {

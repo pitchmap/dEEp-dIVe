@@ -1,0 +1,31 @@
+{
+  "$comment": "M2 소나 params — INT-CORE-022 / HANDOFF §2. **전 4항목 value: null.** 액티브 핑 3종은 16차 튜닝표 초기값(3.0 / 0.30 / 25)이 HANDOFF에 적혀 있으나 '기획 확인 후 입력' 절차 항목이고, 저장소 어디에도 기획 확인 완료 기록이 없어 입력하지 않았다 — 초기 후보를 확정값으로 위장하지 않는다(DECISIONS M-10). 수동 bearing spread는 '근거 없음'으로 명시된 승인 대기 항목이다. **액티브 핑 입력 키(키 바인딩)는 여기 두지 않는다** — 입력은 params가 아니다. 검증: src/tools/sonarParams.ts.",
+  "activePing": {
+    "displaySeconds": {
+      "value": null,
+      "range": [1, 6],
+      "unit": "seconds",
+      "note": "핑 1회의 접점 표시 지속 — 16차 튜닝표 초기 후보 3.0, **기획 확인 대기**. null = 액티브 핑 축 unwired"
+    },
+    "detectionGaugeRise": {
+      "value": null,
+      "range": [0.1, 0.6],
+      "unit": "gauge",
+      "note": "핑 1회의 탐지 게이지 상승 = 노출 대가 — 초기 후보 0.30, **기획 확인 대기**. null이면 '대가 없는 핑'이 되므로 표시도 열지 않는다"
+    },
+    "cooldownSeconds": {
+      "value": null,
+      "range": [10, 60],
+      "unit": "seconds",
+      "note": "핑 재사용 대기 — 초기 후보 25, **기획 확인 대기**. null = 쿨다운 없는 연타 방지 불가라 축 자체를 unwired로 둔다"
+    }
+  },
+  "passive": {
+    "bearingSpreadRadiansAtMaxNoise": {
+      "value": null,
+      "range": [0.1, 1.2],
+      "unit": "radians",
+      "note": "자기 소음 최대일 때의 방위 번짐 폭 — **근거 없음, 기획 승인 대기**. null = 패시브 스코프 unwired('계기 미연결' 유지)"
+    }
+  }
+}
