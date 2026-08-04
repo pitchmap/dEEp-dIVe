@@ -48,10 +48,12 @@ function channelCenterX(z: number): number {
 
 const SEABED_Y = STARTING_CANYON_LAYOUT.floorY + CLUE_SEATED_HEIGHT;
 
-/** 단서 interactable 배치 1건 — 좌표·targetId 순수 데이터 */
+/** 단서 interactable 배치 1건 — 좌표·targetId 순수 데이터.
+ *  필드명은 공유 계약 어휘(`InteractionCollectedEvent.targetId` — 월드
+ *  interactable 고유 ID)를 그대로 쓴다 (Runtime Closure verifier C1 동일). */
 export interface BossCluePlacement {
   /** 월드 interactable 고유 ID — clueId가 아니다 (매핑으로만 연결) */
-  readonly interactableId: string;
+  readonly targetId: string;
   readonly x: number;
   readonly y: number;
   readonly z: number;
@@ -61,21 +63,21 @@ export interface BossCluePlacement {
 export const BOSS_CLUE_PLACEMENTS: readonly BossCluePlacement[] = Object.freeze([
   {
     // 남쪽 수로 — 난파선 회수 지점(salvage-1, z=-30) 곁의 데이터코어
-    interactableId: 'wreck-datacore',
+    targetId: 'wreck-datacore',
     x: channelCenterX(-38) + 2,
     y: SEABED_Y,
     z: -38,
   },
   {
     // 중앙 수로 해저 — 심층 탐사 프로브
-    interactableId: 'survey-probe',
+    targetId: 'survey-probe',
     x: channelCenterX(4) + 3,
     y: SEABED_Y,
     z: 4,
   },
   {
     // 최남단 수로 해저 — 경비 순찰 기록 블랙박스 (화물 항로 남쪽)
-    interactableId: 'patrol-blackbox',
+    targetId: 'patrol-blackbox',
     x: channelCenterX(-52) + 2,
     y: SEABED_Y,
     z: -52,

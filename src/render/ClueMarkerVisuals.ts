@@ -66,7 +66,7 @@ export class ClueMarkerVisuals {
       lamp.position.y = 1.5;
       node.add(lamp);
       this.root.add(node);
-      this.nodes.set(placement.interactableId, node);
+      this.nodes.set(placement.targetId, node);
     }
   }
 
