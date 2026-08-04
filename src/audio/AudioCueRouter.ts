@@ -24,7 +24,11 @@ export type AudioCueId =
   | 'creditsGained'
   | 'rarePartAcquired'
   | 'baseEnter'
-  | 'baseDepart';
+  | 'baseDepart'
+  /** 폭뢰 입수 '풍덩' — 시그니처 리듬의 시작점 */
+  | 'depthChargeSplash'
+  /** 폭뢰 폭발 */
+  | 'depthChargeExplosion';
 
 export class AudioCueRouter {
   private readonly buffers = new Map<AudioCueId, AudioBuffer>();
@@ -43,6 +47,19 @@ export class AudioCueRouter {
     this.unsubscribers.push(
       bus.on('aimModeChanged', ({ aiming }) => {
         this.trigger(aiming ? 'aimEnter' : 'aimExit');
+      }),
+    );
+    // 폭뢰 lifecycle — 판정이 발행하는 **같은 이벤트**를 사운드가 소비한다.
+    // 별도 타이머를 두지 않는 이유: '풍덩→3초→폭발' 리듬의 주인은 판정이며
+    // (마스터 플랜 §5.12), 사운드가 자체 시계를 돌리면 둘이 어긋난다.
+    this.unsubscribers.push(
+      bus.on('depthChargeEnteredWater', () => {
+        this.trigger('depthChargeSplash');
+      }),
+    );
+    this.unsubscribers.push(
+      bus.on('depthChargeExploded', () => {
+        this.trigger('depthChargeExplosion');
       }),
     );
     // creditsGained·rarePartAcquired·기지 전환 이벤트는 계약 부재 —

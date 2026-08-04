@@ -37,6 +37,7 @@ import type {
   SortieResettable,
 } from '../../contracts/survival';
 import type { DepthChargeSystem } from '../../contracts/systems';
+import type { EventBus } from '../../core/EventBus';
 import { depthChargeDamageWired } from './officialCombatParams';
 
 /** 계약이 고정한 신관 하한 (초) — 인간 반응 사슬 근거, 더 짧게 만들지 않는다 */
@@ -123,6 +124,25 @@ export class DepthChargeRunSystem implements DepthChargeSystem, SortieResettable
   /** 이미 피해를 적용한 폭발 상관 id — 중복 피해 차단 */
   private readonly damagedCorrelations = new Set<string>();
 
+  /**
+   * 사운드·연출용 lifecycle 이벤트 버스 (선택 주입).
+   *
+   * 미주입이면 아무것도 발행하지 않는다 — 결정적 검증은 버스 없이도 돌고,
+   * production 조립부만 연결한다. **판정은 이 버스에 의존하지 않는다**:
+   * 이벤트는 이미 확정된 상태 전이를 알리기만 하며, 구독자가 없거나
+   * 예외를 던져도 폭뢰 판정은 그대로 진행된다.
+   */
+  private bus: EventBus | null = null;
+  /**
+   * 이벤트 payload용 숫자 id. 계약(`events.ts`)이 `id: number`를 요구하는데
+   * 내부 `chargeId`는 문자열이라 별도로 센다 — 문자열을 파싱해 숫자를
+   * 만들어내지 않는다(형식이 바뀌면 조용히 깨진다).
+   */
+  private nextEventId = 1;
+  /** 이 폭뢰가 이미 입수/폭발을 알렸는가 — 정확히 1회 보장 */
+  private readonly eventIds = new Map<string, number>();
+  private readonly explodedAnnounced = new Set<string>();
+
   constructor(
     receiver: DamageReceiverPort,
     targets: () => readonly DepthChargeTargetView[],
@@ -135,6 +155,27 @@ export class DepthChargeRunSystem implements DepthChargeSystem, SortieResettable
     this.fuseSeconds = clampFuse(fuseSeconds);
     this.damageParams = damageParams;
     this.simultaneousLimit = simultaneousLimit;
+  }
+
+  /**
+   * lifecycle 이벤트 버스 연결 (조립부).
+   *
+   * 입수 1회·폭발 1회만 발행한다. 취소·제거·출항 리셋은 발행 경로가 아니다 —
+   * 물에 들어가지 않은 폭뢰의 입수음이나, 터지지 않은 폭뢰의 폭발음이
+   * 나면 '풍덩→3초→폭발' 리듬 자체가 거짓이 된다.
+   */
+  attachEventBus(bus: EventBus | null): void {
+    this.bus = bus;
+  }
+
+  /** 구독자 예외가 폭뢰 판정을 멈추지 않게 격리한다 */
+  private emitSafely(emit: (bus: EventBus) => void): void {
+    if (!this.bus) return;
+    try {
+      emit(this.bus);
+    } catch (error) {
+      console.error('[DepthChargeRun] lifecycle 이벤트 구독자 예외 — 판정은 계속됩니다.', error);
+    }
   }
 
   /** 공식 전투 params 주입 (조립부) — 신관·동시 상한·피해 수치 */
@@ -210,6 +251,22 @@ export class DepthChargeRunSystem implements DepthChargeSystem, SortieResettable
     };
     this.nextSequence += 1;
     this.charges.push(charge);
+
+    // 입수 = 투하가 실제로 성립한 순간. 위 조기 반환(좌표 비유한·동시 상한
+    // 초과)은 물에 들어가지 않았으므로 여기까지 오지 않는다 = 발행 0회.
+    const eventId = this.nextEventId;
+    this.nextEventId += 1;
+    this.eventIds.set(charge.chargeId, eventId);
+    this.emitSafely((bus) =>
+      bus.emit('depthChargeEnteredWater', {
+        id: eventId,
+        x: charge.worldX,
+        z: charge.worldZ,
+        // 사운드가 '풍덩→폭발' 간격을 예약할 수 있도록 실제 적용 신관을 싣는다.
+        fuseSeconds: this.fuseSeconds,
+      }),
+    );
+
     return this.charges_[this.charges.length - 1] ?? null;
   }
 
@@ -238,6 +295,19 @@ export class DepthChargeRunSystem implements DepthChargeSystem, SortieResettable
       charge.phase = 'detonated';
       this.detonate(charge);
       charge.phase = 'removed';
+
+      // 폭발 = 신관 만료로 실제 기폭한 경우에만. 같은 폭뢰가 두 번 세어지지
+      // 않도록 기록으로 막는다(update가 어떤 순서로 불려도 1회).
+      if (!this.explodedAnnounced.has(charge.chargeId)) {
+        this.explodedAnnounced.add(charge.chargeId);
+        const eventId = this.eventIds.get(charge.chargeId);
+        // id를 모르는 폭뢰는 drop()을 거치지 않았다는 뜻이라 발행하지 않는다.
+        if (eventId !== undefined) {
+          this.emitSafely((bus) =>
+            bus.emit('depthChargeExploded', { id: eventId, x: charge.worldX, z: charge.worldZ }),
+          );
+        }
+      }
     }
     this.charges = survivors;
   }
@@ -307,10 +377,14 @@ export class DepthChargeRunSystem implements DepthChargeSystem, SortieResettable
 
   /** 출항 한정 상태 — 수중 폭뢰·중복 기록 전부 초기화 */
   resetForNewSortie(): void {
+    // 낙하 중이던 폭뢰는 여기서 사라진다 — **폭발이 아니라 제거**이므로
+    // depthChargeExploded를 발행하지 않는다.
     this.charges = [];
     this.damagedCorrelations.clear();
     this.lastOutcomeValue = null;
     this.elapsedSeconds = 0;
+    this.eventIds.clear();
+    this.explodedAnnounced.clear();
   }
 
   dispose(): void {

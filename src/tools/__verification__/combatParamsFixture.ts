@@ -15,6 +15,8 @@
 export function allNullCombatFixture(): Record<string, unknown> {
   const wrap = (): Record<string, unknown> => ({ value: null });
   return {
+    // 소나 표시 정책은 null을 두지 않는다 — 기본은 '보여주지 않음'.
+    depthChargeOnPassiveScope: { value: false },
     hull: { baseMaxHull: wrap(), damagedRatioThreshold: wrap(), criticalRatioThreshold: wrap() },
     depthCharge: {
       directRadiusMeters: wrap(),
@@ -43,6 +45,7 @@ export function allNullCombatFixture(): Record<string, unknown> {
 export function fullyDefinedCombatFixture(): Record<string, unknown> {
   const wrap = (value: unknown): Record<string, unknown> => ({ value });
   return {
+    depthChargeOnPassiveScope: { value: false },
     hull: {
       baseMaxHull: wrap(100),
       damagedRatioThreshold: wrap(0.6),
