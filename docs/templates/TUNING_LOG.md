@@ -23,3 +23,27 @@
 | 화면 버튼 사용률 | 계측 전용 | — | PC 유저 사용률 30%+ → 버튼 확대 검토 / 5% 미만 → 기본 흐림 강화 (담당 임찬영) | — | — | G3 | — | 8차 소회의 결의 1 신규 행 (계측 행 — 밸런스 값 아님) |
 
 <!-- 새 항목은 여기 위에 행 추가. 행 추가 시 판단 기준을 반드시 함께 기입할 것. -->
+
+## M1·M2 Runtime Closure 초기값 `[M1M2-INITIAL]` (사용자 승인)
+
+> 최초 production Runtime Closure 검증을 돌리기 위한 **초기 튜닝값**이며
+> **최종 밸런스 확정이 아니다.** 승인 전에는 전부 `NullableTunable`의
+> `value: null`(미확정)이었고, 초기 후보를 확정값으로 위장하지 않았다.
+> 실측 열은 production 배선(Game.ts) 완료 후 채운다 — 지금은 전부 미실측이다.
+> `params/boss.json` 수정은 리드 교차 감사에서 명시적으로 승인된 교차 소유 예외다.
+
+| 항목 | 초기값 | 조정 범위 | 판단 기준 | 테스트 결과 | 관련 게이트 | 파일 | 변경 사유 |
+|---|---|---|---|---|---|---|---|
+| 보스 이동 속도 | 7.0 m/s | (boss.json range 참조) | M1 Exit 6: 이동·선회 관측. 회피 불가 호소 → 감소 / 추격 무의미 관측 → 증가 | (미실측 — production 배선 대기) | M1·M2 | `params/boss.json` | **[M1M2-INITIAL]** 사용자 승인 초기값 입력. 승인 전 null(NullableTunable) → 최초 production Runtime Closure 검증용. **최종 밸런스 확정 아님** |
+| 보스 선회 속도 | 0.6 rad/s | (boss.json range 참조) | M1 Exit 6: 선회 관측. 평상시 이동 ≤ 돌진 관계 유지 | (미실측) | M1·M2 | `params/boss.json` | **[M1M2-INITIAL]** 동일 |
+| 보스 돌진 접촉 피해 | 30 | (boss.json range 참조) | M1 Exit 7·8: 피해 원장 대조. 즉사 관측 → 감소 | (미실측) | M1·M2 | `params/boss.json` | **[M1M2-INITIAL]** 동일 |
+| 보스 약점 명중 반경 | 6.0 m | (boss.json range 참조) | M1 Exit 7: 약점 타격 성립. 명중 불가 호소 → 증가 | (미실측) | M1·M2 | `params/boss.json` | **[M1M2-INITIAL]** 동일 |
+| F 홀드 회수 시간 | 2.0초 | 1.0~4.0 | M2 Exit 1: clue 3종 회수. 지루함 응답 → 감소 / 실수 회수 관측 → 증가 | (미실측) | M1·M2 | `params/interaction.json` | **[M1M2-INITIAL]** 16차 튜닝표 초기값이자 사용자 승인 초기값 |
+| 회수 가능 거리 | 6.0 m | 2~12 | M2 Exit 1: E→F 거리 이탈 판정의 전제. 이탈 취소가 안 걸리면 감소 | (미실측) | M1·M2 | `params/interaction.json` | **[M1M2-INITIAL]** 승인 전 null — 반경 없이는 거리 판정 자체가 불가했다 |
+| 회수 중 가산 소음 | 0.15 | 0~1 | M2: 회수가 무위험이 되지 않아야 한다. 노출 0 관측 → 증가 | (미실측) | M1·M2 | `params/interaction.json` | **[M1M2-INITIAL]** 승인 전 null — 0으로 읽으면 '소음 없는 회수'가 되어 결의 위반 |
+| 액티브 핑 표시 지속 | 3.0초 | 1~6 | M2 Exit 15: 탐색 blip 4종 확인. 너무 짧아 못 읽으면 증가 | (미실측) | M1·M2 | `params/sonar.json` | **[M1M2-INITIAL]** 16차 튜닝표 기준 사용자 승인 초기값 |
+| 액티브 핑 게이지 상승 | 0.30 | 0.1~0.6 | 핑의 노출 대가. 남용 관측 → 증가 / 사용 0 관측 → 감소 | (미실측) | M1·M2 | `params/sonar.json` | **[M1M2-INITIAL]** 동일 |
+| 액티브 핑 쿨다운 | 25초 | 10~60 | 연타 방지. 사용률 0 → 단축 | (미실측) | M1·M2 | `params/sonar.json` | **[M1M2-INITIAL]** 동일 |
+| 패시브 방위 번짐(최대 소음) | 0.45 rad | 0.1~1.2 | 침묵 항행 시 선명해지는 대비. 번짐 무의미 관측 → 증가 | (미실측) | M1·M2 | `params/sonar.json` | **[M1M2-INITIAL]** 승인 전 null — 스코프 unwired 유지 상태였다 |
+| 파밍 상한 비율 | 0.40 | 0.20~0.60 | 해역당 파밍 상한 = 전투 보상 평균 × 비율. 파밍이 전투를 대체하면 감소 | (미실측) | M1·M2 | `params/economy.json` | **[M1M2-INITIAL]** 사용자 승인 초기값 |
+| 전투 보상 평균 | 120 credits | 10~500 | 상한 산정 기준. **파생 상한 = 120 × 0.40 = 48 credits** | (미실측) | M1·M2 | `params/economy.json` | **[M1M2-INITIAL]** 승인 전 산식 미결정으로 null이었다 |

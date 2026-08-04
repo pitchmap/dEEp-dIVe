@@ -16,6 +16,8 @@
 
 import { ParamValidationError } from '../config/validateParams';
 import { rewardDropTableIdFor } from '../contracts/faction';
+import type { NullableTunable } from '../contracts/params';
+import { readNullableTunable } from './tunableSchema';
 import type { FactionId } from '../contracts/faction';
 
 const UPGRADES_FILE = 'params/upgrades.json';
@@ -519,7 +521,17 @@ export interface GuardSpawnParams {
   readonly spawnRetryCount: number | null;
 }
 
+/** [M2] 4단계 파밍 보상 상한 — INT-CORE-022. 미확정 시 지급 자체를 하지 않는다 */
+export interface FarmingParams {
+  readonly sectorCapRatioOfCombatAverage: NullableTunable;
+  readonly combatRewardAverageCredits: NullableTunable;
+  /** 상한을 계산할 수 있는가 — 둘 다 확정일 때만 true. false면 파밍 무지급 */
+  readonly capComputable: boolean;
+}
+
 export interface EconomyParams {
+  /** [M2] 미도입 시 null (A·B 스택 호환) */
+  readonly farming: FarmingParams | null;
   readonly creditLossOnDestroyedRatio: number;
   readonly pickupRadiusMeters: number;
   readonly dropTables: Readonly<Record<string, DropTableEntry>>;
@@ -841,6 +853,38 @@ export function guardSpawnParamsUsable(economy: EconomyParams): boolean {
   return Object.values(guard).every((value) => value !== null);
 }
 
+/**
+ * [M2] farming 블록 검증. 두 항목 모두 `NullableTunable`이며 툴링 공용
+ * 리더를 재사용한다 — 스키마를 여기 복제하지 않는다.
+ *
+ * **clue 진행과 혼합하지 않는다**: 이 블록은 진행도·단서 id를 알지 못하고,
+ * 검증기도 그 둘을 잇는 필드를 허용하지 않는다.
+ */
+function validateFarming(raw: unknown): FarmingParams | null {
+  if (raw === undefined || raw === null) return null;
+  if (!isRecord(raw)) {
+    throw new ParamValidationError(ECONOMY_FILE, 'farming', '객체가 필요합니다');
+  }
+  const allowed = ['sectorCapRatioOfCombatAverage', 'combatRewardAverageCredits'];
+  for (const key of Object.keys(raw)) {
+    if (key.startsWith('$')) continue;
+    if (!allowed.includes(key)) {
+      throw new ParamValidationError(
+        ECONOMY_FILE,
+        `farming.${key}`,
+        `계약에 없는 필드입니다. 허용: ${allowed.join(', ')} (clue 진행 필드 혼합 금지)`,
+      );
+    }
+  }
+  const ratio = readNullableTunable(ECONOMY_FILE, raw, 'farming.', 'sectorCapRatioOfCombatAverage');
+  const average = readNullableTunable(ECONOMY_FILE, raw, 'farming.', 'combatRewardAverageCredits');
+  return {
+    sectorCapRatioOfCombatAverage: ratio,
+    combatRewardAverageCredits: average,
+    capComputable: ratio.value !== null && average.value !== null,
+  };
+}
+
 export function validateEconomyParams(raw: unknown): EconomyParams {
   if (!isRecord(raw)) throw new ParamValidationError(ECONOMY_FILE, '(루트)', '객체가 필요합니다');
 
@@ -942,6 +986,7 @@ export function validateEconomyParams(raw: unknown): EconomyParams {
     pickupRadiusMeters: pickup,
     dropTables,
     salvageSpawns,
+    farming: validateFarming(raw['farming']),
     factionRewards: validateFactionRewards(raw['factionRewards'], dropTables),
     highValueTransport: validateHighValueTransport(raw['highValueTransport'], dropTables),
     guardSpawn: validateGuardSpawn(raw['guardSpawn']),

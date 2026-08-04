@@ -1,0 +1,23 @@
+{
+  "$comment": "M2 상호작용(F hold 회수) params — INT-CORE-022 / HANDOFF §2. 필드명은 계약 params.ts와 1:1이며 새 이름을 만들지 않는다. **3항목 전부 `[M1M2-INITIAL]` 사용자 승인 초기값이 입력됐다** — 최초 production Runtime Closure 검증용이며 최종 밸런스 확정이 아니다. 승인 전에는 반경·소음이 null이었고 null을 0으로 읽지 않았다(반경 없이는 거리 판정 불가, 소음 0은 '소음 없는 회수'). 이제 세 값이 모두 있어 interaction production 배선이 params 측에서 가능하다 — 다만 Game.ts 배선은 별개다. 검증: src/tools/interactionParams.ts.",
+  "hold": {
+    "holdSeconds": {
+      "value": 2.0,
+      "range": [1.0, 4.0],
+      "unit": "seconds",
+      "note": "[M1M2-INITIAL] F 홀드 유지 시간 — 16차 튜닝표 초기값이자 사용자 승인 초기값. 최종 밸런스 확정 아님"
+    },
+    "interactRadiusMeters": {
+      "value": 6.0,
+      "range": [2, 12],
+      "unit": "meters",
+      "note": "[M1M2-INITIAL] 회수 가능 거리 — 사용자 승인 초기값. 최종 밸런스 확정 아님 (E→F 거리 이탈 판정의 전제 수치)"
+    },
+    "noiseContribution": {
+      "value": 0.15,
+      "range": [0, 1],
+      "unit": "ratio",
+      "note": "[M1M2-INITIAL] 회수 중 가산 소음 — 사용자 승인 초기값. 0이 아니므로 소음 없는 회수가 되지 않는다. 최종 밸런스 확정 아님"
+    }
+  }
+}
