@@ -97,6 +97,8 @@ export interface ClosureRunInput {
   activePingKey: ActivePingKeyObservation;
   /** HANDOFF §5 16단계 배선 관측 (Game.ts 정적 스캔) */
   wiring: readonly WiringObservation[];
+  /** DetectionHud 처분 — 제거·M3 이관·방치를 구분하기 위한 관측 */
+  detectionHud: DetectionHudDispositionObservation;
 }
 
 /** 그래픽스 정본 모듈의 형태 — 툴링은 이 모양만 알고 파일을 만들지 않는다 */
@@ -151,6 +153,197 @@ export interface ActivePingKeyObservation {
   readonly fixtureOnlySites: readonly string[];
 }
 
+/**
+ * 리드 정본 결정 기록에서 읽어낸 DetectionHud 처분 선언.
+ * **툴링이 만들지 않는다** — `docs/DECISIONS.md`의 리드 소유 항목을 읽기만 한다.
+ */
+export interface DetectionHudDeferralDecision {
+  /** 결정이 실린 파일 경로 (진단용) */
+  readonly sourcePath: string;
+  /** 결정 항목 id (예: `M-14`) */
+  readonly decisionId: string;
+  /** 정보 비동등 사유 본문 — 없으면 null */
+  readonly informationParityRationale: string | null;
+  /** 후속 마일스톤 문자열 — 이관을 인정하려면 `M3`이어야 한다 */
+  readonly followUpMilestone: string | null;
+  /** 결정이 스스로 선언한 플래그 (선언 누락은 null) */
+  readonly declaredRemoved: boolean | null;
+  readonly declaredDeferred: boolean | null;
+  readonly declaredInformationParity: boolean | null;
+}
+
+/**
+ * DetectionHud 처분 관측 — production 실재 여부와 리드 결정을 **따로** 싣는다.
+ * 두 축을 분리해야 '제거됨'·'공식 이관'·'방치'를 구분할 수 있다.
+ */
+export interface DetectionHudDispositionObservation {
+  /** production 경로의 `DetectionHud` import 지점 */
+  readonly productionImportSites: readonly string[];
+  /** production 경로의 `new DetectionHud(...)` 지점 */
+  readonly productionConstructSites: readonly string[];
+  /** production 경로의 attach·update·dispose 등 수명주기 호출 지점 */
+  readonly productionLifecycleSites: readonly string[];
+  /** DOM 앵커 속성(`data-ui-detection-hud`) 선언 지점 */
+  readonly domAnchorDeclSites: readonly string[];
+  /** fixture·데모 전용 지점 — 제거 판정에서 **제외**한다 */
+  readonly fixtureOnlySites: readonly string[];
+  /** 리드 정본 결정 기록. 없으면 null */
+  readonly leadDecision: DetectionHudDeferralDecision | null;
+  /** 결정 기록 부재 사유 (진단용) */
+  readonly leadDecisionAbsenceReason: string | null;
+  /** SonarScope production provider 배선 여부 (W13·W14 관측 결과 주입) */
+  readonly sonarProviderWired: boolean;
+  readonly sonarRenderWired: boolean;
+}
+
+/** D1 판정 결과 — 상태·사유·파생 플래그를 함께 돌려준다 */
+export interface DetectionHudDisposition {
+  readonly status: ClosureStatus;
+  readonly detail: string;
+  readonly flags: {
+    readonly DETECTION_HUD_INFORMATION_PARITY: boolean;
+    readonly DETECTION_HUD_REMOVED: boolean;
+    readonly DETECTION_HUD_REMOVAL_DEFERRED_TO_M3: boolean;
+  };
+}
+
+/**
+ * DetectionHud 처분 판정 — **순수 함수**라 픽스처로도 production 관측으로도
+ * 같은 코드를 돌린다(clue mapping 판정과 같은 태도).
+ *
+ * 구분해야 하는 세 사실:
+ *   ① 실제로 제거됨            — production 지점 0 + 결정이 removed=true
+ *   ② 정보 비동등으로 M3 이관   — production 존치 + 리드 결정 + SonarScope 배선
+ *   ③ 아무 결정 없이 방치       — production 존치 + 결정 없음
+ *
+ * 플래그는 **선언이 아니라 관측에서 파생**한다. 결정 기록이 removed=true라고
+ * 적어도 production에 남아 있으면 fail이며, 선언을 그대로 믿지 않는다.
+ */
+export function judgeDetectionHudDisposition(
+  o: DetectionHudDispositionObservation,
+): DetectionHudDisposition {
+  const productionSites = [
+    ...o.productionImportSites,
+    ...o.productionConstructSites,
+    ...o.productionLifecycleSites,
+  ];
+  // 관측된 사실 — 선언과 무관하다.
+  const presentInProduction = productionSites.length > 0;
+  const observedRemoved = !presentInProduction;
+  const d = o.leadDecision;
+
+  const none = {
+    DETECTION_HUD_INFORMATION_PARITY: false,
+    DETECTION_HUD_REMOVED: observedRemoved,
+    DETECTION_HUD_REMOVAL_DEFERRED_TO_M3: false,
+  } as const;
+
+  // ── 위장 차단: 제거됐다고 선언했는데 production에 남아 있다 ──
+  if (d?.declaredRemoved === true && presentInProduction) {
+    return {
+      status: 'fail',
+      detail:
+        `결정 기록(${d.decisionId})은 removed=true라고 선언했지만 production에 ` +
+        `DetectionHud가 ${productionSites.length}곳 남아 있습니다: ${productionSites.join(', ')} — ` +
+        '선언을 관측보다 우선하지 않는다. 제거 통과로 위장하지 않는다',
+      flags: none,
+    };
+  }
+
+  // ── production에서 실제로 사라진 경우 ──
+  if (observedRemoved) {
+    // 이관을 선언했는데 이미 제거돼 있다 = 상태 모순.
+    if (d?.declaredDeferred === true) {
+      return {
+        status: 'fail',
+        detail:
+          `결정 기록(${d.decisionId})은 M3 이관(존치)을 선언했지만 production에 ` +
+          'DetectionHud가 이미 없습니다 — 선언과 관측이 어긋납니다',
+        flags: none,
+      };
+    }
+    // ① 실제 제거 — 관측(부재)과 선언(removed=true)이 일치한다.
+    if (d?.declaredRemoved === true) {
+      return {
+        status: 'pass',
+        detail:
+          `실제 제거 확인 — 리드 결정 ${d.decisionId}(${d.sourcePath})가 removed=true를 선언했고 ` +
+          'production import·생성·수명주기 지점 0곳으로 관측과 일치합니다',
+        flags: {
+          DETECTION_HUD_INFORMATION_PARITY: d.declaredInformationParity === true,
+          DETECTION_HUD_REMOVED: true,
+          DETECTION_HUD_REMOVAL_DEFERRED_TO_M3: false,
+        },
+      };
+    }
+    // 제거는 됐는데 정본 기록이 없다 — 사실만 싣고 승인으로 올리지 않는다.
+    return {
+      status: 'blocked',
+      detail:
+        '[incomplete] production에 DetectionHud가 없지만 리드 정본 결정 기록이 없습니다 ' +
+        `(${o.leadDecisionAbsenceReason ?? '사유 미기재'}) — 제거 사실은 관측되나 근거 기록이 없다`,
+      flags: { ...none, DETECTION_HUD_REMOVED: true },
+    };
+  }
+
+  // ── 결정 기록 부재 = ③ 방치. 실패가 아니라 미완이다 ──
+  if (d === null) {
+    return {
+      status: 'blocked',
+      detail:
+        `[incomplete] production에 DetectionHud가 ${productionSites.length}곳 존재하는데 ` +
+        `리드 정본 결정 기록이 없습니다 (${o.leadDecisionAbsenceReason ?? '사유 미기재'}) — ` +
+        'removed=false · deferred=false. 결정 없는 존치를 이관으로 인정하지 않는다',
+      flags: none,
+    };
+  }
+
+  // ── 결정이 이관을 선언하지 않았다 = ③ (기록은 있으나 미완) ──
+  if (d.declaredDeferred !== true) {
+    return {
+      status: 'blocked',
+      detail:
+        `[incomplete] 결정 기록(${d.decisionId})이 이관을 선언하지 않았습니다 ` +
+        `(deferred=${String(d.declaredDeferred)}) — removed=false · deferred=false`,
+      flags: none,
+    };
+  }
+
+  // ── 이관을 선언했다면 필수 요건을 전부 갖춰야 한다 ──
+  const missing: string[] = [];
+  if (d.declaredRemoved !== false) missing.push('DETECTION_HUD_REMOVED=false 선언');
+  if (d.informationParityRationale === null) missing.push('정보 비동등 사유 명시');
+  if (d.followUpMilestone !== 'M3') missing.push(`후속 마일스톤 M3 명시(현재 ${String(d.followUpMilestone)})`);
+  if (!o.sonarProviderWired) missing.push('W13 sonarProvider production 배선');
+  if (!o.sonarRenderWired) missing.push('W14 sonarRender production 배선');
+
+  if (missing.length > 0) {
+    return {
+      status: 'fail',
+      detail:
+        `결정 기록(${d.decisionId})이 M3 이관을 선언했지만 요건 ${missing.length}건이 없습니다: ` +
+        `${missing.join(' · ')} — 요건 없는 이관 선언을 인정하지 않는다`,
+      flags: none,
+    };
+  }
+
+  // ── ② 승인된 이관 ──
+  return {
+    status: 'pass',
+    detail:
+      `승인된 M3 이관 — 리드 결정 ${d.decisionId}(${d.sourcePath}) · ` +
+      `정보 비동등 사유 명시 · 후속 마일스톤 M3 · SonarScope provider·render 배선 확인 · ` +
+      `production DetectionHud ${productionSites.length}곳 존치와 상태 일치. ` +
+      '제거 통과로 올리지 않는다',
+    flags: {
+      // 이관의 근거가 '정보 비동등'이므로 동등성은 아직 false다.
+      DETECTION_HUD_INFORMATION_PARITY: d.declaredInformationParity === true,
+      DETECTION_HUD_REMOVED: false,
+      DETECTION_HUD_REMOVAL_DEFERRED_TO_M3: true,
+    },
+  };
+}
+
 export interface WiringObservation {
   readonly step: number;
   readonly id: string;
@@ -182,6 +375,12 @@ export interface ClosureStatusFlags {
   M2_PROGRESS_GATE_PASSED: boolean;
   M1_M2_INTEGRATED_COMPLETE: boolean;
   M3_START_ALLOWED: boolean;
+  /** SonarScope가 DetectionHud의 정보를 동등하게 대체하는가 (관측 파생) */
+  DETECTION_HUD_INFORMATION_PARITY: boolean;
+  /** production에서 실제로 제거됐는가 (선언이 아니라 관측 파생) */
+  DETECTION_HUD_REMOVED: boolean;
+  /** 정보 비동등을 사유로 리드가 M3 이관을 공식 승인했는가 */
+  DETECTION_HUD_REMOVAL_DEFERRED_TO_M3: boolean;
 }
 
 export interface ClosureRunOutput {
@@ -586,6 +785,16 @@ export function runRuntimeClosureVerification(input: ClosureRunInput): ClosureRu
     checks.push({ id: `W${w.step}-${w.id}`, name: `[배선 ${w.step}] ${w.label}`, status, detail });
   }
 
+  /* ── 작업 9: DetectionHud 처분 (제거 / M3 이관 / 방치) ───── */
+
+  const detectionHudDisposition = judgeDetectionHudDisposition(input.detectionHud);
+  note(
+    'D1-detectionHudDisposition',
+    'DetectionHud 처분 — 실제 제거 / 승인된 M3 이관 / 결정 없는 방치 구분',
+    detectionHudDisposition.status,
+    detectionHudDisposition.detail,
+  );
+
   /* ── 플래그 산출 ─────────────────────────────────────────── */
 
   const wiringById = new Map(input.wiring.map((w) => [w.id, w]));
@@ -625,7 +834,14 @@ export function runRuntimeClosureVerification(input: ClosureRunInput): ClosureRu
     M2_PROGRESS_GATE_PASSED: false,
     M1_M2_INTEGRATED_COMPLETE: false,
     M3_START_ALLOWED: false,
+    // DetectionHud 3종 — 판정 함수가 관측에서 파생한 값을 그대로 싣는다.
+    // 여기서 임의로 true로 올리지 않는다.
+    ...detectionHudDisposition.flags,
   };
+
+  if (!flags.DETECTION_HUD_REMOVED && !flags.DETECTION_HUD_REMOVAL_DEFERRED_TO_M3) {
+    blockers.push('DETECTION_HUD_DISPOSITION_UNDECIDED:리드 정본 결정 기록 필요');
+  }
 
   return { checks, flags, blockers };
 }
