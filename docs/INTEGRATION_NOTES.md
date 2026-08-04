@@ -1927,3 +1927,39 @@ scene.attachCargoShipSource(gameplay.cargoShipState); // CargoShipStateSource �
 2. **B6 공식 수치** — `rewardMultiplier`·`escortMaximumDistanceMeters` 모두 null.
    `docs/SPRINT_B_B6_PROPOSAL.md`의 제안값은 승인 수치가 아니므로
    `params/economy.json`에 입력하지 않았다.
+
+---
+
+## INT-CORE-022 후속 — 리드 결정 요청 1건 (빌드·툴 / PR #15 보완)
+
+**요청**: `src/meta/__verification__/verifyMeta.ts:2823`의 `RC params: 승인 대기
+4필드 … null 보존` 검사를 승인값 대조로 갱신해 주십시오. **리드 소유 파일이라
+빌드·툴이 직접 고치지 않았습니다** (CLAUDE.md 규칙 7).
+
+**배경**: 사용자 승인에 따라 `params/boss.json`의 4필드에
+`[M1M2-INITIAL]` 초기값을 입력했습니다 (교차 소유 예외, 승인 근거는 PR #15).
+
+| 필드 | 이전 | 현재 |
+|---|---|---|
+| `movement.moveSpeedMetersPerSecond` | null | 7.0 |
+| `movement.turnRateRadiansPerSecond` | null | 0.6 |
+| `patterns.ram.contactDamage` | null | 30 |
+| `patterns.weakPointOpen.hitRadiusMeters` | null | 6.0 |
+
+해당 검사는 **승인 전 상태를 전제로** "네 필드가 null이어야 한다"를 단언하므로
+승인값이 들어온 지금 구조적으로 실패합니다 (`값=[7,30,6]`). 승인과 이 단언은
+동시에 참일 수 없습니다.
+
+**바로 옆 블록은 이미 통과합니다** — `RC params: 승인값 입력 시 허용 범위·관계
+제약(평상시 ≤ 돌진 속도) 강제` ✔. 리드가 승인값 도착을 예상하고 동반 검사를
+먼저 마련해 둔 상태이고, 낡은 것은 `null 보존` 전제 하나뿐입니다.
+
+**제안**: 삭제·skip이 아니라 **승인값 정확 일치 + `null→0` 회귀 가드**로
+교체(빌드·툴이 `verifyRuntimeClosure.ts`의 P1·P2·P3·B2에 적용한 방식과 동일 —
+단언 수 순증, 약화 0). 빌드·툴 쪽 `B2-approvedValues`는 이미 네 값을 주입된
+기대값과 정확 대조해 통과 중이라, 갱신 후 두 검증기가 같은 사실을 교차 확인하게
+됩니다.
+
+**영향**: 이 한 건 때문에 PR #15 CI가 red입니다. 나머지 검증 8종은 전부 exit 0
+(`verify:meta`만 163/164). 빌드·툴은 `params/boss.json` 되돌림도, 리드 파일 수정도
+하지 않고 리드 결정을 기다립니다.
