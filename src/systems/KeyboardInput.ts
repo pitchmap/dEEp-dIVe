@@ -55,7 +55,7 @@ const TRACKED_CODES = new Set([
   'KeyF',
   // 액티브 소나 핑 (INT-CORE-022 Q 확정) — **유지 상태가 아니라 press edge**다.
   // 아래 `onKeyDown`이 이 키만 `heldCodes`에 넣지 않고 1회성 요청으로 적립한다.
-  'KeyQ',
+  'KeyQ', // sonar activePing — 이 키가 묶인 명령을 같은 줄에 명시한다
   'ShiftLeft',
   'ShiftRight',
   'ControlLeft',
@@ -70,7 +70,9 @@ const TRACKED_CODES = new Set([
  * 쿨다운이 그걸 전부 거부하더라도 **입력 의미 자체가 틀린다**. 그래서 이
  * 키는 `heldCodes`에 들어가지 않는다.
  */
-const EDGE_ONLY_CODES = new Set(['KeyQ']);
+const EDGE_ONLY_CODES = new Set([
+  'KeyQ', // sonar activePing (consumeActivePingPressed) — hold 상태 아님
+]);
 
 export class KeyboardInput implements MovementInput {
   private readonly heldCodes = new Set<string>();

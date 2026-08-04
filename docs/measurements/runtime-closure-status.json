@@ -89,7 +89,7 @@
       "id": "Q1-activePingKey",
       "name": "KeyQ = 액티브 소나 핑 정합",
       "status": "blocked",
-      "detail": "미도착 4/6: 게임플레이 consume API · requestActivePing 연결 대상 · KeyQ 바인딩 · controlsConfig Q 도움말 — 게임플레이(#14)·그래픽스(#16) 보완 커밋 대기. 부재를 pass로 올리지 않는다"
+      "detail": "미도착 1/6: controlsConfig Q 도움말 — 게임플레이(#14)·그래픽스(#16) 보완 커밋 대기. 부재를 pass로 올리지 않는다"
     },
     {
       "id": "W1-officialParams",

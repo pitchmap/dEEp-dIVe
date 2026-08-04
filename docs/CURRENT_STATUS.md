@@ -529,7 +529,9 @@ B 선행개발          = 가능 (선행개발 상태로만)
     - 결정적 검증 **324/324**(291 유지 + 신규 33 — Q press edge 13항목 포함). meta 164/164 · tooling 36/36 · **hud 34/0 실브라우저** · sprint-a/b/c 통과, build·check:size 7.0%·check:scope 통과
     - **변경은 전부 `src/systems/**`** — `core`·`contracts`·`render`·`tools`·`audio`·`meta/save`·`params`·`world`·`Game.ts` **무수정**
     - **production 배선은 통합 관리자 몫** — `M1_EXIT_GATE_PASSED=false` · `M2_PROGRESS_GATE_PASSED=false` 유지. 자동 검증은 §6 Exit Criteria의 전제일 뿐 게이트가 아니다
-- **마지막 업데이트:** M1·M2 Runtime Closure 게임플레이 마감 + **Q 액티브 핑 press edge 보완**(PR #14 최소 보완). 잔여 blocker는 INT-GAME-018 (핑 키 blocker는 해소)
+    - **최신 dev(`e6ab840`, PR #15·#17) 수신 완료** — 충돌 0. 공식 승인값 13종이 도착해 게임플레이 DTO와 구조 정합을 확인했다: boss 이동 7.0·선회 0.6·돌진 30·약점 반경 6.0 / interaction 2.0·6.0·0.15 / sonar 3.0·0.30·25·0.45 / farming 0.40·120(cap 48). 로더 결과는 `Tunable`/`NullableTunable` 래퍼이고 게임플레이 DTO는 `.value` 슬라이스를 받는 형태 — **JSON 직접 import 0 · 툴링 로더 import 0 · 승인값 하드코딩 0**을 재확인했다
+    - `verify:runtime-closure` **fail 0 · blockedByNullParam 0** — Q1은 `controlsConfig` Q 도움말 미도착으로 **blocked**(게임플레이 5/6 충족), C1은 `world/bossCluePlacements.ts` 미도착으로 **blocked**, 배선 12건은 `Game.ts` 조립 전이라 **unwired** 유지. `--enforce-exit`는 exit 1이 정상이다(조립·PR #16 이전)
+- **마지막 업데이트:** M1·M2 Runtime Closure 게임플레이 마감 + Q 액티브 핑 press edge + **최신 dev(PR #15·#17) 수신·재검증**. 잔여 blocker는 INT-GAME-018
 - **담당 브랜치:** `feat/gameplay-m2-interaction` (base `dev@e01ffc5`)
 
 ## 그래픽스
