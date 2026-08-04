@@ -41,7 +41,16 @@ import type {
   InteractableTarget,
   InteractionCompletion,
 } from '../interaction/InteractionSystem';
-import type { ClueDefinition } from '../progress/CluePickupProgress';
+import {
+  canonicalInteractionKind,
+  type ClueIdByInteractable,
+} from '../interaction/InteractionEventAdapter';
+import type { BossPlacement } from '../boss/BossEncounter';
+import { BossEncounter } from '../boss/BossEncounter';
+import type { BossWeakPointPlacement } from '../BossWeakPointTarget';
+import { BOSS_PATTERN_KINDS } from '../../contracts/boss';
+import type { BossAttackPatternKind, BossAttackRequest } from '../../contracts/boss';
+import type { BossPhase, InteractionCollectedEvent } from '../../contracts/meta';
 import type { FarmingRewardEntry } from '../economy/SectorFarmingRewards';
 import type { SonarContact } from '../sonar/SonarScopeSystem';
 import type { DetectionStage } from '../../contracts/events';
@@ -4458,112 +4467,323 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     );
   }
 
-  /* ═══ M2 2단계 — 단서 획득 (획득만; 개방 게이트는 리드 소유) ═══════ */
+  /* ═══ M2 이벤트 어댑터 — interactionCollected 발행 (INT-CORE-021) ══ */
 
-  // 70. [LOOP] 단서 3종 획득원 — 고유 id·중복 불가·재출항 복원
+  // 70. [LOOP] 완료 1회 발행 · 취소·이탈·중복 0회 · targetId/clueId 분리
   {
-    const clueTargets = [
-      interactable('wreck-salvage-1', 'salvage'),
-      interactable('hv-transport-1', 'clue'),
-      interactable('deep-survey-1', 'deepSurvey'),
+    const targets = [
+      interactable('wreck-1', 'salvage'),
+      interactable('deep-1', 'deepSurvey'),
       interactable('gold-1', 'gold'),
+      interactable('clue-target-1', 'clue'),
     ];
-    const rig = makeInteractionRig(params, clueTargets);
+    const rig = makeInteractionRig(params, targets);
+    const events: InteractionCollectedEvent[] = [];
+    rig.bus.on('interactionCollected', (payload: InteractionCollectedEvent) => events.push(payload));
+
+    // 진행 중·거리 이탈·입력 해제 → 발행 0
     rig.systems.attachInteractionParams(INTERACTION_FIXTURE);
-
-    const beforeDefs = rig.systems.clueProgressReadModel();
+    rig.hold(true);
+    for (let i = 0; i < 30; i += 1) rig.systems.update(1 / 60);
+    const midCount = events.length;
+    rig.moveActorTo(1000);
+    rig.systems.update(1 / 60);
+    rig.moveActorTo(0);
+    rig.hold(false);
+    rig.systems.update(1 / 60);
     check(
-      '[LOOP] 단서 정의 미주입 → unwired (단서 id·필요 개수 발명 0)',
-      beforeDefs.unwired &&
-        beforeDefs.requiredCount === 0 &&
-        beforeDefs.collectedCount === 0 &&
-        !beforeDefs.allCollected,
-      `required=${beforeDefs.requiredCount}, unwired=${beforeDefs.unwired}`,
+      '[LOOP] 진행 중·거리 이탈·입력 해제에는 interactionCollected 발행 0회',
+      midCount === 0 && events.length === 0,
+      `중간=${midCount}, 취소 후=${events.length}`,
     );
 
-    rig.systems.attachClueDefinitions(CLUE_DEFINITION_FIXTURE);
+    // 단서 매핑 미주입 → 단서는 발행하지 않는다 (targetId를 clueId로 쓰지 않음)
     const holdFrames = Math.round((INTERACTION_FIXTURE.holdSeconds ?? 0) * 60) + 3;
-    // 필요 개수는 상수가 아니라 **정의 개수**에서 나온다 (코드에 3 없음)
-    check(
-      '[LOOP] 필요 단서 수 = 주입된 정의 개수 (코드 상수 아님)',
-      rig.systems.clueProgressReadModel().requiredCount === CLUE_DEFINITION_FIXTURE.length &&
-        !rig.systems.clueProgressReadModel().unwired,
-      `required=${rig.systems.clueProgressReadModel().requiredCount}`,
-    );
-
-    // 단서 3개를 차례로 회수 — 회수 절차는 InteractionSystem 하나뿐이다
-    const collected: string[] = [];
-    rig.systems.clueProgress.onClueCollected((entry) => collected.push(entry.clueId));
-    // 대상 수만큼 회수 사이클을 돌린다 (한 사이클 = 홀드 시작 → 완료)
-    for (let cycle = 0; cycle < clueTargets.length; cycle += 1) {
+    const collectOnce = (): void => {
       rig.moveActorTo(0);
       rig.hold(false);
       rig.systems.update(1 / 60);
       rig.hold(true);
       for (let i = 0; i < holdFrames; i += 1) rig.systems.update(1 / 60);
-    }
-    const afterAll = rig.systems.clueProgressReadModel();
+    };
+    collectOnce(); // wreck-1 (salvage)
+    collectOnce(); // deep-1 (deepSurvey)
+    collectOnce(); // gold-1
+    collectOnce(); // clue-target-1 — 매핑 없음 → 발행 안 됨
     check(
-      '[LOOP] 단서 3종(난파선·고가치 수송선·심층 지점) 획득 — 금괴는 단서가 아님',
-      afterAll.collectedCount === CLUE_DEFINITION_FIXTURE.length &&
-        afterAll.allCollected &&
-        afterAll.pendingClueIds.length === 0 &&
-        collected.join(',') === 'clue-wreck,clue-transport,clue-deep' &&
-        rig.completions.length === 4,
-      `획득=${collected.join('/')}, 완료=${rig.completions.length}`,
+      '[LOOP] 단서 매핑 미주입 → 단서 발행 0 (targetId를 clueId로 추측하지 않음)',
+      events.length === 3 &&
+        !events.some((event) => event.kind === 'clue') &&
+        rig.systems.interactionEvents.unmappedClueCount === 1 &&
+        rig.systems.lastInteractionPublish?.status === 'unmappedClue',
+      `발행=${events.length}, 미매핑=${rig.systems.interactionEvents.unmappedClueCount}`,
     );
 
-    // 리드 게이트 단면 — 판정이 아니라 진행 상태만 제공한다
-    const gateSurface = rig.systems.clueProgressSource;
+    // kind 4종 변환 — 내부 태그 → 계약 정본
+    const kinds = events.map((event) => event.kind).sort().join(',');
     check(
-      '[LOOP] 리드 게이트 단면 = 진행 상태만 (보스 구역 개방 판정 미포함)',
-      gateSurface.collectedCount === CLUE_DEFINITION_FIXTURE.length &&
-        gateSurface.requiredCount === CLUE_DEFINITION_FIXTURE.length &&
-        gateSurface.allCollected &&
-        !Object.getOwnPropertyNames(Object.getPrototypeOf(rig.systems.clueProgress) as object)
-          .some((name) => /bossgate|opensector|unlockboss/i.test(name)),
-      `collected=${gateSurface.collectedCount}/${gateSurface.requiredCount}`,
+      '[LOOP] canonical kind 변환 — gold→goldCache · deepSurvey→deepSite',
+      kinds === 'deepSite,goldCache,salvage' &&
+        canonicalInteractionKind('gold') === 'goldCache' &&
+        canonicalInteractionKind('deepSurvey') === 'deepSite' &&
+        canonicalInteractionKind('salvage') === 'salvage' &&
+        canonicalInteractionKind('clue') === 'clue',
+      `kinds=${kinds}`,
     );
 
-    // 중복 획득 불가 — 완료 통지를 직접 재투입해도 진행이 오르지 않는다
-    const duplicate = rig.systems.clueProgress.handleCompletion({
-      interactableId: 'wreck-salvage-1',
-      kind: 'salvage',
-      positionX: 0,
-      positionY: 0,
-      positionZ: 0,
-      completedAt: 99,
+    // 비단서 payload에 clueId가 실리지 않는다 (계약 타입 수준 금지의 런타임 확인)
+    check(
+      '[LOOP] 비단서 kind에 clueId 미탑재 · targetId는 월드 interactable ID',
+      events.every((event) => !('clueId' in event)) &&
+        events.map((event) => event.targetId).sort().join(',') === 'deep-1,gold-1,wreck-1',
+      `targetIds=${events.map((event) => event.targetId).sort().join('/')}`,
+    );
+
+    // 매핑 주입 후 — clueId는 매핑값이고 targetId와 다르다
+    const mapped = makeInteractionRig(params, [interactable('clue-target-1', 'clue')]);
+    const mappedEvents: InteractionCollectedEvent[] = [];
+    mapped.bus.on('interactionCollected', (payload: InteractionCollectedEvent) =>
+      mappedEvents.push(payload),
+    );
+    mapped.systems.attachInteractionParams(INTERACTION_FIXTURE);
+    mapped.systems.attachClueIds(CLUE_ID_FIXTURE);
+    mapped.hold(true);
+    for (let i = 0; i < holdFrames; i += 1) mapped.systems.update(1 / 60);
+    const clueEvent = mappedEvents[0];
+    check(
+      '[LOOP] 단서 발행 1회 — targetId(월드 ID) ≠ clueId(canonical)',
+      mappedEvents.length === 1 &&
+        clueEvent?.kind === 'clue' &&
+        clueEvent.targetId === 'clue-target-1' &&
+        clueEvent.clueId === 'clue-wreck-salvage' &&
+        String(clueEvent.targetId) !== String(clueEvent.clueId),
+      `targetId=${clueEvent?.targetId}, clueId=${clueEvent?.kind === 'clue' ? clueEvent.clueId : '(없음)'}`,
+    );
+
+    // 이미 회수한 대상은 재발행 0 — 회수 이력을 복원해도 마찬가지
+    mapped.hold(false);
+    mapped.systems.update(1 / 60);
+    mapped.hold(true);
+    for (let i = 0; i < holdFrames * 2; i += 1) mapped.systems.update(1 / 60);
+    check(
+      '[LOOP] 이미 회수한 대상 재발행 0회',
+      mappedEvents.length === 1,
+      `발행=${mappedEvents.length}`,
+    );
+
+    // 게임플레이에 단서 원장이 없다 (정본 단일화 — INT-CORE-021)
+    const gameplaySurface = new Set([
+      ...Object.getOwnPropertyNames(Object.getPrototypeOf(mapped.systems) as object),
+      ...Object.getOwnPropertyNames(
+        Object.getPrototypeOf(mapped.systems.interactionEvents) as object,
+      ),
+    ]);
+    check(
+      '[LOOP] 게임플레이에 단서 원장·저장·해금 API 0건 (정본 = BossProgressStore)',
+      ![...gameplaySurface].some((name) =>
+        /clueProgress|collectedClue|restoreCollectedClues|unlocked|requiredClues/i.test(name),
+      ),
+      `표면=${[...gameplaySurface].filter((n) => /clue/i.test(n)).join('/') || '(단서 API 없음)'}`,
+    );
+  }
+
+  /* ═══ M1 보스 production — 포트·스폰·승패 경로 ════════════════════ */
+
+  // 71. [BOSS] 스폰 1회 · 배치 미주입이면 보스 없음
+  {
+    const rig = makeInteractionRig(params);
+    check(
+      '[BOSS] 배치 데이터 미주입 → 보스 없음 (좌표 발명 0)',
+      rig.systems.boss === null &&
+        rig.systems.bossWeakPoint === null &&
+        rig.systems.bossMotionPort === null &&
+        rig.systems.bossAttackPort === null &&
+        !rig.systems.spawnBoss(),
+      `boss=${String(rig.systems.boss)}`,
+    );
+
+    const phase = { phase: 1 as BossPhase, weakPointOpen: false };
+    const boss = rig.systems.createBoss(
+      BOSS_PLACEMENT_FIXTURE,
+      BOSS_WEAK_POINT_PLACEMENT_FIXTURE,
+      phase,
+      BOSS_ENCOUNTER_FIXTURE,
+      BOSS_WEAK_POINT_FIXTURE,
+    );
+    const targetsBefore = rig.systems.targets.list.length;
+    const first = rig.systems.spawnBoss();
+    const second = rig.systems.spawnBoss();
+    const again = rig.systems.createBoss(
+      BOSS_PLACEMENT_FIXTURE,
+      BOSS_WEAK_POINT_PLACEMENT_FIXTURE,
+      phase,
+    );
+    check(
+      '[BOSS] 보스 1종 스폰 정확히 1회 — 재호출 무시 · 약점은 기존 표적 등록소 재사용',
+      first &&
+        !second &&
+        again === boss &&
+        boss.spawned &&
+        rig.systems.targets.list.length === targetsBefore + 1,
+      `first=${first}, second=${second}, 표적=${targetsBefore}→${rig.systems.targets.list.length}`,
+    );
+  }
+
+  // 72. [BOSS] BossMotionPort — 기존 이동 규약 재사용 + 속도 노브
+  {
+    const rig = makeInteractionRig(params);
+    const phase = { phase: 1 as BossPhase, weakPointOpen: false };
+    const boss = rig.systems.createBoss(
+      BOSS_PLACEMENT_FIXTURE,
+      BOSS_WEAK_POINT_PLACEMENT_FIXTURE,
+      phase,
+      BOSS_ENCOUNTER_FIXTURE,
+      BOSS_WEAK_POINT_FIXTURE,
+    );
+    rig.systems.spawnBoss();
+    const start = boss.getPosition();
+    boss.moveForward(1);
+    const base = boss.getPosition();
+    const baseStep = Math.hypot(base.x - start.x, base.z - start.z);
+    // 돌진 속도 노브 — 값은 params 소유, 포트는 적용만 한다
+    boss.setMoveSpeed((BOSS_ENCOUNTER_FIXTURE.moveSpeedMetersPerSecond ?? 0) * 2);
+    boss.moveForward(1);
+    const fast = boss.getPosition();
+    const fastStep = Math.hypot(fast.x - base.x, fast.z - base.z);
+    boss.setMoveSpeed(null);
+    boss.moveForward(1);
+    const restored = boss.getPosition();
+    const restoredStep = Math.hypot(restored.x - fast.x, restored.z - fast.z);
+    check(
+      '[BOSS] BossMotionPort 이동·속도 노브 (수치는 params 소유·null이면 기본 복귀)',
+      Math.abs(baseStep - (BOSS_ENCOUNTER_FIXTURE.moveSpeedMetersPerSecond ?? 0)) < 1e-9 &&
+        Math.abs(fastStep - baseStep * 2) < 1e-9 &&
+        Math.abs(restoredStep - baseStep) < 1e-9,
+      `기본=${baseStep.toFixed(3)}, 가속=${fastStep.toFixed(3)}, 복귀=${restoredStep.toFixed(3)}`,
+    );
+
+    const unwiredRig = makeInteractionRig(params);
+    const unwiredBoss = unwiredRig.systems.createBoss(
+      BOSS_PLACEMENT_FIXTURE,
+      BOSS_WEAK_POINT_PLACEMENT_FIXTURE,
+      phase,
+      null,
+      null,
+    );
+    unwiredRig.systems.spawnBoss();
+    const before = unwiredBoss.getPosition();
+    unwiredBoss.moveForward(1);
+    const after = unwiredBoss.getPosition();
+    check(
+      '[BOSS] 이동 params 미주입 → 이동 0 (임의 속력 생성 0)',
+      !unwiredBoss.motionWired && before.x === after.x && before.z === after.z,
+      `wired=${unwiredBoss.motionWired}`,
+    );
+  }
+
+  // 73. [BOSS] BossAttackPort — 투사체·돌진·중복·파괴 후 공격 0
+  {
+    const rig = makeBossCombatRig(params);
+    const outcome = rig.boss.requestAttack(bossAttack('atk-1', 'projectile', rig.playerAt));
+    const duplicate = rig.boss.requestAttack(bossAttack('atk-1', 'projectile', rig.playerAt));
+    check(
+      '[BOSS] 투사체 요청 수락 1회 · 같은 attackId 재요청 duplicate',
+      outcome === 'delivered' && duplicate === 'duplicate' && rig.boss.flyingProjectiles.length === 1,
+      `outcome=${outcome}, dup=${duplicate}, 비행=${rig.boss.flyingProjectiles.length}`,
+    );
+
+    // 비행 → 선체 접촉 → 기존 DamageReceiverPort 단일 창구로 피해 1회
+    for (let i = 0; i < 60 * 5 && rig.damages.length === 0; i += 1) rig.boss.update(1 / 60);
+    check(
+      '[BOSS] 투사체 명중 → 기존 피해 창구 1회 (보스 전용 피해 정본 0)',
+      rig.damages.length === 1 &&
+        rig.damages[0]?.sourceType === 'enemyWeapon' &&
+        rig.damages[0]?.rawDamage === BOSS_ENCOUNTER_FIXTURE.projectileDamage &&
+        rig.boss.flyingProjectiles.length === 0,
+      `피해=${rig.damages.length}, 값=${rig.damages[0]?.rawDamage}`,
+    );
+
+    // 돌진 피해는 params에 없다 → unwired (임시 피해 생성 0)
+    const ram = rig.boss.requestAttack(bossAttack('atk-ram', 'ram', rig.playerAt));
+    check(
+      '[BOSS] 돌진 접촉 피해 params 부재 → unwired (임시 피해 0)',
+      ram === 'unwired' && !rig.boss.ramWired && rig.damages.length === 1,
+      `ram=${ram}, 피해 누적=${rig.damages.length}`,
+    );
+
+    // 플레이어 파괴 후 신규 공격 0
+    rig.setAlive(false);
+    const afterDeath = rig.boss.requestAttack(bossAttack('atk-2', 'projectile', rig.playerAt));
+    check(
+      '[BOSS] 플레이어 파괴 후 신규 공격 0 (기존 PlayerAliveSource 재사용)',
+      afterDeath === 'targetUnavailable' && rig.boss.flyingProjectiles.length === 0,
+      `outcome=${afterDeath}`,
+    );
+
+    // 보스 제거(격파) 후 신규 공격 0
+    rig.setAlive(true);
+    rig.boss.markRemoved();
+    const afterDefeat = rig.boss.requestAttack(bossAttack('atk-3', 'projectile', rig.playerAt));
+    check(
+      '[BOSS] 보스 제거 후 신규 공격 0',
+      afterDefeat === 'targetUnavailable',
+      `outcome=${afterDefeat}`,
+    );
+  }
+
+  // 74. [BOSS] 약점 브리지 — 배율 적용 후 리드 체력 창구로 1회씩
+  {
+    const rig = makeInteractionRig(params);
+    const phase = { phase: 1 as BossPhase, weakPointOpen: false };
+    rig.systems.createBoss(
+      BOSS_PLACEMENT_FIXTURE,
+      BOSS_WEAK_POINT_PLACEMENT_FIXTURE,
+      phase,
+      BOSS_ENCOUNTER_FIXTURE,
+      BOSS_WEAK_POINT_FIXTURE,
+    );
+    rig.systems.spawnBoss();
+    const sink: { damageId: string; amount: number; kind: string }[] = [];
+    rig.systems.attachBossDamageSink({
+      applyBossDamage: (request) => {
+        sink.push({ damageId: request.damageId, amount: request.amount, kind: request.kind });
+        return 'applied';
+      },
     });
+    const weakPoint = rig.systems.bossWeakPoint as BossWeakPointTarget;
+    weakPoint.onTorpedoHit(0, 0, 1); // 닫힘 → 선체 감쇠
+    phase.weakPointOpen = true;
+    weakPoint.onTorpedoHit(0, 0, 1); // 개방 → 약점 증폭
     check(
-      '[LOOP] 같은 단서 중복 획득 불가 — 진행 개수 불변',
-      !duplicate &&
-        rig.systems.clueProgressReadModel().collectedCount === CLUE_DEFINITION_FIXTURE.length,
-      `duplicate=${duplicate}`,
+      '[BOSS] 약점 판정(게임플레이 배율) → 리드 체력 창구(BossDamageSink) 전달',
+      sink.length === 2 &&
+        sink[0]?.kind === 'hull' &&
+        sink[1]?.kind === 'weakPoint' &&
+        Math.abs((sink[0]?.amount ?? 0) - (BOSS_WEAK_POINT_FIXTURE.closedHullDamageMultiplier ?? 0)) < 1e-9 &&
+        Math.abs((sink[1]?.amount ?? 0) - (BOSS_WEAK_POINT_FIXTURE.weakPointDamageMultiplier ?? 0)) < 1e-9 &&
+        new Set(sink.map((entry) => entry.damageId)).size === 2,
+      `전달=${sink.length}, kinds=${sink.map((entry) => entry.kind).join('/')}`,
     );
+  }
 
-    // 재출항 — 단서는 **누적**이므로 지워지지 않는다
-    rig.systems.resetSortieSession(params);
+  // 75. [BOSS] 단계 1→2→3 · 패턴 4종 제한 · 예고 선행 (리드 코어 계약 확인)
+  {
     check(
-      '[LOOP] 재출항 후에도 단서 진행 유지 (출항 한정 상태가 아니다)',
-      rig.systems.clueProgressReadModel().collectedCount === CLUE_DEFINITION_FIXTURE.length,
-      `collected=${rig.systems.clueProgressReadModel().collectedCount}`,
+      '[BOSS] 패턴 정본 정확히 4종 (소환·회전 근접·다섯 번째 0)',
+      BOSS_PATTERN_KINDS.length === 4 &&
+        BOSS_PATTERN_KINDS.join(',') === 'ram,projectile,weakPointOpen,finalAcceleration',
+      `패턴=${BOSS_PATTERN_KINDS.join('/')}`,
     );
-
-    // 저장 복원 — 게임플레이는 저장하지 않고 복원만 받는다
-    const restoredRig = makeInteractionRig(params, clueTargets);
-    restoredRig.systems.attachClueDefinitions(CLUE_DEFINITION_FIXTURE);
-    restoredRig.systems.restoreCollectedClues(['clue-wreck', 'clue-deep']);
-    const restoredModel = restoredRig.systems.clueProgressReadModel();
-    const clueSurface = Object.getOwnPropertyNames(
-      Object.getPrototypeOf(restoredRig.systems.clueProgress) as object,
-    );
+    // 게임플레이 포트는 공격 요청을 만드는 2종만 받는다 (스케줄은 리드 소유)
+    const rig = makeBossCombatRig(params);
+    const attackKinds: BossAttackPatternKind[] = ['ram', 'projectile'];
     check(
-      '[LOOP] 재출항 후 단서 복원 — 저장 API 0개(저장 정본은 기존 경로 소유)',
-      restoredModel.collectedCount === 2 &&
-        restoredModel.pendingClueIds.join(',') === 'clue-transport' &&
-        !restoredModel.allCollected &&
-        !clueSurface.some((name) => /^save/i.test(name)),
-      `collected=${restoredModel.collectedCount}, pending=${restoredModel.pendingClueIds.join('/')}`,
+      '[BOSS] 게임플레이 공격 포트는 요청 생성 패턴 2종만 실행 (상태 머신 복제 0)',
+      attackKinds.length === 2 &&
+        !Object.getOwnPropertyNames(Object.getPrototypeOf(rig.boss) as object).some((name) =>
+          /phase|telegraph|schedule|summon|spin/i.test(name),
+        ),
+      `포트 표면에 단계·예고·스케줄 API 없음`,
     );
   }
 
@@ -4674,7 +4894,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
 
     rig.systems.attachSonarScopeParams(SONAR_SCOPE_FIXTURE);
     const passive = rig.systems.sonarScopeReadModel();
-    const passiveIds = passive.blips.map((blip) => blip.contactId).sort().join(',');
+    const passiveIds = passive.blips.map((blip) => blip.targetId).sort().join(',');
     check(
       '[LOOP] 패시브 = 소음원만 표시 · 거리 없음 (소리 없는 대상은 안 보인다)',
       passiveIds === 'boss-1,ship-1' &&
@@ -4691,7 +4911,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     );
 
     // 방위 — 선수 기준 상대 방위. ship-1은 정선수(-Z) 방향에 있다
-    const shipBlip = passive.blips.find((blip) => blip.contactId === 'ship-1');
+    const shipBlip = passive.blips.find((blip) => blip.targetId === 'ship-1');
     check(
       '[LOOP] 방위는 선수 기준 상대각 (축 규약 함수 사용, 벡터 복제 0)',
       shipBlip !== undefined && Math.abs(shipBlip.bearingRadians) < 1e-9,
@@ -4739,11 +4959,11 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     const gaugeBefore = rig.systems.detection.gauge;
     const ping = rig.systems.requestSonarPing();
     const active = rig.systems.sonarScopeReadModel();
-    const activeIds = active.blips.map((blip) => blip.contactId).sort().join(',');
+    const activeIds = active.blips.map((blip) => blip.targetId).sort().join(',');
     check(
-      '[LOOP] 액티브 핑 = 보상·단서·지형·보스 전체 정확 표시 (거리 포함·번짐 0)',
+      '[LOOP] 액티브 핑 = 소음 없는 접점 포함 전체 정확 표시 (거리 포함·번짐 0)',
       ping.status === 'pinged' &&
-        activeIds === 'boss-1,depthcharge-1,reward-1,ship-1,terrain-1' &&
+        activeIds === 'boss-1,depthcharge-1,ship-1,torpedo-1' &&
         active.blips.every(
           (blip) => blip.fromActivePing && blip.distanceMeters !== null && blip.bearingSpreadRadians === 0,
         ),
@@ -4757,13 +4977,29 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       `게이지 ${gaugeBefore} → ${rig.systems.detection.gauge}`,
     );
 
-    // 약점 개방 상태는 보스 접점에서만 노출된다 (M2 3단계 접합면)
-    const bossBlip = active.blips.find((blip) => blip.kind === 'boss');
+    // 계약 규칙: blip은 **월드 좌표를 싣지 않는다**. 보스는 계약 어휘에
+    // 없으므로 선박 접촉('ship')으로 옮겨 나간다 (어휘 임의 확장 0).
+    const bossBlip = active.blips.find((blip) => blip.targetId === 'boss-1');
+    const blipFields = new Set(Object.keys(bossBlip ?? {}));
     check(
-      '[LOOP] 액티브 핑이 보스 약점 개방 상태를 노출 (판정은 BossWeakPointTarget 소유)',
-      bossBlip?.weakPointOpen === true &&
-        active.blips.filter((blip) => blip.kind !== 'boss').every((blip) => blip.weakPointOpen === null),
-      `weakPointOpen=${bossBlip?.weakPointOpen}`,
+      '[LOOP] blip에 월드 좌표 미탑재 · 보스는 계약 어휘 ship으로 변환',
+      bossBlip?.kind === 'ship' &&
+        !blipFields.has('positionX') &&
+        !blipFields.has('positionZ') &&
+        !blipFields.has('x') &&
+        !blipFields.has('z') &&
+        !blipFields.has('weakPointOpen'),
+      `kind=${bossBlip?.kind}, 필드=${[...blipFields].join('/')}`,
+    );
+
+    // 테두리 상태는 기존 DetectionStage 재사용 (새 어휘 0)
+    rig.systems.sonarScope.attachDetectionStageSource(rig.systems.detectionStageSource);
+    check(
+      '[LOOP] ringState = 기존 DetectionStage 재사용 (새 상태 어휘 0)',
+      (['safe', 'searching', 'detected'] as const).includes(
+        rig.systems.sonarScopeReadModel().ringState,
+      ),
+      `ringState=${rig.systems.sonarScopeReadModel().ringState}`,
     );
 
     // 쿨다운 — 표시가 끝나도 쿨다운이 남아 있고 그동안 핑이 거부된다
@@ -4805,15 +5041,41 @@ const BOSS_WEAK_POINT_FIXTURE = Object.freeze({
 });
 
 /**
- * 검증 전용 단서 정의 **픽스처** — 기획·월드 데이터가 아니다.
- * 16차 결의 1-5의 획득원 3종(난파선 salvage / 적대 고가치 수송선 /
- * 경비 심층 탐사 지점)을 구조로만 표현한다.
+ * 검증 전용 단서 ID 매핑 **픽스처** — 기획·월드 데이터가 아니다.
+ * canonical ID는 `params/boss.json unlock.clueIds` 소유이며, 이 상수는
+ * production 경로로 import되지 않는다.
  */
-const CLUE_DEFINITION_FIXTURE: readonly ClueDefinition[] = Object.freeze([
-  { clueId: 'clue-wreck', sourceKind: 'wreckSalvage', interactableId: 'wreck-salvage-1' },
-  { clueId: 'clue-transport', sourceKind: 'highValueTransport', interactableId: 'hv-transport-1' },
-  { clueId: 'clue-deep', sourceKind: 'deepSurvey', interactableId: 'deep-survey-1' },
-]);
+const CLUE_ID_FIXTURE: ClueIdByInteractable = Object.freeze({
+  'clue-target-1': 'clue-wreck-salvage',
+});
+
+/** 검증 전용 보스 배치 **픽스처** — 월드 배치 데이터가 아니다 */
+const BOSS_PLACEMENT_FIXTURE: BossPlacement = Object.freeze({
+  entityId: 900,
+  spawnX: 0,
+  spawnY: -8,
+  spawnZ: 0,
+  headingRadians: 0,
+});
+
+const BOSS_WEAK_POINT_PLACEMENT_FIXTURE: BossWeakPointPlacement = Object.freeze({
+  id: 901,
+  x: 0,
+  y: -8,
+  z: 0,
+});
+
+/**
+ * 검증 전용 보스 실행 수치 **픽스처** — production params가 아니다.
+ * `ramContactDamage`는 `params/boss.json`에 **없어서** null이다(INT-GAME-017).
+ */
+const BOSS_ENCOUNTER_FIXTURE = Object.freeze({
+  moveSpeedMetersPerSecond: 6,
+  turnRateRadiansPerSecond: 0.8,
+  projectileSpeedMetersPerSecond: 16,
+  projectileDamage: 18,
+  ramContactDamage: null,
+});
 
 /** 검증 전용 파밍 보상 **픽스처** — 금액은 기획·월드 소유 데이터다 */
 const FARMING_REWARD_FIXTURE: readonly FarmingRewardEntry[] = Object.freeze([
@@ -4844,15 +5106,17 @@ const SONAR_SCOPE_FIXTURE = Object.freeze({
   depthChargeOnPassiveScope: false,
 });
 
-/** 검증용 스코프 접점 — 소음원 여부로 패시브 표시 자격이 갈린다 */
+/**
+ * 검증용 스코프 접점 — 소음원 여부로 패시브 표시 자격이 갈린다.
+ * kind는 **계약 어휘(ship/torpedo/depthCharge) + boss**만 쓴다 — 보상·단서·
+ * 지형 blip은 계약에 kind가 없어 표현할 수 없다(INT-GAME-017).
+ */
 const SONAR_CONTACT_FIXTURE: readonly SonarContact[] = Object.freeze([
   { contactId: 'ship-1', kind: 'ship', positionX: 0, positionZ: -50, noiseEmitting: true },
-  { contactId: 'boss-1', kind: 'boss', positionX: 30, positionZ: -30, noiseEmitting: true, weakPointOpen: true },
-  { contactId: 'reward-1', kind: 'reward', positionX: -20, positionZ: -10, noiseEmitting: false },
-  { contactId: 'terrain-1', kind: 'terrain', positionX: 10, positionZ: 25, noiseEmitting: false },
+  { contactId: 'boss-1', kind: 'boss', positionX: 30, positionZ: -30, noiseEmitting: true },
+  { contactId: 'torpedo-1', kind: 'torpedo', positionX: -20, positionZ: -10, noiseEmitting: false },
   { contactId: 'depthcharge-1', kind: 'depthCharge', positionX: 5, positionZ: -5, noiseEmitting: true },
 ]);
-
 /**
  * 검증 전용 회수 수치 **픽스처** — production params가 아니다.
  * 공식 회수 수치(홀드 시간·근접 반경·소음 기여)가 도착하면 그 값이 쓰이며,
@@ -4895,6 +5159,7 @@ function makeInteractionRig(
   ],
 ): {
   systems: GameplaySystems;
+  bus: EventBus;
   completions: InteractionCompletion[];
   hold: (value: boolean) => void;
   moveActorTo: (x: number) => void;
@@ -4916,6 +5181,7 @@ function makeInteractionRig(
   systems.player.resetTo({ x: 0, y: 0, z: 0, headingRadians: 0 });
   return {
     systems,
+    bus,
     completions,
     hold: (value: boolean) => {
       input.interactHold = value;
@@ -5058,5 +5324,65 @@ function fakeSystemContext(bus: EventBus, params: GameParams): SystemContext {
     bus,
     params,
     stateMachine: null as unknown as SystemContext['stateMachine'],
+  };
+}
+
+/** 검증용 보스 공격 요청 — 계약 형태 그대로 (수치는 픽스처) */
+function bossAttack(
+  attackId: string,
+  patternKind: BossAttackPatternKind,
+  target: { readonly x: number; readonly y: number; readonly z: number },
+): BossAttackRequest {
+  return {
+    attackId,
+    bossEntityId: BOSS_PLACEMENT_FIXTURE.entityId,
+    targetEntityId: PLAYER_ENTITY_ID,
+    patternKind,
+    attackerPosition: {
+      x: BOSS_PLACEMENT_FIXTURE.spawnX,
+      y: BOSS_PLACEMENT_FIXTURE.spawnY,
+      z: BOSS_PLACEMENT_FIXTURE.spawnZ,
+    },
+    targetPosition: target,
+    correlationId: `${attackId}-run`,
+    requestedAt: 0,
+  };
+}
+
+/**
+ * 보스 전투 rig — 포트 단독 검증용. 피해는 **기존 계약 형태**로 수집하며
+ * 이 rig가 피해 규칙을 대신 계산하지 않는다.
+ */
+function makeBossCombatRig(_params: GameParams): {
+  boss: BossEncounter;
+  damages: DamageRequest[];
+  playerAt: { readonly x: number; readonly y: number; readonly z: number };
+  setAlive: (value: boolean) => void;
+} {
+  // 보스 스폰 지점과 겹치지 않게 둔다 — 겹치면 발사 방향이 정의되지 않는다.
+  const player = { positionX: 0, positionY: -8, positionZ: 30, headingRadians: 0 };
+  const damages: DamageRequest[] = [];
+  const alive = { isPlayerAlive: true };
+  const boss = new BossEncounter(
+    BOSS_PLACEMENT_FIXTURE,
+    player,
+    BOSS_ENCOUNTER_FIXTURE,
+    null,
+    {
+      applyDamage: (request) => {
+        damages.push(request);
+        return { outcome: 'applied', appliedDamage: request.rawDamage, hull: UNWIRED_HULL_FIXTURE };
+      },
+    },
+    alive,
+  );
+  boss.spawn();
+  return {
+    boss,
+    damages,
+    playerAt: { x: player.positionX, y: player.positionY, z: player.positionZ },
+    setAlive: (value: boolean) => {
+      alive.isPlayerAlive = value;
+    },
   };
 }

@@ -38,10 +38,29 @@
  * **params 배관**(17차 창 4), 상단 상태바 제거(툴링), 문구·색.
  */
 
+import type { DetectionStage } from '../../contracts/events';
+import type { DetectionStageSource } from '../../contracts/detection';
+import type { SonarBlip, SonarBlipKind, SonarScopeReadModel } from '../../contracts/sonar';
 import { bowDirectionXZ } from '../../core/conventions';
 
 /** 접점 분류 — 표시 분기용 태그 (판정은 `noiseEmitting`이 가른다) */
-export type SonarContactKind = 'ship' | 'boss' | 'reward' | 'clue' | 'terrain' | 'depthCharge';
+export type SonarContactKind = 'ship' | 'boss' | 'torpedo' | 'depthCharge';
+
+/**
+ * 공급 kind → 계약 정본 `SonarBlipKind`. 계약 어휘는 `ship | torpedo |
+ * depthCharge` 셋뿐이므로(INT-RENDER-014) 보스는 **선박 접촉**으로 옮긴다.
+ *
+ * ⚠ 16차 결의 2-5의 액티브 핑 규격은 **보상·단서·지형**도 표시하라고 하지만
+ * 계약에 해당 kind가 없다. 어휘를 임의로 늘리지 않고(계약 규칙: 확장은
+ * INTEGRATION_NOTES 제안 → 리드 결정) 이 공급자는 표현 가능한 접촉만
+ * 만든다 — 요청: INT-GAME-017.
+ */
+const CANONICAL_BLIP_KIND: Readonly<Record<SonarContactKind, SonarBlipKind>> = Object.freeze({
+  ship: 'ship',
+  boss: 'ship',
+  torpedo: 'torpedo',
+  depthCharge: 'depthCharge',
+});
 
 /** 접점 1개의 읽기 전용 단면 — 소유 시스템이 공급한다 */
 export interface SonarContact {
@@ -55,8 +74,6 @@ export interface SonarContact {
    * (16차 안건 2-5의 '소리 나는 것 / 소리 없는 것' 분리).
    */
   readonly noiseEmitting: boolean;
-  /** 보스 접점만 — 약점 개방 여부 (판정은 `BossWeakPointTarget` 소유) */
-  readonly weakPointOpen?: boolean;
 }
 
 /** 관측자(잠수함) 위치·선수 방향 단면 */
@@ -91,34 +108,12 @@ export interface SonarScopeParams {
   readonly depthChargeOnPassiveScope: boolean | null;
 }
 
-/** 스코프 표시 1건 — 렌더가 그리는 입력 (문구·색 없음) */
-export interface SonarScopeBlip {
-  readonly contactId: string;
-  readonly kind: SonarContactKind;
-  /** 잠수함 선수 기준 상대 방위 (rad, -π~π). 좌현 음수 / 우현 양수 */
-  readonly bearingRadians: number;
-  /** 방위 번짐 반폭 (rad). 액티브 표시분은 0(정확) */
-  readonly bearingSpreadRadians: number;
-  /** 거리 (m). **패시브는 항상 null** — 거리는 부정확하다(16차 규격) */
-  readonly distanceMeters: number | null;
-  /** 액티브 핑으로 드러난 접점인가 */
-  readonly fromActivePing: boolean;
-  /** 보스 약점 개방 여부 (보스 접점이 아니면 null) */
-  readonly weakPointOpen: boolean | null;
-}
-
-/** 17차 결의 4가 이름 붙인 계약 — 소비자는 이 모델만 읽는다 */
-export interface SonarScopeReadModel {
-  readonly blips: readonly SonarScopeBlip[];
-  /** 액티브 표시 잔여 시간 (초). 0 = 패시브만 */
-  readonly activePingRemainingSeconds: number;
-  readonly cooldownRemainingSeconds: number;
-  readonly pingReady: boolean;
-  /** 내 소음 계수 (0~1) — 번짐의 **유일한** 입력 */
-  readonly noiseFactor: number;
-  /** 공식 수치 미주입 — UI가 '작동 중'으로 위장하지 않게 한다 */
-  readonly unwired: boolean;
-}
+/**
+ * 표시 단면은 **공용 계약을 그대로 쓴다** — `contracts/sonar.ts`의
+ * `SonarBlip`·`SonarScopeReadModel`(INT-RENDER-014). 게임플레이 로컬
+ * 표시 모델을 따로 두지 않는다(정본 중복 금지). 계약이 요구하는 대로
+ * blip에는 **월드 좌표를 싣지 않는다** — 방위·번짐·거리만 나간다.
+ */
 
 /** 핑 요청 결과 */
 export type SonarPingOutcome =
@@ -133,6 +128,8 @@ export class SonarScopeSystem {
   private noise: NoiseFactorSource | null;
   private gaugePort: DetectionGaugeRisePort | null;
   private params: SonarScopeParams | null;
+  /** 테두리 상태 입력 — 기존 탐지 stage 정본 하나 (새 어휘 금지) */
+  private stageSource: DetectionStageSource | null = null;
 
   private activeRemaining = 0;
   private cooldownRemaining = 0;
@@ -167,6 +164,14 @@ export class SonarScopeSystem {
   /** 액티브 핑 대가 적용처 연결 — 기존 탐지 게이지 정본 */
   attachDetectionGaugePort(port: DetectionGaugeRisePort | null): void {
     this.gaugePort = port;
+  }
+
+  /**
+   * 테두리 상태 입력 연결 — 기존 `DetectionStageSource` 재사용.
+   * 미연결이면 'safe'다(상태를 발명하지 않는다).
+   */
+  attachDetectionStageSource(source: DetectionStageSource | null): void {
+    this.stageSource = source;
   }
 
   /** 액티브 핑 수치가 전부 확정됐는가 (패시브 번짐 폭 포함) */
@@ -233,15 +238,40 @@ export class SonarScopeSystem {
     }
   }
 
+  /**
+   * 공용 계약 `SonarScopeReadModel` 공급 (INT-RENDER-014).
+   * unwired 자세는 계약이 명시한 그대로다 — blips 빈 배열 · pingReady false ·
+   * 타이머 0 · noiseFactor 0 · ringState 'safe' 고정.
+   */
   readModel(): SonarScopeReadModel {
+    if (!this.wired) {
+      return {
+        unwired: true,
+        noiseFactor: 0,
+        blips: [],
+        activePingRemainingSeconds: 0,
+        cooldownRemainingSeconds: 0,
+        pingReady: false,
+        ringState: 'safe',
+      };
+    }
     return {
+      unwired: false,
+      noiseFactor: this.noiseFactor,
       blips: this.buildBlips(),
       activePingRemainingSeconds: this.activeRemaining,
       cooldownRemainingSeconds: this.cooldownRemaining,
       pingReady: this.pingReady,
-      noiseFactor: this.noiseFactor,
-      unwired: !this.wired,
+      ringState: this.ringState,
     };
+  }
+
+  /**
+   * 스코프 테두리 상태 — **기존 `DetectionStage`를 그대로 재사용**한다
+   * (새 어휘 금지). 탐지 소스 미연결이면 'safe'.
+   */
+  get ringState(): DetectionStage {
+    return this.stageSource?.stage ?? 'safe';
   }
 
   resetForNewSortie(): void {
@@ -260,30 +290,30 @@ export class SonarScopeSystem {
     this.revealed.clear();
   }
 
-  private buildBlips(): readonly SonarScopeBlip[] {
+  private buildBlips(): readonly SonarBlip[] {
     // 미주입이면 표시하지 않는다 — 임의의 번짐·표시 규칙을 만들지 않는다.
     if (!this.wired) return [];
     const params = this.params as SonarScopeParams;
     const spread =
       (params.passiveBearingSpreadRadiansAtMaxNoise as number) * this.noiseFactor;
     const active = this.activeRemaining > 0;
-    const blips: SonarScopeBlip[] = [];
+    const blips: SonarBlip[] = [];
 
     for (const contact of this.contacts()) {
       const revealed = active && this.revealed.has(contact.contactId);
       if (!revealed && !this.passiveVisible(contact, params)) continue;
       const dx = contact.positionX - this.observer.positionX;
       const dz = contact.positionZ - this.observer.positionZ;
+      // 계약 규칙: blip에 **월드 좌표를 싣지 않는다** — 방위·번짐·거리만.
       blips.push({
-        contactId: contact.contactId,
-        kind: contact.kind,
+        targetId: contact.contactId,
+        kind: CANONICAL_BLIP_KIND[contact.kind],
         bearingRadians: this.relativeBearing(dx, dz),
         // 액티브로 드러난 접점은 정확하다 — 번짐 0.
         bearingSpreadRadians: revealed ? 0 : spread,
         // 패시브는 거리를 주지 않는다(16차 규격: 거리는 부정확).
         distanceMeters: revealed ? Math.hypot(dx, dz) : null,
         fromActivePing: revealed,
-        weakPointOpen: contact.kind === 'boss' ? contact.weakPointOpen === true : null,
       });
     }
     return blips;

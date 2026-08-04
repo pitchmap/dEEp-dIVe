@@ -501,8 +501,18 @@ B 선행개발          = 가능 (선행개발 상태로만)
     - **6단계 침묵 항행 미착수 (순서 준수)** — 17차 결의 3·5가 "회색 상자 보스전 **완주 판정(D10) 직후**"로 못 박았고, 완주 판정은 dev 통합 빌드에서 수행된다. 현재 `dev`에 보스 AI가 **0건**(상태 보고서 §4)이라 완주 판정 자체가 성립하지 않는다. `C_SILENT_RUNNING_INTERACTIVE=false` 유지
     - 결정적 검증 **278항목**(278/278 — 기존 253 유지 + 신규 25). meta 128/128 · tooling 26/26 · sprint-a/b/c 동시 통과, build·check:size 6.8%·check:scope 통과
     - PR #9(`InteractionSystem` 선행 배관)는 **병합 완료** — dev `bd59d0a`
-- **마지막 업데이트:** (아래 M1·M2 production 연결 항목 참조)
-- **담당 브랜치:** `feat/gameplay-m2-interaction`
+  - **M1·M2 production 연결 (PR #9·#10 수신 후, base `dev@61d2ce9`)**
+    - **이벤트 어댑터** `interaction/InteractionEventAdapter`: 회수 완료 → 공식 `interactionCollected` 발행. kind 변환표는 **한 곳**(`gold→goldCache` / `deepSurvey→deepSite`), `targetId`(월드 ID)와 `clueId`(canonical) 분리, clue만 `clueId` 필수·비clue는 타입 수준 금지. **매핑 없는 단서는 발행하지 않는다** — `targetId`를 단서 ID로 추측하지 않는다
+    - **단서 정본 단일화** — `progress/CluePickupProgress.ts` **삭제**. 원장·저장·복원·해금 계산을 전부 제거했고 게임플레이는 무상태 변환·발행만 한다. 정본은 리드 `BossProgressStore` 하나 (INT-CORE-021). 검증기가 게임플레이 표면에 단서 원장 API 0건임을 기계 확인
+    - **보스 포트** `boss/BossEncounter`: `BossMotionPort`(포즈·선회·전진·속도 노브) + `BossAttackPort`(투사체 비행·명중 / 돌진 접촉) 구현. 피해는 **기존 `DamageReceiverPort` 단일 창구**만 통과하고, 접촉 판정은 **기존 선체 근사 구**(`collision/submarineHull`)를 재사용한다 — 보스 전용 피해 정본·명중 반경 0. 약점은 기존 `TargetRegistry`에 등록해 어뢰 단일 명중 경로를 쓰고, 배율 적용분을 `BossDamageSink`로 넘긴다(체력·격파 1회 보장은 리드)
+    - **신규 AI 알고리즘 0** — 상태 머신·목표 선택·패턴 결정이 게임플레이에 없다(검증기가 포트 표면에 단계·예고·스케줄 API 부재를 확인). 소환·회전 근접·다섯 번째 패턴의 타입·플래그·빈 자리도 만들지 않았다
+    - **소나 공급자** — 게임플레이 로컬 표시 모델을 버리고 공용 계약 `SonarScopeReadModel`을 그대로 공급한다. blip에 **월드 좌표 미탑재**, `noiseFactor` 단일 입력(침묵 항행 비인지), 폭뢰 필터는 **공급 시점** 적용, `ringState`는 기존 `DetectionStage` 재사용
+    - **보스는 배치 데이터 도착 전까지 존재하지 않는다**(`boss === null`) — 스폰 좌표를 발명해 미리 만들어 두지 않았다
+    - 결정적 검증 **291/291**(기존 253 유지 + 신규 38). meta 156/156 · tooling 26/26 · **hud 34/0 실브라우저** · sprint-a/b/c 통과, build·check:size 6.9%·check:scope 통과
+    - **⛔ 잔여 blocker 7건 (INT-GAME-017)** — ① `params/boss.json`에 약점 명중 반경·돌진 피해·평상시 이동/선회 속도 없음(**약점 반경이 격파 경로 직접 차단**) ② 보스·약점 배치 데이터 부재 ③ interactable→clueId 매핑 부재 ④ 조립부에 `new BossController(...)` 없음 ⑤ 소나 blip 어휘에 보상·단서·지형 없음 ⑥ **`E` 키 충돌 미해소**(9차 결의 4 상승 병행 vs 16차 결의 2-4 회수 — 해소 결의 없음, 임의 결정 안 함) ⑦ M2 잔여 params
+    - **`M1_EXIT_GATE_PASSED=false` · `M2_PROGRESS_GATE_PASSED=false` 유지** — 17차 완주 판정은 dev 통합 빌드 실브라우저 완주가 조건이다. 자동 검증 통과를 완주로 보고하지 않는다
+- **마지막 업데이트:** M1·M2 production 연결 (이벤트 어댑터·단서 정본 단일화·보스 두 포트·소나 계약 정합). blocker 7건은 INT-GAME-017
+- **담당 브랜치:** `feat/gameplay-m2-interaction` (base `dev@61d2ce9`)
 
 ## 그래픽스
 

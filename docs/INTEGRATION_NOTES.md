@@ -90,6 +90,110 @@
 
 ## 제안 목록
 
+### INT-GAME-017 — M1·M2 production 연결 (PR #9·#10 수신) + 잔여 blocker
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 게임플레이 창 (base = `dev@61d2ce9` 일반 merge 수신, 코드 충돌 0 · 문서 충돌 2건은 양측 보존으로 해소) |
+| 대상 시스템 | `src/core/Game.ts` 조립(리드) · `params/boss.json`(기획) · 월드 배치 데이터 · `src/contracts/sonar.ts` blip 어휘(리드) · 키맵 결정 |
+| 하위 호환 | 유지 — 신규 주입점뿐이고 미주입 시 각 시스템이 `unwired`로 남는다. 계약 파일 무수정 |
+| 개발 리드 결정 | (대기) |
+
+**이행한 것 (게임플레이 소유 영역만)**
+
+| 지시 | 구현 | 파일 |
+|---|---|---|
+| 작업 1 이벤트 어댑터 | `InteractionSystem` 완료 → `interactionCollected` 발행. kind 변환표 **한 곳**(`CANONICAL_KIND`), `targetId`/`clueId` 분리, clue만 `clueId` 필수, 매핑은 주입 | `interaction/InteractionEventAdapter.ts` (신규) |
+| 작업 2 단서 정본 단일화 | `progress/CluePickupProgress.ts` **삭제**. 원장·저장·복원·해금 계산 전부 제거하고 무상태 변환기로 축소 — 정본은 `BossProgressStore` 하나 | (삭제) |
+| 작업 3 회수·보상 | 완료 통지 한 줄기를 이벤트 발행·재화 두 소비자가 각자 자기 몫만 집는다. 단서는 재화 대상 아님 | `GameplaySystems` |
+| 작업 4 보스 포트 | `BossMotionPort`·`BossAttackPort` 구현, 스폰 1회, 약점 브리지(`BossDamageSink`), 기존 피해·표적·생사 경로 재사용 | `boss/BossEncounter.ts` (신규) |
+| 작업 5 소나 공급자 | 공용 계약 `SonarScopeReadModel` 그대로 공급. 월드 좌표 비탑재, `noiseFactor` 단일 입력, 폭뢰 필터 공급 시점 적용, `ringState` = 기존 `DetectionStage` | `sonar/SonarScopeSystem.ts` |
+
+**INT-CORE-021 준수 확인** — 게임플레이 표면에 `clueProgress`·`collectedClue`·
+`restoreCollectedClues`·`unlocked`·`requiredClues` 계열 API가 **0건**임을
+검증기가 기계 확인한다. 단서 중복 방지는 두 정본이 각자 자기 층에서 한다:
+대상 단위 = `InteractionSystem.collected`, 단서 단위 = `BossProgressStore`.
+
+---
+
+**⛔ blocker — production 배선을 완료할 수 없는 항목 (가짜 구현·fixture로 통과시키지 않았다)**
+
+**B-1. `params/boss.json`에 판정 수치 3종이 없다.** 파일 전체에 `radius` 키가
+**0건**이다.
+
+| 필요 값 | 주입 지점 | 없을 때 현재 동작 |
+|---|---|---|
+| 약점 명중 판정 반경 | `BossWeakPointTarget.attachParams({ hitRadiusMeters })` | 반경 0 → **어뢰가 약점을 맞히지 못한다 → 누적 피해 0 → 격파 불가** |
+| 돌진 접촉 피해 | `BossEncounter.attachParams({ ramContactDamage })` | `requestAttack('ram')` → `unwired`, 피해 0 (이동·예고만) |
+| 보스 평상시 이동 속력·선회 속도 | `BossEncounter.attachParams({ moveSpeedMetersPerSecond, turnRateRadiansPerSecond })` | 이동 0 (`patterns.ram.speedMetersPerSecond`는 돌진 전용이라 평상시 속력으로 전용할 수 없다) |
+
+⚠ **약점 반경이 M1 완주 판정의 직접 차단 사유다.** 격파 경로가 성립하지
+않는다. 배율 2종(2.0/0.25)은 이미 `params/boss.json`에 있으므로 반경 한 줄만
+추가되면 약점 판정이 wired가 된다.
+
+**B-2. 보스·약점 배치 데이터가 없다.** `BossControllerOptions.spawnPosition`과
+`BossWeakPointPlacement`가 필요한데 `src/world/`에 보스 관련 데이터가 **0건**
+이다. 좌표를 발명하지 않았으므로 `createBoss()` 호출 전에는 **보스가
+존재하지 않는다**(`boss === null`). 진입 게이트(`BossProgressStore.requestEntry`)는
+리드 쪽에 이미 있다.
+
+**B-3. interactable → canonical `clueId` 매핑 데이터가 없다.**
+`params/boss.json unlock.clueIds`는 3종(`clue-wreck-salvage`·`clue-deep-survey`·
+`clue-guard-log`)을 확정했지만, **어떤 월드 회수 대상이 어떤 단서를 주는지**는
+어디에도 없다. `targetId`를 `clueId`로 재사용하지 않았으므로 매핑 주입 전에는
+단서 회수가 **발행되지 않는다**(`unmappedClueCount`로 드러난다).
+
+**B-4. `new BossController(...)`가 조립부에 없다.** `src/core/Game.ts`에
+`BossProgressStore`·`BossVictoryBridge`·`interactionCollected` 구독은 이미
+있으나 보스 코어 인스턴스가 없다. 게임플레이 포트는 준비됐고 조립 호출만 남았다:
+
+```ts
+// 게이트 통과 시 (BossProgressStore.requestEntry() === 'granted')
+const boss = gameplay.createBoss(placement, weakPointPlacement, controller, encounterParams, weakPointParams);
+gameplay.spawnBoss();
+gameplay.attachBossDamageSink(controller);   // 약점 배율 적용분 → 보스 체력
+new BossController({ motion: gameplay.bossMotionPort!, attackPort: gameplay.bossAttackPort!, ... });
+```
+(`controller`가 `BossPhasePort`·`BossDamageSink` 양쪽을 만족하므로 생성 순서상
+포트 주입 → 컨트롤러 생성 → `attachBossDamageSink` 순서가 필요하다.)
+
+**B-5. 소나 blip 어휘에 보상·단서·지형이 없다.** 계약 `SonarBlipKind`는
+`ship | torpedo | depthCharge` 셋뿐인데 16차 결의 2-5는 액티브 핑이
+**보상·단서·지형·보스**를 표시하라고 한다. 어휘를 임의로 늘리지 않았고
+(계약 규칙: 확장은 이 문서 제안 → 리드 결정), 보스는 **선박 접촉(`ship`)**으로
+옮겼다. 보상·단서·지형 blip은 **표현할 수 없다** — kind 3종 추가 여부를 요청한다.
+
+**B-6. `E` 키 충돌 — 두 결의가 같은 키를 배정했고 해소 결의가 없다.**
+
+| 근거 | 배정 |
+|---|---|
+| 9차 결의 4 (12차 부록 2 키맵 확정본) | `E` = **상승 병행 키** (창 모드 Ctrl+W 대응) |
+| 16차 결의 2-4 / 17차 창 2 | `E` = **회수 홀드** |
+
+회의록을 전부 확인했으나 **충돌을 해소한 결의가 없다.** 임의로 정하지 않았고
+현재 상태만 보고한다.
+
+- **재현:** `E`를 누르면 `KeyboardInput.ascend`와 `interactHold`가 **각각 독립적으로** `heldCodes`를 읽어 상승과 회수 홀드가 동시에 진행된다.
+- **영향:** 회수 거리 판정이 3D(`hypot(dx,dy,dz)`)라 수직 상승만으로 `interactRadiusMeters`를 벗어나 `outOfRange` 취소가 날 수 있다. 실제 발생 여부는 미확정인 `interactRadiusMeters`와 상승 속도에 달려 있다.
+- **입력 소비 여부:** **읽기만 한다.** 어느 쪽도 키 상태를 소거하지 않으므로 서로 가로채지 않는다.
+- **최소 선택지:** ① 회수 키를 다른 키로 (17차 결의 2로 `F`가 미배정 반환됨 — 후보) ② 상승 병행 키를 다른 키로 (9차의 Ctrl+W 대응 목적을 대체할 키 필요) ③ 회수 홀드 중 수직 입력 억제 (규칙 신설이므로 대회의 사항)
+- **변경 대상:** `src/systems/KeyboardInput.ts`의 `interactHold` 또는 `ascend` getter **한 줄**. 다른 파일은 바뀌지 않는다.
+
+**B-7. 잔여 M2 params (INT-GAME-016에서 이월, 미해소).**
+회수 `interactRadiusMeters`·`noiseContribution`, 파밍 `combatRewardAverageCredits`,
+스코프 `passiveBearingSpreadRadiansAtMaxNoise` — 공식 수치가 여전히 없다.
+
+**조립 배선 요청 (리드, 각 1줄):** `attachClueIds` · `attachSonarContacts` ·
+`attachSonarScopeParams` · `attachInteractionParams` · `attachFarmingRewards` ·
+`attachFarmingRewardParams` · `createBoss`/`spawnBoss`/`attachBossDamageSink` ·
+`sonarScope.attachDetectionStageSource`.
+
+**M1·M2 게이트:** `M1_EXIT_GATE_PASSED=false` · `M2_PROGRESS_GATE_PASSED=false`
+유지. 17차 완주 판정은 **dev 통합 빌드 실브라우저 완주**가 조건이며 위
+blocker가 남아 있는 한 성립하지 않는다. 자동 검증 통과를 완주로 보고하지 않는다.
+
+---
+
 ### INT-GAME-016 — M2 2~5단계 구현 + 공식 params 행 요청 (16·17차 결의 수치)
 
 | 필드 | 내용 |
