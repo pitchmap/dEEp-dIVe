@@ -15,10 +15,41 @@ export type SaveMigration = (old: Record<string, unknown>) => Record<string, unk
 
 /**
  * 버전별 마이그레이션 등록부.
- * 현재 스키마가 v1(최초)이므로 비어 있다 — v2 도입 커밋이 `1: (old) => ...`
- * 를 함께 추가해야 한다.
+ *
+ * v1 → v2 (M2 단서 — INT-CORE-020): `progress.bossCluesFound`(개수) →
+ * `bossCluesCollected`(id 목록). v1에는 개별 단서 id가 없으므로 개수를
+ * `legacy-clue-N` 합성 id로 보존한다 — 표시 개수·해금 판정의 하위 호환용이며,
+ * 정본 단서 id(params/boss.json `unlock.clueIds`)와 겹치지 않아 같은 단서의
+ * 이중 반영이 생기지 않는다. `bossUnlocked`/`bossDefeated` 플래그는 그대로
+ * 이관한다(해금 정본은 플래그 — 한 번 true면 유지).
  */
-export const SAVE_MIGRATIONS: Record<number, SaveMigration> = {};
+export const SAVE_MIGRATIONS: Record<number, SaveMigration> = {
+  1: (old) => {
+    const progressRaw = old['progress'];
+    const progress =
+      typeof progressRaw === 'object' && progressRaw !== null && !Array.isArray(progressRaw)
+        ? (progressRaw as Record<string, unknown>)
+        : {};
+    const foundRaw = progress['bossCluesFound'];
+    const found =
+      typeof foundRaw === 'number' && Number.isFinite(foundRaw) && foundRaw > 0
+        ? Math.floor(foundRaw)
+        : 0;
+    const bossCluesCollected: string[] = [];
+    for (let index = 1; index <= found; index += 1) {
+      bossCluesCollected.push(`legacy-clue-${index}`);
+    }
+    return {
+      ...old,
+      schemaVersion: 2,
+      progress: {
+        bossCluesCollected,
+        bossUnlocked: progress['bossUnlocked'] === true,
+        bossDefeated: progress['bossDefeated'] === true,
+      },
+    };
+  },
+};
 
 export class SaveMigrationError extends Error {
   constructor(fromVersion: unknown, detail: string) {
