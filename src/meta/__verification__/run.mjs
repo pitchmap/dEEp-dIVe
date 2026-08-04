@@ -23,9 +23,17 @@ registerHooks({
 
 const { runMetaVerification } = await import('./verifyMeta.ts');
 
+// production boss.json 주입 — verifyMeta는 JSON을 직접 import하지 않는다
+// (Node 러너 JSON import 속성 문제 회피 — combatParams 관례와 동일)
+const { readFileSync: readBossFile } = await import('node:fs');
+const { join: joinPath, dirname: dirnamePath } = await import('node:path');
+const { fileURLToPath: bossFileUrl } = await import('node:url');
+const bossProjectRoot = joinPath(dirnamePath(bossFileUrl(import.meta.url)), '..', '..', '..');
+const bossJson = JSON.parse(readBossFile(joinPath(bossProjectRoot, 'params', 'boss.json'), 'utf8'));
+
 let results;
 try {
-  results = runMetaVerification();
+  results = runMetaVerification({ bossJson });
 } catch (error) {
   console.error('✖ 검증 실행 자체가 실패했습니다:', error);
   process.exit(1);
@@ -365,6 +373,50 @@ try {
       name: 'C 수치 발명 금지: 생존 코어에 밸런스 상수 없음 (0·1 경계값 제외)',
       passed: offenders.length === 0,
       detail: offenders.length === 0 ? '통과' : `숫자 리터럴 발견: ${offenders.join(', ')}`,
+    });
+  }
+
+  // ④ M1 패턴 봉인 (16차 결의 1-3) — 구조 데이터로 판정한다(주석 오탐 없음):
+  //    boss.json 플래그 키 = 정확히 4종, 계약 BOSS_PATTERN_KINDS 배열 = 4항목.
+  //    소환·회전 근접은 타입·스텁·플래그 어느 형태로도 존재하면 안 된다.
+  {
+    const SEALED = ['ram', 'projectile', 'weakPointOpen', 'finalAcceleration'];
+    const bossJsonRaw = JSON.parse(read('params/boss.json'));
+    const flagKeys = Object.keys(bossJsonRaw?.patterns?.flags ?? {}).filter(
+      (key) => !key.startsWith('$'),
+    );
+    const flagsSealed =
+      flagKeys.length === 4 && SEALED.every((kind) => flagKeys.includes(kind));
+    const contractSource = read('src/contracts/boss.ts');
+    const arrayMatch = contractSource.match(
+      /BOSS_PATTERN_KINDS\s*=\s*\[([^\]]*)\]/,
+    );
+    const contractKinds = (arrayMatch?.[1].match(/'[^']+'/g) ?? []).map((entry) =>
+      entry.replaceAll("'", ''),
+    );
+    const contractSealed =
+      contractKinds.length === 4 && SEALED.every((kind) => contractKinds.includes(kind));
+    results.push({
+      name: 'M1 패턴 봉인: 플래그·계약 등록부 정확히 4종 (소환·회전 근접 타입/플래그 0)',
+      passed: flagsSealed && contractSealed,
+      detail:
+        flagsSealed && contractSealed
+          ? `flags=${flagKeys.join(',')} · 계약=${contractKinds.join(',')}`
+          : `flags=${flagKeys.join(',')} / 계약=${contractKinds.join(',')}`,
+    });
+  }
+
+  // ⑤ M1 계보: BossController는 DestroyerAIController를 **합성**으로 재사용하고
+  //    (import 필수), DestroyerAI를 직접 implements 하지 않는다 —
+  //    B5 '범용 production 구현 정확히 1개' 판정을 보존한다.
+  {
+    const bossController = read('src/core/BossController.ts');
+    const reusesLineage = /from\s+['"]\.\/DestroyerAIController['"]/.test(bossController);
+    const noSecondImplementer = !/implements\s+DestroyerAI\b/.test(bossController);
+    results.push({
+      name: 'M1 계보: BossController = DestroyerAIController 합성 재사용 (제2 구현체 아님)',
+      passed: reusesLineage && noSecondImplementer,
+      detail: `계보 import=${reusesLineage}, implements DestroyerAI=${!noSecondImplementer}`,
     });
   }
 }
