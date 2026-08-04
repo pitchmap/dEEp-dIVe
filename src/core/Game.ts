@@ -807,6 +807,11 @@ export class Game {
       hudView: () => gameplay.detectionHudView(),
     });
     detectionHud.attachTrackingSource(guardAdapter);
+    //     소나 스코프(그래픽스 소유 계기)는 정본 계약 `SonarScopeReadModel`
+    //     (contracts/sonar.ts) **하나만** 소비한다. 게임플레이 공급자가 아직
+    //     dev에 없으므로 미주입 상태로 둔다 — 스코프는 '계기 미연결'을
+    //     표시한다(작동 위장 금지). 공급자 병합 시 배선 1줄:
+    //     `scene.attachSonarScopeSource({ scopeView: () => gameplay.sonarScopeView() })`
     const survivalHud = new SurvivalHud(this.container);
     survivalHud.attachSource(playerHull, () => playerHull.consumeDamageFlash());
     const rendererCamera = this.renderer?.camera ?? null;

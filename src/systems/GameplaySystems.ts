@@ -59,6 +59,35 @@ import {
   type InteractionReadModel,
 } from './interaction/InteractionSystem';
 import { SubmarineDetectionSystem } from './detection/SubmarineDetectionSystem';
+import {
+  InteractionEventAdapter,
+  type ClueIdByInteractable,
+  type InteractionPublishOutcome,
+} from './interaction/InteractionEventAdapter';
+import {
+  BossEncounter,
+  type BossEncounterParams,
+  type BossPlacement,
+} from './boss/BossEncounter';
+import {
+  BossWeakPointTarget,
+  type BossPhasePort,
+  type BossWeakPointParams,
+  type BossWeakPointPlacement,
+} from './BossWeakPointTarget';
+import {
+  SectorFarmingRewards,
+  type FarmingRewardEntry,
+  type FarmingRewardParams,
+} from './economy/SectorFarmingRewards';
+import {
+  SonarScopeSystem,
+  type SonarContact,
+  type SonarPingOutcome,
+  type SonarScopeParams,
+} from './sonar/SonarScopeSystem';
+import type { SonarScopeReadModel } from '../contracts/sonar';
+import type { BossAttackPort, BossDamageSink, BossMotionPort } from '../contracts/boss';
 import { CanyonPatrolSpawnLocation } from './faction/CanyonPatrolSpawnLocation';
 import { HighValueTransportSystem } from './faction/HighValueTransportSystem';
 import type { SurfaceShipMotionPortFactory } from '../contracts/guard';
@@ -232,6 +261,8 @@ export class GameplaySystems implements GameSystem {
   private damageReceiver: DamageReceiverPort | null = null;
   /** [M2-1] 회수 대상 공급 — 콘텐츠 시스템이 연결한다 (미연결 = 대상 0) */
   private interactableSource: (() => readonly InteractableTarget[]) | null = null;
+  /** [M2-5] 스코프 접점 공급 — 미연결이면 표시할 접점이 없다 */
+  private sonarContactSource: (() => readonly SonarContact[]) | null = null;
   /**
    * [C1] 탐지 게이지 **정본** — 계약 `DetectionSystem` 구현.
    * HUD는 `detectionHudView()`, AI는 `detectionStageSource`만 소비한다.
@@ -249,6 +280,38 @@ export class GameplaySystems implements GameSystem {
    * `attachInteractables()`로 연결하며 보상·진행 상태 소비는 이 시스템 밖이다.
    */
   readonly interaction: InteractionSystem;
+  /**
+   * [M2-2] 회수 완료 → 공식 `interactionCollected` 발행 어댑터.
+   * **무상태다** — 단서 원장·저장·해금 정본은 리드 `BossProgressStore`
+   * 하나이며 여기에 복제하지 않는다 (INT-CORE-021).
+   */
+  readonly interactionEvents: InteractionEventAdapter;
+  /**
+   * [M1] 보스 조우 — `BossMotionPort`·`BossAttackPort` 구현 + 스폰.
+   * 단계·패턴·예고·체력은 리드 `BossController` 소유다.
+   *
+   * **배치 데이터가 오기 전에는 존재하지 않는다**(null). 좌표를 발명해
+   * 미리 만들어 두지 않는다 — 스폰 좌표는 월드 소유이며 `createBoss()`로
+   * 주입된다.
+   */
+  private bossEncounter: BossEncounter | null = null;
+  /** [M1] 보스 약점 명중 판정 — 기존 어뢰 단일 경로 재사용 (배치와 함께 생성) */
+  private bossWeakPointTarget: BossWeakPointTarget | null = null;
+  private bossWeakPointRegistered = false;
+  private lastPublishOutcome: InteractionPublishOutcome | null = null;
+  /** [C4·M1] 플레이어 생사 정본 (리드 PlayerHullSystem) — 보스와 공유 */
+  private aliveSource: PlayerAliveSource | null = null;
+  /**
+   * [M2-4] 파밍 보상 — 기존 단일 재화(`economy.wallet`)에만 적립하고
+   * 해역당 상한을 강제한다. 신규 화폐를 만들지 않는다 (16차 결의 2-3).
+   */
+  readonly farmingRewards: SectorFarmingRewards;
+  /**
+   * [M2-5] 소나 스코프 판정 — 패시브(소음원 방위) + 액티브 핑.
+   * 침묵 항행을 **모른다**: 입력은 탐지 시스템의 소음 계수 하나뿐이다
+   * (17차 결의 4). 렌더·테두리 색은 그래픽스·툴링 소유.
+   */
+  readonly sonarScope: SonarScopeSystem;
   /**
    * [B6] 고가치 수송선·호위 — **핵심 게이트 B1~B5와 독립**이다.
    * 이 시스템을 빼도 배치·식별·보상·중립 사건·경비 스폰은 그대로 동작한다.
@@ -440,6 +503,26 @@ export class GameplaySystems implements GameSystem {
       this.input,
     );
     this.detectionEnvironment.addNoiseContributor(this.interaction);
+    // [M2-2·M2-4] 회수 완료 **한 줄기**를 두 소비자가 각자 자기 몫만 집는다.
+    //   ① 공식 이벤트 발행(단서 진행 정본은 리드 BossProgressStore가 구독)
+    //   ② 금괴·salvage 재화. 대상 타입별 회수 시스템을 만들지 않기 위해
+    //   분기는 소비측에만 있다.
+    this.interactionEvents = new InteractionEventAdapter(bus);
+    this.farmingRewards = new SectorFarmingRewards(this.economy.wallet, null);
+    this.interaction.onCompleted((entry) => {
+      this.lastPublishOutcome = this.interactionEvents.publish(entry);
+      this.farmingRewards.handleCompletion(entry);
+    });
+
+    // [M2-5] 스코프 — 소음 계수는 탐지 시스템 하나에서만 오고(침묵 항행
+    //   비인지), 핑의 대가는 기존 탐지 게이지 정본에 적용된다.
+    this.sonarScope = new SonarScopeSystem(
+      this.player,
+      () => this.sonarContacts,
+      null,
+      this.detection,
+      this.detection,
+    );
     // [C3] 추적 입력 — AI는 stage만 읽는다. 전이 로직은 리드
     //      DestroyerAIController 소유이며 여기서 복제하지 않는다.
     this.patrolFleet.attachDetectionStageSource(this.detection.stageSource);
@@ -553,8 +636,11 @@ export class GameplaySystems implements GameSystem {
    * 게임플레이는 자체 체력 상태를 두지 않는다 — 정본은 리드 `PlayerHullSystem`.
    */
   attachPlayerAliveSource(source: PlayerAliveSource | null): void {
+    this.aliveSource = source;
     this.patrolFleet.attachPlayerAliveSource(source);
     this.enemyAttack.attachPlayerAliveSource(source);
+    // [M1] 보스도 **같은 생사 정본**을 쓴다 — 파괴 후 신규 공격 0.
+    this.bossEncounter?.attachPlayerAliveSource(source);
   }
 
   get playerAliveSourceWired(): boolean {
@@ -609,6 +695,149 @@ export class GameplaySystems implements GameSystem {
   /** 회수 대상 목록 — 미연결이면 빈 목록(대상을 만들어 내지 않는다) */
   private get interactables(): readonly InteractableTarget[] {
     return this.interactableSource?.() ?? [];
+  }
+
+  /* ── M2-2 단서 발행 API (진행 정본은 리드 BossProgressStore) ──── */
+
+  /**
+   * interactable → canonical 단서 ID 매핑 주입 (기획·월드 데이터).
+   *
+   * **여기에 단서 원장을 두지 않는다.** 수집 목록·중복 방지·저장 복원·
+   * 해금 판정은 전부 리드 `BossProgressStore` 소유다 (INT-CORE-021).
+   * 이 게임플레이 계층은 매핑·kind 변환·이벤트 발행만 한다.
+   *
+   * 매핑이 없으면 단서 회수는 **발행되지 않는다** — `targetId`를 단서 ID로
+   * 재사용하거나 문자열로 추측하지 않는다.
+   */
+  attachClueIds(clueIds: ClueIdByInteractable | null): void {
+    this.interactionEvents.attachClueIds(clueIds);
+  }
+
+  /** 마지막 회수 발행 결과 (진단용 — 매핑 누락을 조용히 넘기지 않기 위함) */
+  get lastInteractionPublish(): InteractionPublishOutcome | null {
+    return this.lastPublishOutcome;
+  }
+
+  /* ── M1 보스 production API ───────────────────────────────────── */
+
+  /**
+   * 보스 개체 생성 — **배치 데이터가 도착한 뒤에만** 호출된다.
+   * 좌표를 발명해 미리 만들어 두지 않으므로, 호출 전에는 보스가 없다.
+   * 같은 출항에서 두 번 호출해도 보스는 1종·1개다.
+   */
+  createBoss(
+    placement: BossPlacement,
+    weakPoint: BossWeakPointPlacement,
+    phasePort: BossPhasePort,
+    encounterParams: BossEncounterParams | null = null,
+    weakPointParams: BossWeakPointParams | null = null,
+  ): BossEncounter {
+    if (this.bossEncounter) return this.bossEncounter;
+    this.bossEncounter = new BossEncounter(
+      placement,
+      this.player,
+      encounterParams,
+      this.worldBoundsValue,
+      { applyDamage: (request) => this.forwardDamage(request) },
+      this.aliveSource,
+    );
+    this.bossWeakPointTarget = new BossWeakPointTarget(phasePort, weakPoint, weakPointParams);
+    return this.bossEncounter;
+  }
+
+  /** 생성된 보스 (배치 미주입이면 null) */
+  get boss(): BossEncounter | null {
+    return this.bossEncounter;
+  }
+
+  /** 보스 약점 판정 대상 (배치 미주입이면 null) */
+  get bossWeakPoint(): BossWeakPointTarget | null {
+    return this.bossWeakPointTarget;
+  }
+
+  /** 리드 `BossController`가 소비하는 이동 포트 (미생성이면 null) */
+  get bossMotionPort(): BossMotionPort | null {
+    return this.bossEncounter;
+  }
+
+  /** 리드 `BossController`가 소비하는 공격 포트 (미생성이면 null) */
+  get bossAttackPort(): BossAttackPort | null {
+    return this.bossEncounter;
+  }
+
+  /**
+   * 보스 스폰 — 진입 게이트가 열린 뒤 조립부가 호출한다.
+   * 게이트 판정 자체는 리드 `BossZoneGatePort` 소유이므로 여기서 하지 않는다.
+   * 스폰과 동시에 약점을 **기존 어뢰 표적 등록소**에 넣는다(별도 판정 경로 0).
+   */
+  spawnBoss(): boolean {
+    const boss = this.bossEncounter;
+    const weakPoint = this.bossWeakPointTarget;
+    if (!boss || !weakPoint) return false;
+    if (!boss.spawn()) return false;
+    if (!this.bossWeakPointRegistered) {
+      this.targets.register(weakPoint);
+      this.bossWeakPointRegistered = true;
+    }
+    return true;
+  }
+
+  /**
+   * 약점 명중 누적 → 리드 보스 체력 창구로 전달하는 브리지 연결.
+   * 배율 적용은 게임플레이(`BossWeakPointTarget`), 체력·격파 1회 보장은
+   * 리드(`BossDamageSink`) — 양쪽 정본을 겹치지 않게 나눈다.
+   */
+  attachBossDamageSink(sink: BossDamageSink | null): () => void {
+    const weakPoint = this.bossWeakPointTarget;
+    if (!weakPoint || !sink) return () => {};
+    let sequence = 0;
+    return weakPoint.onHit((kind, appliedDamage) => {
+      sequence += 1;
+      sink.applyBossDamage({
+        damageId: `boss-hit-${sequence}`,
+        amount: appliedDamage,
+        kind,
+      });
+    });
+  }
+
+  /* ── M2-4 파밍 보상 API ───────────────────────────────────────── */
+
+  /** 해역당 상한 수치 주입 — 미주입이면 파밍 보상을 지급하지 않는다 */
+  attachFarmingRewardParams(params: FarmingRewardParams | null): void {
+    this.farmingRewards.attachParams(params);
+  }
+
+  /** 회수 대상별 보상 금액 주입 (기획·월드 데이터) */
+  attachFarmingRewards(rewards: readonly FarmingRewardEntry[] | null): void {
+    this.farmingRewards.attachRewards(rewards);
+  }
+
+  /* ── M2-5 소나 스코프 API ─────────────────────────────────────── */
+
+  /** 스코프 접점 공급 연결 (조립부) — 미연결이면 표시할 접점이 없다 */
+  attachSonarContacts(source: (() => readonly SonarContact[]) | null): void {
+    this.sonarContactSource = source;
+  }
+
+  /** 공식 스코프 수치 주입 — 미주입이면 스코프가 아무것도 표시하지 않는다 */
+  attachSonarScopeParams(params: SonarScopeParams | null): void {
+    this.sonarScope.attachParams(params);
+  }
+
+  /** 액티브 핑 요청 (입력 어댑터·HUD 공용 진입점 — 경로를 나누지 않는다) */
+  requestSonarPing(): SonarPingOutcome {
+    return this.sonarScope.requestPing();
+  }
+
+  /** 17차 결의 4가 이름 붙인 소비 계약 */
+  sonarScopeReadModel(): SonarScopeReadModel {
+    return this.sonarScope.readModel();
+  }
+
+  /** 스코프 접점 목록 — 미연결이면 빈 목록 */
+  private get sonarContacts(): readonly SonarContact[] {
+    return this.sonarContactSource?.() ?? [];
   }
 
   /** [C1] 탐지가 실제로 구동 중인가 — false면 게이지 0·safe 고정 */
@@ -851,6 +1080,16 @@ export class GameplaySystems implements GameSystem {
     this.enemyAttack.resetForNewSortie();
     // 회수 이력은 지우지 않는다 — 복원은 저장 경로 소유(restoreCollected).
     this.interaction.resetForNewSortie();
+    // [M2-2] 단서 진행은 리드 BossProgressStore가 소유한다 — 여기서
+    //        초기화할 게임플레이 상태가 없다(원장 비보유).
+    // [M1] 보스 — 출항 한정 상태(비행 투사체·중복 원장·스폰 플래그) 초기화
+    this.bossEncounter?.resetForNewSortie();
+    this.bossWeakPointTarget?.resetForNewSortie();
+    this.bossWeakPointRegistered = false;
+    // [M2-4] 해역 파밍 예산은 출항마다 다시 찬다 (MVP: 해역 = 출항 단위).
+    this.farmingRewards.resetForNewSortie();
+    // [M2-5] 핑 표시·쿨다운은 출항 한정 상태다.
+    this.sonarScope.resetForNewSortie();
     this.economy.resetForNewSortie();
   }
 
@@ -892,7 +1131,14 @@ export class GameplaySystems implements GameSystem {
     this.enemyAttack.update(deltaSeconds);
     this.depthCharges.update(deltaSeconds);
     // 12) [M2-1] 회수 홀드 — 근접·홀드·취소 판정 (수치 미주입이면 무동작)
+    //     완료 통지가 단서 진행·파밍 보상으로 흘러가므로 두 소비자는
+    //     자체 update를 갖지 않는다(중복 판정 경로 없음).
     this.interaction.update(deltaSeconds);
+    // 12.5) [M1] 보스 투사체 비행·명중 (이동·패턴 결정은 리드 코어 소유)
+    this.bossEncounter?.update(deltaSeconds);
+    // 13) [M2-5] 스코프 핑 표시·쿨다운 시각 진행 — 탐지 갱신 뒤에 둔다
+    //     (핑이 올린 게이지가 같은 프레임에 반영되도록).
+    this.sonarScope.update(deltaSeconds);
 
     // 3.5) 잠수함-함선 충돌 — 통과 방지·밀어냄만, 피해 없음 (5차 결의 1).
     //      어뢰 명중 판정과 동일한 박스 근사(hullBox)를 공유한다.
@@ -969,6 +1215,7 @@ export class GameplaySystems implements GameSystem {
     this.depthCharges.dispose();
     this.enemyAttack.dispose();
     this.interaction.dispose();
+    this.bossEncounter?.dispose();
     this.detachInput();
   }
 }

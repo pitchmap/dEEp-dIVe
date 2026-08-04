@@ -85,7 +85,7 @@ import { BossProgressStore } from '../BossProgressStore';
 import { BossVictoryBridge, SaveBridge } from '../../core/PveIntegration';
 import { validateBossParams } from '../../config/bossParams';
 import { BOSS_PATTERN_KINDS } from '../../contracts/boss';
-import type { SonarScopeReadModel } from '../../contracts/sonar';
+import type { SonarBlipKind, SonarScopeReadModel } from '../../contracts/sonar';
 import type { BossAttackRequest, BossMotionPort } from '../../contracts/boss';
 import type { BossParams } from '../../contracts/params';
 import { SaveStore, type StorageLike } from '../save/SaveStore';
@@ -2810,6 +2810,209 @@ export function runMetaVerification(options: { bossJson?: unknown } = {}): Verif
         savedProgress[0]?.defeated === true && savedProgress[0]?.rareParts === walletBefore + 1 &&
           progress.defeated,
         `저장 내용=${JSON.stringify(savedProgress[0] ?? null)}`,
+      );
+    }
+  }
+
+  /* ═══ INT-CORE-022 Runtime Closure 계약 (승인 대기 params·약점 이벤트·마이그레이션 정책) ═══ */
+  {
+    // ── 승인 대기 4필드: null 보존 (null→0 변환 0) ──
+    {
+      const params = validateBossParams(structuredClone(options.bossJson));
+      check(
+        'RC params: 승인 대기 4필드(이동·선회·돌진 피해·약점 반경) null 보존 — 0 변환·fallback 없음',
+        params.movement.moveSpeedMetersPerSecond.value === null &&
+          params.movement.turnRateRadiansPerSecond.value === null &&
+          params.patterns.ram.contactDamage.value === null &&
+          params.patterns.weakPointOpen.hitRadiusMeters.value === null,
+        `값=${JSON.stringify([
+          params.movement.moveSpeedMetersPerSecond.value,
+          params.patterns.ram.contactDamage.value,
+          params.patterns.weakPointOpen.hitRadiusMeters.value,
+        ])}`,
+      );
+    }
+    // ── 키 누락 ≠ null: movement 블록·hitRadiusMeters 누락은 로드 거부 ──
+    {
+      const withoutMovement = structuredClone(options.bossJson) as Record<string, unknown>;
+      delete withoutMovement['movement'];
+      let missingBlockRejected = false;
+      try {
+        validateBossParams(withoutMovement);
+      } catch {
+        missingBlockRejected = true;
+      }
+      const withoutRadius = structuredClone(options.bossJson) as Record<string, unknown>;
+      const patterns = withoutRadius['patterns'] as Record<string, unknown>;
+      delete (patterns['weakPointOpen'] as Record<string, unknown>)['hitRadiusMeters'];
+      let missingKeyRejected = false;
+      try {
+        validateBossParams(withoutRadius);
+      } catch {
+        missingKeyRejected = true;
+      }
+      check(
+        'RC params: 키 누락은 거부 (null=미확정 / 누락=오류 — 두 상태를 구분)',
+        missingBlockRejected && missingKeyRejected,
+        `블록=${missingBlockRejected}, 키=${missingKeyRejected}`,
+      );
+    }
+    // ── 승인값 입력 시: 허용 범위·관계 제약 강제 ──
+    {
+      const outOfRange = structuredClone(options.bossJson) as Record<string, unknown>;
+      const wp = ((outOfRange['patterns'] as Record<string, unknown>)['weakPointOpen'] as Record<string, unknown>)[
+        'hitRadiusMeters'
+      ] as Record<string, unknown>;
+      wp['value'] = 99;
+      let rangeRejected = false;
+      try {
+        validateBossParams(outOfRange);
+      } catch {
+        rangeRejected = true;
+      }
+      const relation = structuredClone(options.bossJson) as Record<string, unknown>;
+      const move = ((relation['movement'] as Record<string, unknown>)['moveSpeedMetersPerSecond']) as Record<string, unknown>;
+      move['value'] = 14;
+      const ram = ((relation['patterns'] as Record<string, unknown>)['ram'] as Record<string, unknown>)[
+        'speedMetersPerSecond'
+      ] as Record<string, unknown>;
+      ram['value'] = 12;
+      let relationRejected = false;
+      try {
+        validateBossParams(relation);
+      } catch (error) {
+        relationRejected = error instanceof Error && error.message.includes('돌진 속도');
+      }
+      check(
+        'RC params: 승인값 범위 밖 거부 + 관계 제약(평상시 ≤ 돌진 속도) 강제',
+        rangeRejected && relationRejected,
+        `범위=${rangeRejected}, 관계=${relationRejected}`,
+      );
+    }
+
+    // ── bossWeakPointChanged: 전이 시에만 1회 — 발행 정본은 리드 코어 ──
+    {
+      const bus = new EventBus();
+      const sequence: Array<{ type: 'weak'; active: boolean } | { type: 'defeated' }> = [];
+      bus.on('bossWeakPointChanged', (payload) => sequence.push({ type: 'weak', active: payload.active }));
+      bus.on('bossDefeated', () => sequence.push({ type: 'defeated' }));
+      const params = (() => {
+        const base = structuredClone(validateBossParams(options.bossJson));
+        base.patterns.intervalSeconds.value = 1;
+        base.patterns.intervalSeconds.range = [0.5, 15];
+        base.patterns.telegraphSeconds.value = 0.5;
+        base.patterns.telegraphSeconds.range = [0.2, 3];
+        base.patterns.weakPointOpen.openSeconds.value = 0.8;
+        // 약점 개방만 스케줄되도록 공격 패턴 오프 (D10 컷과 같은 플래그 경로)
+        base.patterns.flags = { ...base.patterns.flags, ram: false, projectile: false };
+        return base;
+      })();
+      const boss = new BossController({
+        entityId: 9100,
+        targetEntityId: PLAYER_ENTITY_ID,
+        motion: {
+          getPosition: () => ({ x: 0, y: 0, z: 0 }),
+          getForward: () => ({ x: 0, z: -1 }),
+          turnToward: () => {},
+          moveForward: () => {},
+          maintainSurfaceHeight: () => {},
+          isWithinWorldBounds: () => true,
+          isTargetAlive: () => true,
+          getTargetPosition: () => ({ x: 20, y: -2, z: 30 }),
+          setMoveSpeed: () => {},
+        },
+        params,
+        attackPort: { requestAttack: () => 'delivered' },
+        playerAlive: null,
+        bus,
+        spawnPosition: { x: 0, z: 0 },
+      });
+      boss.initialize();
+      const step = (seconds: number): void => {
+        const frames = Math.round(seconds / 0.05);
+        for (let i = 0; i < frames; i += 1) boss.update(0.05);
+      };
+      step(2.0); // 간격 1s + 예고 0.5s → 개방 진입
+      const openEvents = sequence.filter((e) => e.type === 'weak' && e.active).length;
+      const openNow = boss.view().weakPointOpen;
+      step(1.0); // 개방 0.8s 만료 → 해제
+      const closeEvents = sequence.filter((e) => e.type === 'weak' && !e.active).length;
+      check(
+        'RC 약점 이벤트: 개방 true 1회 · 만료 false 1회 — 전이 없는 프레임 발행 0',
+        openNow && openEvents === 1 && closeEvents === 1 && sequence.length === 2,
+        `순서=${JSON.stringify(sequence)}`,
+      );
+      // 격파 경로: 개방 중 격파 → false 발행 후 bossDefeated (순서 보장)
+      for (let i = 0; i < 200 && !boss.view().weakPointOpen; i += 1) boss.update(0.05); // 다음 개방 진입
+      const beforeDefeat = sequence.length;
+      boss.applyBossDamage({ damageId: 'rc-kill', amount: 9999, kind: 'weakPoint' });
+      const tail = sequence.slice(beforeDefeat);
+      check(
+        'RC 약점 이벤트: 개방 중 격파 시 bossWeakPointChanged(false) → bossDefeated 순서',
+        boss.view().weakPointOpen === false &&
+          tail.length === 2 &&
+          tail[0]?.type === 'weak' &&
+          (tail[0] as { active: boolean }).active === false &&
+          tail[1]?.type === 'defeated',
+        `tail=${JSON.stringify(tail)}`,
+      );
+    }
+
+    // ── save 마이그레이션 정책: 3 초과 개수 보존·legacy-only 해금 유지 ──
+    {
+      const clueOptions = { requiredClues: 3, clueIds: ['clue-a', 'clue-b', 'clue-c'] };
+      const v1 = {
+        schemaVersion: 1,
+        credits: 10,
+        rareParts: 0,
+        upgradeLevels: {},
+        equippedGear: [],
+        progress: { bossCluesFound: 5, bossUnlocked: true, bossDefeated: false },
+        settings: { keyboardLockNoticeShown: true },
+      };
+      const migrated = validateSaveData(migrateToCurrent(v1));
+      const store = new BossProgressStore(clueOptions, null);
+      store.restore(migrated.progress);
+      // 재저장 왕복 — legacy id·해금이 v2 그대로 유지된다 (downgrade 없음)
+      const resaved = validateSaveData(
+        migrateToCurrent(JSON.parse(JSON.stringify({ ...createDefaultSave(), progress: store.snapshot() }))),
+      );
+      check(
+        'RC 마이그레이션: v1 개수 5 → legacy id 5개 보존(캡 없음 — params 비의존) + 추가 효과 0 (canonical 0/3)',
+        migrated.progress.bossCluesCollected.length === 5 &&
+          migrated.progress.bossCluesCollected.every((id) => id.startsWith('legacy-clue-')) &&
+          store.collectedCanonicalCount === 0,
+        `ids=${migrated.progress.bossCluesCollected.length}, canonical=${store.collectedCanonicalCount}`,
+      );
+      check(
+        'RC 마이그레이션: legacy-only 해금 단조 유지(박탈 금지) — 진입 granted · 표시는 canonical 0/3 실측 · 재저장 v2 보존',
+        store.unlocked && store.requestEntry() === 'granted' &&
+          resaved.schemaVersion === 2 &&
+          resaved.progress.bossUnlocked === true &&
+          resaved.progress.bossCluesCollected.length === 5,
+        `unlocked=${store.unlocked}, resaved=${JSON.stringify(resaved.progress)}`,
+      );
+    }
+
+    // ── SonarBlipKind 확장: 전투 3종 유지 + 탐색 4종 (InteractionTargetKind 재사용) ──
+    {
+      const kinds: SonarBlipKind[] = [
+        'ship',
+        'torpedo',
+        'depthCharge',
+        'goldCache',
+        'salvage',
+        'clue',
+        'deepSite',
+      ];
+      const rejectUnknownKind = (): SonarBlipKind =>
+        // @ts-expect-error 등록되지 않은 kind는 계약 위반 (임의 확장 금지)
+        'terrain';
+      void rejectUnknownKind;
+      check(
+        'RC 소나 kind: 전투 3종 + 탐색 4종(계약 어휘 재사용) — 지형·미지 kind 타입 금지',
+        kinds.length === 7,
+        'ts-expect-error 정적 검사 + 대입 검사',
       );
     }
   }

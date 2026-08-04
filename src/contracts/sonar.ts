@@ -29,12 +29,38 @@
  */
 
 import type { DetectionStage } from './events';
+import type { InteractionTargetKind } from './meta';
 
 /**
- * blip 분류 — 표시 구분에 필요한 최소 어휘. 확장(예: 상호작용 지점 표시)은
+ * 전투 접촉 blip — 소음원 기반 패시브 표시 자격이 있는 분류
+ * (보스는 별도 kind가 아니라 `ship`으로 표현한다 — 보스 연출 정본은
+ * `BossCoreView`이지 스코프가 아니다).
+ */
+export type SonarCombatBlipKind = 'ship' | 'torpedo' | 'depthCharge';
+
+/**
+ * 탐색 접촉 blip — M2 회수·탐사 대상 4종 (INT-GAME-017 승인,
+ * INT-CORE-022). 어휘는 상호작용 계약 `InteractionTargetKind`
+ * (goldCache | salvage | clue | deepSite)를 **그대로 재사용**한다 —
+ * 같은 대상에 두 이름을 만들지 않는다.
+ *
+ * 공급 규칙 (게임플레이 공급자 준수 사항 — 렌더는 재추측 금지):
+ *  - 탐색 접촉은 스스로 소음을 내지 않으므로 **패시브에 나타나지 않는다.**
+ *    액티브 핑이 드러낸 동안(`fromActivePing: true`)에만 blip으로 나간다 —
+ *    핑 없이 탐색 kind를 미리 노출하면 '위치를 알 것인가, 알릴 것인가'
+ *    (16차 결의 2-5) 교환이 무너진다.
+ *  - 지형은 blip이 아니다 — 렌더가 협곡 레이아웃 단일 소스
+ *    (`world/startingCanyonLayout`)로 스코프 배경층에 직접 그린다
+ *    (판정 아님·접점 아님).
+ */
+export type SonarExplorationBlipKind = InteractionTargetKind;
+
+/**
+ * blip 분류 정본 — 전투 3종 + 탐색 4종의 단일 union. 그래픽스는 이 kind를
+ * 재추측·재분류하지 않고 받은 값으로만 표시를 분기한다. 추가 확장은
  * INTEGRATION_NOTES 제안 → 리드 결정 후에만 한다 (임의 추가 금지).
  */
-export type SonarBlipKind = 'ship' | 'torpedo' | 'depthCharge';
+export type SonarBlipKind = SonarCombatBlipKind | SonarExplorationBlipKind;
 
 /**
  * 스코프 위 접촉 1건. **월드 좌표를 싣지 않는다** — 방위·거리 표현만으로

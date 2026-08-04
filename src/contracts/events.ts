@@ -192,10 +192,22 @@ export interface GameEvents {
    *  오디오(침묵 전환·음정 하강), UI */
   bossPhaseChanged: { phase: BossPhase };
 
-  /** 보스 약점 활성 상태 변경 (발행: 게임플레이 약점 판정 — 판정 소유는
-   *  게임플레이, 발광·개방 연출은 렌더 [소회의 결의 5 경계]).
-   *  구독: 렌더, UI(조준 보조) */
+  /** 보스 약점 활성 상태 변경 — 상태 전이 시에만 1회 (INT-CORE-022 개정:
+   *  **발행 = 리드 보스 코어**. 개방/해제 '상태'의 정본은 코어 phasePort이므로
+   *  상태 노출 이벤트도 코어가 발행한다. 약점 '명중 판정'은 여전히 게임플레이
+   *  소유이며 그 결과는 bossHit이 나른다 [소회의 결의 5 경계 유지]).
+   *  구독: 렌더(발광·개방 연출), UI(조준 보조) */
   bossWeakPointChanged: { active: boolean };
+
+  /** 보스 피격 시각 통지 — 어뢰 명중 판정 확정 1건당 정확히 1회
+   *  (INT-CORE-022. 발행: 게임플레이 — `BossWeakPointTarget.onHit` 구독
+   *  지점, 약점/일반 분류·배율 적용이 **끝난 뒤** 발행하되 배율을 다시
+   *  적용하지 않는다). payload는 시각 구분에 필요한 최소만 — 피해량·위치·
+   *  공격자 비탑재(렌더는 크기를 계산하지 않고 BossCoreView·약점 배치로
+   *  위치를 안다). 격파를 유발한 명중은 bossHit → bossDefeated 순서.
+   *  구독: 렌더(약점/일반 플래시 구분), 오디오. 이 이벤트는 판정·피해에
+   *  영향을 주지 않는다(통지 전용) */
+  bossHit: { kind: 'weakPoint' | 'hull' };
 }
 
 export type GameEventName = keyof GameEvents;
