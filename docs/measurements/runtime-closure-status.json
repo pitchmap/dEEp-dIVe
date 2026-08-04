@@ -51,9 +51,9 @@
     },
     {
       "id": "C1-clueMapping",
-      "name": "clue mapping 정본 검증 (src/world/bossCluePlacements.ts)",
-      "status": "blocked",
-      "detail": "정본 파일이 아직 없다 — src/world/bossCluePlacements.ts 미존재 (그래픽스 PR 대기). **그래픽스 PR 산출물이며 툴링이 만들지 않는다.** 파일 도착 시 자동으로 pass/fail 판정으로 전환된다. 파일 없음을 pass로 처리하지 않았다"
+      "name": "clue mapping 정본 검증 (production 파일)",
+      "status": "pass",
+      "detail": "canonical 3종 · target 3개 · 중복 0 · 배치 정합 · 다중 target clue 0건(정책상 허용, 진행은 clue 단위 1회)"
     },
     {
       "id": "S1-migration",
@@ -88,8 +88,8 @@
     {
       "id": "Q1-activePingKey",
       "name": "KeyQ = 액티브 소나 핑 정합",
-      "status": "blocked",
-      "detail": "미도착 1/6: controlsConfig Q 도움말 — 게임플레이(#14)·그래픽스(#16) 보완 커밋 대기. 부재를 pass로 올리지 않는다"
+      "status": "pass",
+      "detail": "consume=src/systems/KeyboardInput.ts:148 · request=src/systems/GameplaySystems.ts:881,src/systems/GameplaySystems.ts:882,src/systems/GameplaySystems.ts:885,src/systems/GameplaySystems.ts:887,src/systems/sonar/SonarScopeSystem.ts:248,src/systems/sonar/SonarScopeSystem.ts:252 · KeyQ=src/systems/KeyboardInput.ts:58,src/systems/KeyboardInput.ts:74 · 도움말=src/ui/controlsConfig.ts:35 · repeat 가드·쿨다운 거부 검증 존재 · 충돌 0"
     },
     {
       "id": "W1-officialParams",
@@ -106,20 +106,20 @@
     {
       "id": "W3-clueSource",
       "name": "[배선 3] world clue placement 소비",
-      "status": "blocked",
-      "detail": "구현체 미도착 (타 역할 산출물) — 배선 대상이 아직 없다"
+      "status": "unwired",
+      "detail": "구현체는 있으나 Game.ts에 production 호출 없음 (주석만 있는 배선은 pass 아님)"
     },
     {
       "id": "W4-clueIds",
       "name": "[배선 4] clue mapping source 주입 (attachClueIds)",
-      "status": "blocked",
-      "detail": "구현체 미도착 (타 역할 산출물) — 배선 대상이 아직 없다"
+      "status": "unwired",
+      "detail": "구현체는 있으나 Game.ts에 production 호출 없음 (주석만 있는 배선은 pass 아님)"
     },
     {
       "id": "W5-bossPlacement",
       "name": "[배선 5] world boss placement 소비",
-      "status": "blocked",
-      "detail": "구현체 미도착 (타 역할 산출물) — 배선 대상이 아직 없다"
+      "status": "unwired",
+      "detail": "구현체는 있으나 Game.ts에 production 호출 없음 (주석만 있는 배선은 pass 아님)"
     },
     {
       "id": "W6-bossEncounter",
@@ -213,7 +213,6 @@
     "M3_START_ALLOWED": false
   },
   "blockers": [
-    "CLUE_MAPPING_SOURCE_ABSENT:src/world/bossCluePlacements.ts",
     "WIRING_2_NOT_WIRED:toolingLoaders",
     "WIRING_3_NOT_WIRED:clueSource",
     "WIRING_4_NOT_WIRED:clueIds",
