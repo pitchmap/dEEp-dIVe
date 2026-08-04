@@ -36,6 +36,11 @@ import type {
   TransportAttackedPayload,
 } from '../../contracts/guard';
 import { rewardDropTableIdFor } from '../../contracts/faction';
+import type {
+  InteractableKind,
+  InteractableTarget,
+  InteractionCompletion,
+} from '../interaction/InteractionSystem';
 import type { DetectionStage } from '../../contracts/events';
 import type {
   DamageRequest,
@@ -4234,7 +4239,267 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     );
   }
 
+  /* ═══ M2 1단계 — InteractionSystem (공유 회수 절차) ═══════════════ */
+
+  // 69. [LOOP] 회수 절차 — 단일 시스템·근접·홀드·완료 1회
+  {
+    const rig = makeInteractionRig(params);
+    // 수치 미주입 상태에서는 아무 절차도 성립하지 않는다
+    const unwiredModel = rig.systems.interactionReadModel();
+    rig.hold(true);
+    for (let i = 0; i < 60 * 5; i += 1) rig.systems.update(1 / 60);
+    check(
+      '[LOOP] 회수 params 미주입 → unwired (임의 홀드 시간·반경 생성 0)',
+      unwiredModel.unwired &&
+        !unwiredModel.available &&
+        rig.completions.length === 0 &&
+        rig.systems.interactionReadModel().progress === 0,
+      `unwired=${unwiredModel.unwired}, 완료=${rig.completions.length}`,
+    );
+
+    rig.systems.attachInteractionParams(INTERACTION_FIXTURE);
+    // 멀리 있으면 접근 불가 — 근접 상태에서만 사용 가능
+    rig.moveActorTo(1000);
+    const farModel = rig.systems.interactionReadModel();
+    rig.hold(true);
+    for (let i = 0; i < 60 * 5; i += 1) rig.systems.update(1 / 60);
+    check(
+      '[LOOP] 근접 상태에서만 사용 가능 — 원거리에서는 시작조차 되지 않는다',
+      !farModel.available &&
+        farModel.candidateId === null &&
+        rig.completions.length === 0,
+      `available=${farModel.available}, 완료=${rig.completions.length}`,
+    );
+
+    // 근접 + 홀드 → 진행률 상승 → 홀드 시간 후 완료 1회
+    rig.moveActorTo(0);
+    rig.hold(true);
+    const holdSeconds = INTERACTION_FIXTURE.holdSeconds ?? 0;
+    // 첫 프레임은 '시작'에 쓰이고 그 다음부터 누적된다 — 중간 지점만 확인한다.
+    for (let i = 0; i < Math.round(holdSeconds * 60) / 2; i += 1) rig.systems.update(1 / 60);
+    const midProgress = rig.systems.interactionReadModel().progress;
+    // 남은 시간 + 여유 프레임 (부동소수 누적 오차 흡수)
+    for (let i = 0; i < Math.round(holdSeconds * 60) + 3; i += 1) rig.systems.update(1 / 60);
+    check(
+      '[LOOP] 근접 + 홀드 → 진행률 상승 후 완료 통지 정확히 1회',
+      midProgress > 0 &&
+        midProgress < 1 &&
+        rig.completions.length === 1 &&
+        rig.completions[0]?.interactableId === 'gold-1' &&
+        rig.completions[0]?.kind === 'gold',
+      `중간 진행률=${midProgress.toFixed(3)}, 완료=${rig.completions.length}`,
+    );
+
+    // 같은 대상 중복 회수 불가
+    for (let i = 0; i < 60 * 5; i += 1) rig.systems.update(1 / 60);
+    const afterModel = rig.systems.interactionReadModel();
+    check(
+      '[LOOP] 같은 대상 중복 회수 불가 — 재홀드해도 통지 0 추가',
+      rig.completions.length === 1 &&
+        afterModel.candidateCollected &&
+        !afterModel.available &&
+        rig.systems.interaction.collectedIds.length === 1,
+      `완료=${rig.completions.length}, 회수됨=${afterModel.candidateCollected}`,
+    );
+  }
+
+  // 70. [LOOP] 회수 취소 — 거리 이탈·대상 제거·입력 해제
+  {
+    const outRig = makeInteractionRig(params);
+    outRig.systems.attachInteractionParams(INTERACTION_FIXTURE);
+    outRig.hold(true);
+    for (let i = 0; i < 30; i += 1) outRig.systems.update(1 / 60);
+    const beforeLeave = outRig.systems.interactionReadModel().progress;
+    outRig.moveActorTo(1000); // 거리 이탈
+    outRig.systems.update(1 / 60);
+    check(
+      '[LOOP] 거리 이탈 시 취소 — 진행률 0·완료 0',
+      beforeLeave > 0 &&
+        outRig.systems.interactionReadModel().progress === 0 &&
+        outRig.completions.length === 0 &&
+        outRig.systems.interaction.lastCancelReason === 'outOfRange',
+      `이탈 전=${beforeLeave.toFixed(3)}, 사유=${String(outRig.systems.interaction.lastCancelReason)}`,
+    );
+
+    const lostRig = makeInteractionRig(params);
+    lostRig.systems.attachInteractionParams(INTERACTION_FIXTURE);
+    lostRig.hold(true);
+    for (let i = 0; i < 30; i += 1) lostRig.systems.update(1 / 60);
+    lostRig.setAvailable(false); // 대상 제거
+    lostRig.systems.update(1 / 60);
+    check(
+      '[LOOP] 대상 제거 시 취소 — 완료 0',
+      lostRig.systems.interactionReadModel().progress === 0 &&
+        lostRig.completions.length === 0 &&
+        lostRig.systems.interaction.lastCancelReason === 'targetLost',
+      `사유=${String(lostRig.systems.interaction.lastCancelReason)}`,
+    );
+
+    const releaseRig = makeInteractionRig(params);
+    releaseRig.systems.attachInteractionParams(INTERACTION_FIXTURE);
+    releaseRig.hold(true);
+    for (let i = 0; i < 30; i += 1) releaseRig.systems.update(1 / 60);
+    releaseRig.hold(false); // 입력 해제
+    releaseRig.systems.update(1 / 60);
+    check(
+      '[LOOP] 입력 해제 시 취소 — 진행률 초기화 (부분 진행 누적 없음)',
+      releaseRig.systems.interactionReadModel().progress === 0 &&
+        releaseRig.completions.length === 0 &&
+        releaseRig.systems.interaction.lastCancelReason === 'inputReleased',
+      `사유=${String(releaseRig.systems.interaction.lastCancelReason)}`,
+    );
+  }
+
+  // 71. [LOOP] 회수 중 소음 — 기존 소음 경로에 **더해진다** (별도 정본 없음)
+  {
+    const rig = makeInteractionRig(params);
+    rig.systems.attachInteractionParams(INTERACTION_FIXTURE);
+    // 기본 소음(조립부 속도 정책 자리)을 픽스처로 연결
+    const base = { noiseLevel: 0.2 };
+    rig.systems.detectionEnvironment.attachNoiseSource(base);
+    const idleNoise = rig.systems.detectionEnvironment.noiseLevel;
+
+    rig.hold(true);
+    rig.systems.update(1 / 60); // 홀드 시작
+    const collectingNoise = rig.systems.detectionEnvironment.noiseLevel;
+    check(
+      '[LOOP] 회수 중 소음이 기존 attachNoiseSource 경로에 더해진다',
+      Math.abs(idleNoise - base.noiseLevel) < 1e-9 &&
+        Math.abs(collectingNoise - (base.noiseLevel + (INTERACTION_FIXTURE.noiseContribution ?? 0))) <
+          1e-9 &&
+        rig.systems.detectionEnvironment.noiseContributorCount === 1,
+      `평시=${idleNoise}, 회수 중=${collectingNoise}`,
+    );
+
+    rig.hold(false);
+    rig.systems.update(1 / 60);
+    check(
+      '[LOOP] 회수 종료 시 소음 기여 0 — 기본 소음만 남는다',
+      Math.abs(rig.systems.detectionEnvironment.noiseLevel - base.noiseLevel) < 1e-9,
+      `소음=${rig.systems.detectionEnvironment.noiseLevel}`,
+    );
+  }
+
+  // 72. [LOOP] 회수 절차는 **대상 타입과 무관하게 하나** + 상태 복원
+  {
+    const rig = makeInteractionRig(params, [
+      interactable('gold-1', 'gold'),
+      interactable('salvage-1', 'salvage'),
+      interactable('clue-1', 'clue'),
+      interactable('survey-1', 'deepSurvey'),
+    ]);
+    rig.systems.attachInteractionParams(INTERACTION_FIXTURE);
+    // 시작 프레임 1 + 누적 프레임 + 부동소수 여유
+    const holdFrames = Math.round((INTERACTION_FIXTURE.holdSeconds ?? 0) * 60) + 3;
+    // 네 종류를 차례로 회수 — 타입별 분기 없이 같은 절차를 쓴다
+    for (let round = 0; round < 4; round += 1) {
+      rig.hold(true);
+      for (let i = 0; i < holdFrames; i += 1) rig.systems.update(1 / 60);
+      rig.hold(false);
+      rig.systems.update(1 / 60);
+    }
+    const kinds = rig.completions.map((entry) => entry.kind).sort();
+    check(
+      '[LOOP] 금괴·salvage·단서·심층 탐사 지점이 같은 시스템 하나를 재사용',
+      rig.completions.length === 4 &&
+        kinds.join(',') === 'clue,deepSurvey,gold,salvage' &&
+        new Set(rig.completions.map((entry) => entry.interactableId)).size === 4,
+      `완료=${rig.completions.length}, 종류=${kinds.join('/')}`,
+    );
+
+    // 재출항 후 회수 상태 복원 — 이 시스템은 저장하지 않고 복원만 받는다
+    const restored = makeInteractionRig(params);
+    restored.systems.attachInteractionParams(INTERACTION_FIXTURE);
+    restored.systems.interaction.restoreCollected(['gold-1']);
+    restored.systems.resetSortieSession(params);
+    restored.hold(true);
+    for (let i = 0; i < holdFrames; i += 1) restored.systems.update(1 / 60);
+    check(
+      '[LOOP] 재출항 후 회수 상태 복원 — 이미 회수한 대상은 다시 회수되지 않는다',
+      restored.completions.length === 0 &&
+        restored.systems.interaction.collectedIds.join(',') === 'gold-1' &&
+        restored.systems.interactionReadModel().candidateCollected,
+      `완료=${restored.completions.length}, 이력=${restored.systems.interaction.collectedIds.join(',')}`,
+    );
+  }
+
   return results;
+}
+
+/**
+ * 검증 전용 회수 수치 **픽스처** — production params가 아니다.
+ * 공식 회수 수치(홀드 시간·근접 반경·소음 기여)가 도착하면 그 값이 쓰이며,
+ * 이 상수는 production 경로로 import되지 않는다 (INT-GAME-015).
+ */
+const INTERACTION_FIXTURE = Object.freeze({
+  holdSeconds: 2,
+  interactRadiusMeters: 10,
+  noiseContribution: 0.3,
+});
+
+/** 검증용 회수 대상 — 액터 원점에 두고 거리 조작으로 근접·이탈을 만든다 */
+function interactable(
+  interactableId: string,
+  kind: InteractableKind,
+): { entry: InteractableTarget; setAvailable: (value: boolean) => void } {
+  const state = { available: true };
+  return {
+    entry: {
+      interactableId,
+      kind,
+      positionX: 0,
+      positionY: 0,
+      positionZ: 0,
+      get available() {
+        return state.available;
+      },
+    },
+    setAvailable: (value: boolean) => {
+      state.available = value;
+    },
+  };
+}
+
+/** 회수 검증 rig — 입력·대상·완료 기록을 조작 가능한 형태로 묶는다 */
+function makeInteractionRig(
+  params: GameParams,
+  targets: Array<{ entry: InteractableTarget; setAvailable: (value: boolean) => void }> = [
+    interactable('gold-1', 'gold'),
+  ],
+): {
+  systems: GameplaySystems;
+  completions: InteractionCompletion[];
+  hold: (value: boolean) => void;
+  moveActorTo: (x: number) => void;
+  setAvailable: (value: boolean) => void;
+} {
+  const bus = new EventBus();
+  const systems = new GameplaySystems(
+    bus,
+    params,
+    undefined,
+    STARTING_CANYON_LAYOUT,
+    testOfficialParams(),
+  );
+  const input = { interactHold: false };
+  systems.interaction.attachInput(input);
+  systems.attachInteractables(() => targets.map((target) => target.entry));
+  const completions: InteractionCompletion[] = [];
+  systems.interaction.onCompleted((entry) => completions.push(entry));
+  systems.player.resetTo({ x: 0, y: 0, z: 0, headingRadians: 0 });
+  return {
+    systems,
+    completions,
+    hold: (value: boolean) => {
+      input.interactHold = value;
+    },
+    moveActorTo: (x: number) => {
+      systems.player.resetTo({ x, y: 0, z: 0, headingRadians: 0 });
+    },
+    setAvailable: (value: boolean) => {
+      for (const target of targets) target.setAvailable(value);
+    },
+  };
 }
 
 /**

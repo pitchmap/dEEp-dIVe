@@ -52,6 +52,12 @@ import { CargoShipSystem, cargoShipConfigFromOfficial } from './CargoShipSystem'
 import { DepthChargeRunSystem } from './combat/DepthChargeRunSystem';
 import { EnemyAttackCoordinator } from './combat/EnemyAttackCoordinator';
 import { DetectionEnvironmentAdapter } from './detection/DetectionEnvironmentAdapter';
+import {
+  InteractionSystem,
+  type InteractableTarget,
+  type InteractionParams,
+  type InteractionReadModel,
+} from './interaction/InteractionSystem';
 import { SubmarineDetectionSystem } from './detection/SubmarineDetectionSystem';
 import { CanyonPatrolSpawnLocation } from './faction/CanyonPatrolSpawnLocation';
 import { HighValueTransportSystem } from './faction/HighValueTransportSystem';
@@ -224,6 +230,8 @@ export class GameplaySystems implements GameSystem {
   private readonly worldBoundsValue: CanyonHorizontalBounds | null;
   /** [C4] 피해 수신 창구 (리드 `PlayerHullSystem`) — 미연결이면 피해 없음 */
   private damageReceiver: DamageReceiverPort | null = null;
+  /** [M2-1] 회수 대상 공급 — 콘텐츠 시스템이 연결한다 (미연결 = 대상 0) */
+  private interactableSource: (() => readonly InteractableTarget[]) | null = null;
   /**
    * [C1] 탐지 게이지 **정본** — 계약 `DetectionSystem` 구현.
    * HUD는 `detectionHudView()`, AI는 `detectionStageSource`만 소비한다.
@@ -235,6 +243,12 @@ export class GameplaySystems implements GameSystem {
   readonly depthCharges: DepthChargeRunSystem;
   /** [C4] 적 공격 경계 — 사거리·쿨다운 판정 (AI는 요청만 만든다) */
   readonly enemyAttack: EnemyAttackCoordinator;
+  /**
+   * [M2-1] 회수 상호작용 — 금괴·salvage·단서·심층 탐사 지점이 **공유하는
+   * 단일 시스템**. 대상 타입별 시스템을 만들지 않는다. 회수 대상 공급은
+   * `attachInteractables()`로 연결하며 보상·진행 상태 소비는 이 시스템 밖이다.
+   */
+  readonly interaction: InteractionSystem;
   /**
    * [B6] 고가치 수송선·호위 — **핵심 게이트 B1~B5와 독립**이다.
    * 이 시스템을 빼도 배치·식별·보상·중립 사건·경비 스폰은 그대로 동작한다.
@@ -414,6 +428,15 @@ export class GameplaySystems implements GameSystem {
       params.combat.simultaneousDepthCharges.value,
     );
     this.enemyAttack = new EnemyAttackCoordinator(this.depthCharges, null, null);
+    // [M2-1] 회수 절차 — 수치 미주입이면 unwired(임의 홀드 시간·반경 없음).
+    //        회수 중 소음은 **기존 소음 경로에 더해진다**(별도 정본 없음).
+    this.interaction = new InteractionSystem(
+      this.player,
+      () => this.interactables,
+      null,
+      this.input,
+    );
+    this.detectionEnvironment.addNoiseContributor(this.interaction);
     // [C3] 추적 입력 — AI는 stage만 읽는다. 전이 로직은 리드
     //      DestroyerAIController 소유이며 여기서 복제하지 않는다.
     this.patrolFleet.attachDetectionStageSource(this.detection.stageSource);
@@ -558,6 +581,31 @@ export class GameplaySystems implements GameSystem {
     this.detection.attachTuningParams(params.detectionTuning);
     this.depthCharges.attachCombatParams({ damageParams: params.depthCharge });
     this.enemyAttack.attachDamageParams(params.depthCharge);
+  }
+
+  /* ── M2-1 회수 상호작용 API ───────────────────────────────────── */
+
+  /**
+   * 회수 대상 공급 연결 (조립부·콘텐츠 소유 시스템). 대상은 타입 태그만
+   * 다르고 절차는 하나다 — 타입별 시스템을 만들지 않는다.
+   */
+  attachInteractables(source: (() => readonly InteractableTarget[]) | null): void {
+    this.interactableSource = source;
+  }
+
+  /** 공식 회수 수치 주입 (조립부) — null이면 회수가 성립하지 않는다 */
+  attachInteractionParams(params: InteractionParams | null): void {
+    this.interaction.attachParams(params);
+  }
+
+  /** UI 소비 read model — 접근 가능 여부·진행률 (문구·색 없음) */
+  interactionReadModel(): InteractionReadModel {
+    return this.interaction.readModel();
+  }
+
+  /** 회수 대상 목록 — 미연결이면 빈 목록(대상을 만들어 내지 않는다) */
+  private get interactables(): readonly InteractableTarget[] {
+    return this.interactableSource?.() ?? [];
   }
 
   /** [C1] 탐지가 실제로 구동 중인가 — false면 게이지 0·safe 고정 */
@@ -798,6 +846,8 @@ export class GameplaySystems implements GameSystem {
     this.detection.resetForNewSortie();
     this.depthCharges.resetForNewSortie();
     this.enemyAttack.resetForNewSortie();
+    // 회수 이력은 지우지 않는다 — 복원은 저장 경로 소유(restoreCollected).
+    this.interaction.resetForNewSortie();
     this.economy.resetForNewSortie();
   }
 
@@ -838,6 +888,8 @@ export class GameplaySystems implements GameSystem {
     // 11) [C4] 폭뢰 신관·폭발 + 공격 쿨다운 시각 진행
     this.enemyAttack.update(deltaSeconds);
     this.depthCharges.update(deltaSeconds);
+    // 12) [M2-1] 회수 홀드 — 근접·홀드·취소 판정 (수치 미주입이면 무동작)
+    this.interaction.update(deltaSeconds);
 
     // 3.5) 잠수함-함선 충돌 — 통과 방지·밀어냄만, 피해 없음 (5차 결의 1).
     //      어뢰 명중 판정과 동일한 박스 근사(hullBox)를 공유한다.
@@ -913,6 +965,7 @@ export class GameplaySystems implements GameSystem {
     this.detection.dispose();
     this.depthCharges.dispose();
     this.enemyAttack.dispose();
+    this.interaction.dispose();
     this.detachInput();
   }
 }
