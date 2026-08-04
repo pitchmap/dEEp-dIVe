@@ -17,9 +17,13 @@
  * ## 이 파일에 없는 것
  *
  * 회수 절차(=`InteractionSystem`), 정산(=`MetaLoop.settleSortie`), 저장,
- * 대상 배치·보상 금액 정의(기획·월드 소유 — 주입). 단서·심층 지점은
- * 재화 대상이 아니므로 여기서 지급하지 않는다(진행 상태는
- * `CluePickupProgress` 소유).
+ * 대상 배치·보상 금액 정의(기획·월드 소유 — 주입).
+ *
+ * **단서 진행은 이 파일이 소유하지 않는다.** 단서 원장·중복 방지·저장/복원·
+ * 해금·보스 진입 게이트의 **유일한 영속 정본은 `meta/BossProgressStore`**다
+ * (INT-CORE-020). 이 시스템은 일반 보상 처리만 담당하며, 단서·심층 지점은
+ * 재화 대상이 아니므로 `noReward`로 통과시킬 뿐 진행 상태를 읽거나 쓰지
+ * 않는다. (구 `CluePickupProgress`는 삭제됐다 — 병렬 원장 금지.)
  */
 
 import type { InteractableKind, InteractionCompletion } from '../interaction/InteractionSystem';

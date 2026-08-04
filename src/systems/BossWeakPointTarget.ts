@@ -38,10 +38,16 @@ export interface BossWeakPointPlacement {
 /**
  * 약점 판정 수치 — **전부 공식 params 소유** (M2 3단계 이관).
  *
- * 이전에는 `provisionalBossWeakPointConfig`가 임시값(반경 6·배율 2.0/0.25)을
- * 들고 있었다(R7). `params/boss.json`이 아직 없으므로 값을 옮길 곳이 없고,
- * 그렇다고 임시값을 production에 남기지 않는다 — null이면 `unwired`로
- * 남아 **명중 자체가 성립하지 않는다**(반경 0). 요청: INT-GAME-016.
+ * 현재 상태 (`params/boss.json` — dev에 존재):
+ *  - 피해 배율 2종은 **이미 params가 소유**한다:
+ *    `patterns.weakPointOpen.weakPointDamageMultiplier` ·
+ *    `patterns.weakPointOpen.closedHullDamageMultiplier`.
+ *  - **명중 판정 반경(`patterns.weakPointOpen.hitRadiusMeters`)은 아직
+ *    공식 스키마·승인 수치가 없다.** 따라서 반경은 주입되지 않은 상태이며,
+ *    `wired`가 false로 남아 **명중 자체가 성립하지 않는다**(반경 0).
+ *  - 이전 `provisionalBossWeakPointConfig`(R7)의 임시 반경 6은 **공식 수치가
+ *    아니다** — 코드·주석 어디에서도 확정값으로 사용하지 않는다. 반경 미주입
+ *    상태는 unwired로 유지한다. 요청: INT-GAME-016.
  */
 export interface BossWeakPointParams {
   /** 명중 판정 반경 (m, 통짜 캡슐 근사 — 회의 11 결의 5) */
