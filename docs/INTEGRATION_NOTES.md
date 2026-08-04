@@ -90,6 +90,29 @@
 
 ## 제안 목록
 
+### INT-CORE-021 — interactionCollected 의미 확정(targetId/clueId 분리) · 단서 진행 정본 소유권 · PR #9 수신 (리드 창 — 두 번째 통합 PR)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (PR #9 병합 후 — base = dev `bd59d0a`, 브랜치 `claude/deep-dive-core-lead-uyg77p`에 일반 merge 수신, 충돌 0) |
+| **이벤트 의미 확정** | `interactionCollected` payload를 `InteractionCollectedEvent`(contracts/meta.ts) **discriminated union**으로 확정: **`targetId` = 월드 interactable 고유 ID**(모든 kind 공통 — 단서 ID로 해석 금지) / **`clueId` = canonical 단서 ID**(`params/boss.json unlock.clueIds`)로 `kind === 'clue'` arm에서만 **필수**, 비clue arm은 `clueId?: never`로 **타입 수준 금지**. `completedAt`은 소비자가 없어 추가하지 않음(필요 시 제안 후 추가) |
+| **kind 정본** | 계약 정본 = `InteractionTargetKind` 4종 **`goldCache | salvage | clue | deepSite`**. 게임플레이 `InteractionSystem` 내부 태그(`gold | salvage | clue | deepSurvey`)와 다르다 — **변환은 게임플레이 조립 어댑터 소유**(후속 창). 리드 PR에서는 게임플레이 파일을 수정하지 않았다 |
+| **단서 진행 정본 소유권 (단일)** | **원장(수집 id 목록)·중복 방지·저장 복원·해금 판정·보스 구역 게이트 = `BossProgressStore` 하나.** 게임플레이 어댑터(후속) = interactableId→clueId 매핑·kind 변환·`interactionCollected` 발행만 소유하는 **무상태** 계층. 게임플레이 쪽 `CluePickupProgress`류의 영속·복원·중복 방지 로직은 **병합 대상이 아니다**(중복 정본 금지) |
+| Game 구독 정정 | 조립부 구독을 `payload.kind === 'clue'` → **`collectClue(payload.clueId)`**로 정정(기존 `payload.targetId` 전달은 월드 ID를 단서 ID로 오해하는 경로였음). 비clue kind는 진행 스토어에 전달하지 않는다 |
+| ⚠ 발행자 0 | dev의 `InteractionSystem`은 로컬 `completionListeners` 콜백만 제공 — **`interactionCollected` EventBus 발행자는 현재 0이다.** 구독 배선은 계약대로 상시이나 런타임 배선 완료가 아니다(`INTERACTION_EVENTBUS_WIRED=false` 유지) |
+| 검증 | verify:meta **156/156** — 구독 경로 테스트 6종(targetId≠clueId에도 clueId 기록·targetId 오해 경로 0·미지 clueId 거부·동일 clueId 중복 0(다른 targetId 포함)·비clue 영향 0) + `@ts-expect-error` 타입 정적 검사 2종(비clue clueId 금지·clue clueId 필수). typecheck·build·scope·gameplay 253/253·tooling 26/26·sprint-a/b/c 전부 통과 |
+| 개발 리드 결정 | 승인 — 두 ID 의미·정본 소유권 확정. 게임플레이 후속 PR은 어댑터(매핑·변환·발행)만 추가하고 진행 상태를 들지 않는다 |
+
+### INT-RENDER-014 — [RENDER][DETECT] 소나 스코프 읽기 모델 공용 계약 `SonarScopeReadModel` (리드 정의 — 배선 아님)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (INT-GAME-015 5단계 차단 사유 "리드 계약 부재" 해소 + 그래픽스 기존 `SonarScope` 표시물과 게임플레이 판정의 비호환 수렴) |
+| 신설 계약 | `src/contracts/sonar.ts` — `SonarScopeReadModel`: `unwired`(미확정 정지 자세 — blips 빈 배열·pingReady false·타이머 0·ringState 'safe' 고정), `noiseFactor`(0~1 — 표시가 의존하는 **유일한** 자기 상태), `blips[]`(canonical `targetId`·`kind`(ship/torpedo/depthCharge)·`bearingRadians`·`bearingSpreadRadians`·`distanceMeters | null`(패시브 거리 미상)·`fromActivePing`), `activePingRemainingSeconds`·`cooldownRemainingSeconds`·`pingReady`, `ringState`(**기존 `DetectionStage` 재사용** — 새 어휘 금지) |
+| 금지 규칙 | ① blip에 **월드 좌표 탑재 금지** — 렌더는 방위·거리 표현만으로 그리고 재계산·역산하지 않는다 ② **침묵 항행 boolean 금지**(17차 결의 4) — noiseFactor 단일 의존, 원인 구분 표시 금지 ③ `depthChargeOnPassiveScope` 필터는 **게임플레이가 blips 공급 시점에 적용** — 렌더는 받은 blips를 걸러내거나 추가하지 않는다 (①②는 `@ts-expect-error` 정적 검사로 고정) |
+| ⚠ 배선 아님 | dev에는 이 모델의 공급자(게임플레이 소나 시스템)도 소비자(그래픽스 스코프)도 아직 없다 — **계약 정의만이며 그래픽스 구현 완료로 표기하지 않는다** |
+| 개발 리드 결정 | 승인 — 양쪽 창은 이 계약으로 수렴. blip kind 확장은 이 문서 제안 → 리드 결정 후에만 |
+
 ### INT-GAME-015 — M2 1단계 InteractionSystem (첫 통합 PR 범위) + 당시 기준 문서 부재 이력
 
 | 필드 | 내용 |
