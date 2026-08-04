@@ -456,8 +456,14 @@ B 선행개발          = 가능 (선행개발 상태로만)
     - **정책**: 입력 E 상승 유지 / **F hold 회수**(M-11) · DetectionHud 제거는 provider 배선·실측 후(HANDOFF §7) · save 마이그레이션 정책 명문화(3 초과 캡 없음·legacy 해금 단조 유지·downgrade 미지원 — meta 검증 2건 추가)
     - **인계**: `docs/M1_M2_RUNTIME_CLOSURE_HANDOFF.md` — composition 배선 16단계 표·역할별 배정·파일 소유표·Exit Criteria 19항목(production 브라우저 완주 — fixture 불인정)·기획 결정 요청서. 월드 신설 2파일(bossPlacement·bossCluePlacements)은 그래픽스 창 승인
     - **검증**: meta **164/164**(+8) · gameplay 291/291 · tooling 36/36 · hud 34/34 · 전 스위트 통과
-- **마지막 업데이트:** M1·M2 Runtime Closure 계약 확정 (INT-CORE-022, M-7~M-13 — 세 역할 동시 착수 가능. 이전: INT-CORE-021 두 번째 통합 PR·교차 감사)
-- **담당 브랜치:** `claude/deep-dive-core-lead-uyg77p` (base = dev `37afc1c` — foundation 5PR 병합 tip)
+  - **DetectionHud 정보 비동등 판정 · 제거 M3 이관 (INT-CORE-023 / M-14 — base dev `045b02f`, PR #18 병합 후):**
+    - **판정**: PR #18로 SonarScope provider production 연결이 완료돼 제거 조건 1~4단계 충족 → 정보 동등성 검토 결과 **비동등 2건 확정** — ① `DetectionHudView.gauge`(0~1 연속 피탐지 누적; `ringState`는 3단계 이산값·`noiseFactor`는 자기 소음이라 대체 불가) ② `TrackingStateSource.trackedShips`(entity별 patrol/alert/attack/lost; `SonarBlip`에 추적 상태 없음)
+    - **결정**: M1·M2에서 **제거하지 않고 DetectionHud 유지** → M3(은신·탐지·적 AI 통합) 공식 이관. Exit Criteria 16을 조건부 절차(동등 시 제거 / 비동등 시 유실·후속 마일스톤 명시 + 리드 승인 이관)로 개정하고, 이번 판정은 '이관 기록 완료'로 충족. 제거되지 않은 상태를 제거 완료로 표기하지 않음
+    - **M3 후속 조건**(방식 결정은 M3에서): ⓐ SonarScope 계약 확장 수용 / ⓑ 별도 탐지 UI + HUD 구조 재설계 / ⓒ 역할 분리 후 둘 다 유지
+    - **범위**: 문서 전용 — production 코드(`src/**`)·`params/**` 변경 0건. HANDOFF §8 그래픽스 배정에서 제거 항목 제외(유지로 전환)
+    - **플래그**: `DETECTION_HUD_INFORMATION_PARITY=false` · `DETECTION_HUD_REMOVED=false` · `DETECTION_HUD_REMOVAL_DEFERRED_TO_M3=true`. 최종 게이트(M1_EXIT_GATE_PASSED·M2_PROGRESS_GATE_PASSED·M1_M2_INTEGRATED_COMPLETE·M3_START_ALLOWED)와 파밍 blocker(FARMING_REWARD_DATA_WIRED·FARMING_CAP_PRODUCTION_VERIFIED) **전부 false 유지**
+- **마지막 업데이트:** DetectionHud 정보 비동등 확정 · 제거 M3 공식 이관 (INT-CORE-023 / M-14 — production UI 무변경). 이전: M1·M2 Runtime Closure 계약 확정 (INT-CORE-022, M-7~M-13)
+- **담당 브랜치:** `docs/detection-hud-m3-deferral` (base = dev `045b02f` — PR #18 병합 tip. 이전 리드 세션: `claude/deep-dive-core-lead-uyg77p`)
 
 ## 게임플레이
 
