@@ -115,7 +115,7 @@
 
 | # | 항목 | 소유 | 없을 때 현재 동작 |
 |---|---|---|---|
-| B-1 | **액티브 핑 입력 키 미배정** | 키맵 결정 (§9는 E·F만 확정) | 키 getter 0. `requestActivePing()` command 표면만 존재 — 조립부가 키 확정 후 연결 |
+| ~~B-1~~ | ~~액티브 핑 입력 키 미배정~~ → **해소** (교차 감사에서 `Q` 확정) | — | `KeyboardInput.consumeActivePingPressed()` press edge 구현 완료. 조립부는 `if (keyboard.consumeActivePingPressed()) gameplay.requestActivePing();` 한 줄만 추가하면 된다 |
 | B-2 | `params/boss.json` 승인 대기 4필드 (`movement.moveSpeedMetersPerSecond`·`movement.turnRateRadiansPerSecond`·`patterns.ram.contactDamage`·`patterns.weakPointOpen.hitRadiusMeters`) | 기획 승인 → 툴링 입력 | 축별 unwired — 보스 정지 / 돌진 무피해 / **약점 명중 불가(격파 경로 미성립)** |
 | B-3 | `params/interaction.json`·`params/sonar.json` 신설 + economy farming 확장 로더 | 툴링 (§2) | 회수·스코프·파밍 전부 unwired. **로더 미존재 동안 조립부가 그 줄을 쓰지 않는다**(인계표 §5 순서 2) |
 | B-4 | `src/world/bossPlacement.ts`·`bossCluePlacements.ts` 신설 | 그래픽스 (INT-CORE-022 승인) | 보스 미생성(`boss === null`)·구역 경계 미주입(항상 밖)·단서 발행 0 |
@@ -144,7 +144,8 @@ gameplay.onBossZoneEntered(() => {
 gameplay.attachSonarContacts(() => contacts);
 gameplay.attachSonarScopeParams(sonarParams);
 gameplay.sonarScope.attachDetectionStageSource(gameplay.detectionStageSource);
-// 핑 키 확정 후: <입력> → gameplay.requestActivePing()
+// 핑 — Q press edge (확정). 입력 펌프 지점에서:
+if (keyboard.consumeActivePingPressed()) gameplay.requestActivePing();
 
 // M2 보상
 gameplay.attachInteractionParams(interactionParams);

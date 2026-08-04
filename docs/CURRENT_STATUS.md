@@ -519,17 +519,17 @@ B 선행개발          = 가능 (선행개발 상태로만)
     - **`M1_EXIT_GATE_PASSED=false` · `M2_PROGRESS_GATE_PASSED=false` 유지** — 17차 완주 판정은 dev 통합 빌드 실브라우저 완주가 조건이다. 자동 검증 통과를 완주로 보고하지 않는다
   - **M1·M2 Runtime Closure — 게임플레이 소유 구현 마감 (INT-CORE-022, base `dev@e01ffc5`)**
     - **입력 정책 확정 이행 (§9)** — `KeyboardInput.interactHold`를 `KeyE`→**`KeyF`**로 바꾸고 `ascend`는 **무변경**. `TRACKED_CODES`에 `KeyF` 추가(추적 목록에 없으면 keydown이 유실돼 getter가 영원히 false다). 이로써 회수 홀드 중 상승 동시 진행과 그로 인한 3D 거리 이탈 취소 경로가 **제거**됐다. 화면 문구는 그래픽스·HUD 소유라 손대지 않았다
-    - **액티브 핑 입력 키는 여전히 미확정** — §9는 E·F만 확정했다. 키 getter를 만들지 않고 `requestActivePing()` **command 표면**까지만 구현했다(1회 요청 1회 처리·쿨다운 중 거부). 키 배정은 blocker
+    - **액티브 핑 입력 = `Q` press edge (교차 감사 확정)** — `KeyboardInput`에 `KeyQ`를 추적 키로 추가하고 `consumeActivePingPressed()`로 **press edge 1회만** 소비한다. Q는 `heldCodes`에 들어가지 않는다(`EDGE_ONLY_CODES`) — boolean hold getter를 두면 조립부가 매 프레임 `requestActivePing()`을 부르게 되고 쿨다운이 전부 거부하더라도 입력 의미 자체가 틀리기 때문이다. OS repeat 무시 · keyup만으로 요청 0 · blur/hidden/detach/reset에서 적립분 폐기(포커스 밖 입력이 뒤늦게 발사되면 게이지를 올리는 대가가 오발로 나간다). **쿨다운은 입력 계층이 소유하지 않는다** — 거부는 기존 `SonarScopeSystem`이 하고 거부됐다고 edge를 재적립하지 않는다
     - **clue 매핑 계약 타입 소비** — 공식 `ClueIdByInteractableId`(`contracts/meta.ts`)를 그대로 쓴다. 어댑터는 무상태 유지, 매핑 없는 단서는 발행 0
     - **보스 구역 진입 source** `boss/BossZoneEntrySource` (신규) — `BOSS_ZONE` 경계를 **주입받아 읽기만** 한다(좌표 생성 0). **밖→안 전이 1회만** 통지해 머무는 동안 중복 요청이 없다. 해금·`requestEntry` 로직을 복제하지 않는다(검증기가 표면에 해금·게이트 API 0건 확인). 재출항 시 edge 초기화
     - **`bossHit` 발행 정본 = 게임플레이 (§8)** — `createBoss` 내부에서 `weakPoint.onHit`를 구독해 **배율 적용 후** 1회 발행. payload는 계약대로 `kind` 하나뿐(피해량·위치·공격자 비탑재 → 렌더가 피해를 재계산할 수단 자체가 없다). 제거된 보스에는 발행 0. `bossWeakPointChanged`는 리드 코어 정본이라 **중복 발행하지 않는다**
     - **약점 본체 추적** — `BossWeakPointTarget.syncTo(boss.getPosition())`를 update 경로에 연결(기존 `setPosition` 재사용, 별도 포즈 정본 0)
     - **소나 blip 7종 공급** — 전투 3종 + **탐색 4종**(`goldCache`·`salvage`·`clue`·`deepSite`, 어휘는 `InteractionTargetKind` 재사용). 탐색 kind는 **패시브 자격 자체가 없고** 액티브 핑 노출 중에만 나간다(종류 선노출 금지). 보스는 `ship`으로 표현, **지형은 blip이 아니다**
     - **params 소비 표면** — interaction 3축·boss 4축·sonar 4축·farming 2축 전부 주입 경로만 두고 축별로 null이면 그 축만 unwired다. 원본 JSON import 0·하드코딩 0·provisional fallback 0·null→0 변환 0
-    - 결정적 검증 **311/311**(291 유지 + 신규 20). meta 164/164 · tooling 36/36 · **hud 34/0 실브라우저** · sprint-a/b/c 통과, build·check:size 7.0%·check:scope 통과
+    - 결정적 검증 **324/324**(291 유지 + 신규 33 — Q press edge 13항목 포함). meta 164/164 · tooling 36/36 · **hud 34/0 실브라우저** · sprint-a/b/c 통과, build·check:size 7.0%·check:scope 통과
     - **변경은 전부 `src/systems/**`** — `core`·`contracts`·`render`·`tools`·`audio`·`meta/save`·`params`·`world`·`Game.ts` **무수정**
     - **production 배선은 통합 관리자 몫** — `M1_EXIT_GATE_PASSED=false` · `M2_PROGRESS_GATE_PASSED=false` 유지. 자동 검증은 §6 Exit Criteria의 전제일 뿐 게이트가 아니다
-- **마지막 업데이트:** M1·M2 Runtime Closure 게임플레이 마감 (F hold 입력·구역 진입 source·bossHit 발행·소나 7종·params 소비 표면). 잔여 blocker는 INT-GAME-018
+- **마지막 업데이트:** M1·M2 Runtime Closure 게임플레이 마감 + **Q 액티브 핑 press edge 보완**(PR #14 최소 보완). 잔여 blocker는 INT-GAME-018 (핑 키 blocker는 해소)
 - **담당 브랜치:** `feat/gameplay-m2-interaction` (base `dev@e01ffc5`)
 
 ## 그래픽스

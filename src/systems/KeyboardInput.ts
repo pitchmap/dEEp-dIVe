@@ -9,6 +9,8 @@
  *    (잠항)에 최편의 키' 원리). **E = 상승 병행 키** — 창 모드에서 Ctrl+W
  *    탭 닫힘 회피용. Keyboard Lock·안내 UI는 툴링 소유, 이 어댑터는
  *    E를 Ctrl과 동일한 상승 명령으로만 처리한다.
+ *  - **F = 상호작용·회수 홀드 / Q = 액티브 소나 핑** (INT-CORE-022 확정).
+ *    F는 유지(hold) 상태이고 **Q는 press edge**다 — 아래 `EDGE_ONLY_CODES`.
  *
  * 안전 규칙 (조작 신뢰성):
  *  - OS 키 반복(repeat) 이벤트는 무시한다 — 유지 상태는 최초 keydown/keyup으로만
@@ -51,15 +53,36 @@ const TRACKED_CODES = new Set([
   // 회수 홀드 (INT-CORE-022 §9) — 추적 목록에 없으면 keydown이 버려져
   // getter가 영원히 false다. E는 상승 병행 키로 그대로 남는다.
   'KeyF',
+  // 액티브 소나 핑 (INT-CORE-022 Q 확정) — **유지 상태가 아니라 press edge**다.
+  // 아래 `onKeyDown`이 이 키만 `heldCodes`에 넣지 않고 1회성 요청으로 적립한다.
+  'KeyQ',
   'ShiftLeft',
   'ShiftRight',
   'ControlLeft',
   'ControlRight',
 ]);
 
+/**
+ * press edge로만 소비되는 키 — 유지(hold) 상태를 만들지 않는다.
+ *
+ * 핑은 "누르고 있는 동안 계속"이 아니라 "한 번 누르면 한 번"이다. boolean
+ * hold getter를 두면 조립부가 매 프레임 `requestActivePing()`을 부르게 되고,
+ * 쿨다운이 그걸 전부 거부하더라도 **입력 의미 자체가 틀린다**. 그래서 이
+ * 키는 `heldCodes`에 들어가지 않는다.
+ */
+const EDGE_ONLY_CODES = new Set(['KeyQ']);
+
 export class KeyboardInput implements MovementInput {
   private readonly heldCodes = new Set<string>();
   private detachListeners: Array<() => void> = [];
+  /**
+   * 액티브 핑 press edge 적립분 (0 또는 1).
+   *
+   * 최초 keydown에서 **1개만** 선다. 누른 채로 프레임이 아무리 흘러도 늘지
+   * 않고, OS 키 반복도 적립하지 않으며, keyup은 아무것도 만들지 않는다.
+   * 소비는 `consumeActivePingPressed()` 한 번뿐이다.
+   */
+  private activePingPending = false;
 
   /**
    * 이벤트 소스에 연결한다. 실제 게임에서는 attach(window, document),
@@ -94,9 +117,36 @@ export class KeyboardInput implements MovementInput {
     this.reset();
   }
 
-  /** 모든 키 상태 해제 (포커스 상실·탭 전환 대응) */
+  /**
+   * 모든 키 상태 해제 (포커스 상실·탭 전환·detach 대응).
+   *
+   * **적립된 핑 요청도 함께 버린다.** 포커스를 잃은 사이의 입력이 돌아온
+   * 뒤에 뒤늦게 발사되면 플레이어가 누르지 않은 핑이 나가고, 핑은 탐지
+   * 게이지를 올리는 대가가 붙는 행위라 그 오발이 그대로 손해가 된다.
+   */
   reset(): void {
     this.heldCodes.clear();
+    this.activePingPending = false;
+  }
+
+  /**
+   * 액티브 소나 핑 press edge 소비 — **1회 누름당 정확히 1회 true**.
+   *
+   * 조립부·게임플레이 update가 이렇게 쓴다:
+   *
+   * ```ts
+   * if (keyboard.consumeActivePingPressed()) gameplay.requestActivePing();
+   * ```
+   *
+   * 이 계층은 **쿨다운을 소유하지 않는다.** 거부는 `SonarScopeSystem`(또는
+   * `gameplay.requestActivePing()`)이 하며, 거부됐다고 해서 여기서 edge를
+   * 다시 적립하지 않는다 — 다음 Q keydown이 새 요청을 만들고, 그때도
+   * 쿨다운이면 다시 거부될 뿐이다.
+   */
+  consumeActivePingPressed(): boolean {
+    if (!this.activePingPending) return false;
+    this.activePingPending = false;
+    return true;
   }
 
   get throttleForward(): boolean {
@@ -144,9 +194,16 @@ export class KeyboardInput implements MovementInput {
 
   private readonly onKeyDown = (event: Event): void => {
     const key = event as KeyboardEvent;
-    // OS 키 반복은 새 입력이 아니다 — 유지 상태는 최초 keydown이 이미 세웠다
+    // OS 키 반복은 새 입력이 아니다 — 유지 상태는 최초 keydown이 이미 세웠고,
+    // press edge도 최초 1회로 끝난다(반복으로 핑이 연사되지 않는다).
     if (key.repeat) return;
-    if (TRACKED_CODES.has(key.code)) this.heldCodes.add(key.code);
+    if (!TRACKED_CODES.has(key.code)) return;
+    // press edge 키는 유지 상태를 만들지 않는다 — 요청 1개만 적립한다.
+    if (EDGE_ONLY_CODES.has(key.code)) {
+      this.activePingPending = true;
+      return;
+    }
+    this.heldCodes.add(key.code);
   };
 
   private readonly onKeyUp = (event: Event): void => {

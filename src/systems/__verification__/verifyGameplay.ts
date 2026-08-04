@@ -4516,6 +4516,210 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     );
   }
 
+  // 69b-2. [LOOP] Q = 액티브 핑 press edge (INT-CORE-022 Q 확정)
+  {
+    const keySource = new EventTarget();
+    const input = new KeyboardInput();
+    input.attach(keySource);
+
+    // Q가 추적된다 — 추적 목록에 없으면 keydown이 버려져 요청이 서지 않는다
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    const first = input.consumeActivePingPressed();
+    const second = input.consumeActivePingPressed();
+    check(
+      '[LOOP] Q keydown → consume true 1회 · 같은 입력 두 번째 consume false',
+      first && !second,
+      `1번째=${first}, 2번째=${second}`,
+    );
+
+    // OS 키 반복은 추가 요청을 만들지 않는다
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyQ', true));
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyQ', true));
+    check(
+      '[LOOP] Q repeat keydown → 추가 요청 0 (반복 연사 없음)',
+      !input.consumeActivePingPressed(),
+      `repeat 후 consume=${input.consumeActivePingPressed()}`,
+    );
+
+    // Q를 누른 채 여러 프레임이 흘러도 요청은 1회뿐
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    let consumedWhileHeld = 0;
+    for (let frame = 0; frame < 120; frame += 1) {
+      if (input.consumeActivePingPressed()) consumedWhileHeld += 1;
+    }
+    check(
+      '[LOOP] Q hold 여러 프레임 → 요청 정확히 1회 (hold boolean 아님)',
+      consumedWhileHeld === 1,
+      `120프레임 소비=${consumedWhileHeld}`,
+    );
+
+    // keyup만으로는 요청이 서지 않는다
+    keySource.dispatchEvent(keyEvent('keyup', 'KeyQ'));
+    check(
+      '[LOOP] Q keyup만으로 요청 0',
+      !input.consumeActivePingPressed(),
+      `keyup 후=${input.consumeActivePingPressed()}`,
+    );
+
+    // release 후 새 press는 새 요청 1회
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    const afterRelease = input.consumeActivePingPressed();
+    keySource.dispatchEvent(keyEvent('keyup', 'KeyQ'));
+    check(
+      '[LOOP] release 후 새 Q press → 새 요청 1회',
+      afterRelease && !input.consumeActivePingPressed(),
+      `새 press=${afterRelease}`,
+    );
+
+    // Q는 이동·상승·회수 상태를 만들지 않는다
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    const noHoldState =
+      !input.ascend && !input.descend && !input.interactHold && !input.throttleForward;
+    input.consumeActivePingPressed();
+
+    // 다른 키로는 핑 요청이 서지 않는다
+    let otherKeyRequests = 0;
+    for (const code of ['KeyE', 'KeyF', 'KeyW', 'KeyH', 'ShiftLeft', 'ControlLeft']) {
+      keySource.dispatchEvent(keyEvent('keydown', code));
+      if (input.consumeActivePingPressed()) otherKeyRequests += 1;
+      keySource.dispatchEvent(keyEvent('keyup', code));
+    }
+    input.detach();
+    check(
+      '[LOOP] Q는 hold 상태 0 · E·F·W·H·Shift·Ctrl로 핑 요청 0',
+      noHoldState && otherKeyRequests === 0,
+      `hold 상태=${!noHoldState}, 타 키 요청=${otherKeyRequests}`,
+    );
+  }
+
+  // 69b-3. [LOOP] blur·hidden·detach는 적립된 핑 요청을 버린다
+  {
+    // blur — 대조군(같은 절차에서 blur만 뺀 것)이 true여야 의미가 있다
+    const blurSource = new EventTarget();
+    const blurInput = new KeyboardInput();
+    blurInput.attach(blurSource);
+    blurSource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    blurSource.dispatchEvent(new Event('blur'));
+    const afterBlur = blurInput.consumeActivePingPressed();
+    blurInput.detach();
+
+    const controlSource = new EventTarget();
+    const controlInput = new KeyboardInput();
+    controlInput.attach(controlSource);
+    controlSource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    const withoutBlur = controlInput.consumeActivePingPressed();
+    controlInput.detach();
+    check(
+      '[LOOP] blur 전 적립된 핑 요청이 blur 후 false (대조군은 true)',
+      withoutBlur && !afterBlur,
+      `대조군=${withoutBlur}, blur 후=${afterBlur}`,
+    );
+
+    // document hidden
+    const hiddenSource = new EventTarget();
+    const visibility = Object.assign(new EventTarget(), {
+      visibilityState: 'visible' as DocumentVisibilityState,
+    });
+    const hiddenInput = new KeyboardInput();
+    hiddenInput.attach(hiddenSource, visibility);
+    hiddenSource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    visibility.visibilityState = 'hidden';
+    visibility.dispatchEvent(new Event('visibilitychange'));
+    const afterHidden = hiddenInput.consumeActivePingPressed();
+    hiddenInput.detach();
+    check(
+      '[LOOP] document hidden 시 적립된 핑 요청 제거',
+      !afterHidden,
+      `hidden 후=${afterHidden}`,
+    );
+
+    // detach / reset
+    const detachSource = new EventTarget();
+    const detachInput = new KeyboardInput();
+    detachInput.attach(detachSource);
+    detachSource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    detachInput.detach();
+    const afterDetach = detachInput.consumeActivePingPressed();
+
+    const resetSource = new EventTarget();
+    const resetInput = new KeyboardInput();
+    resetInput.attach(resetSource);
+    resetSource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    resetInput.reset();
+    const afterReset = resetInput.consumeActivePingPressed();
+    resetInput.detach();
+    check(
+      '[LOOP] detach·reset 후 적립된 핑 요청 제거',
+      !afterDetach && !afterReset,
+      `detach 후=${afterDetach}, reset 후=${afterReset}`,
+    );
+  }
+
+  // 69b-4. [LOOP] edge 소비 → requestActivePing 연결 + 쿨다운 경계
+  {
+    const rig = makeInteractionRig(params);
+    const keySource = new EventTarget();
+    const keyboard = new KeyboardInput();
+    keyboard.attach(keySource);
+    rig.systems.attachSonarContacts(() => SONAR_CONTACT_FIXTURE);
+    rig.systems.attachSonarScopeParams(SONAR_SCOPE_FIXTURE);
+
+    // 조립부가 쓸 정확한 연결 형태 — edge 1회당 command 1회
+    const outcomes: string[] = [];
+    const pumpInput = (): void => {
+      if (keyboard.consumeActivePingPressed()) {
+        outcomes.push(rig.systems.requestActivePing().status);
+      }
+    };
+
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    for (let frame = 0; frame < 60; frame += 1) {
+      pumpInput();
+      rig.systems.update(1 / 60);
+    }
+    check(
+      '[LOOP] Q edge 소비 → requestActivePing 1회 연결 (60프레임 홀드에도 1회)',
+      outcomes.length === 1 && outcomes[0] === 'pinged',
+      `요청=${outcomes.length}, 결과=${outcomes.join('/')}`,
+    );
+
+    // 쿨다운 중 새 Q press → command가 거부한다 (입력 계층은 쿨다운 비소유)
+    keySource.dispatchEvent(keyEvent('keyup', 'KeyQ'));
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    pumpInput();
+    check(
+      '[LOOP] 쿨다운 중 Q press → gameplay command가 cooldown 거부',
+      outcomes.length === 2 && outcomes[1] === 'cooldown',
+      `결과=${outcomes.join('/')}`,
+    );
+
+    // 거부됐다고 입력 edge를 다시 적립하지 않는다 — 자동 재시도 0
+    const beforeRetry = outcomes.length;
+    for (let frame = 0; frame < 120; frame += 1) {
+      pumpInput();
+      rig.systems.update(1 / 60);
+    }
+    check(
+      '[LOOP] cooldown 거부 후 자동 재시도 0 (edge 재적립 없음)',
+      outcomes.length === beforeRetry,
+      `거부 후 추가 요청=${outcomes.length - beforeRetry}`,
+    );
+
+    // 쿨다운 종료 후 새 Q press는 성공한다
+    const cooldownFrames =
+      Math.round((SONAR_SCOPE_FIXTURE.activePingCooldownSeconds ?? 0) * 60) + 5;
+    for (let frame = 0; frame < cooldownFrames; frame += 1) rig.systems.update(1 / 60);
+    keySource.dispatchEvent(keyEvent('keyup', 'KeyQ'));
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    pumpInput();
+    keyboard.detach();
+    check(
+      '[LOOP] cooldown 종료 후 새 Q press 성공',
+      outcomes.length === beforeRetry + 1 && outcomes[outcomes.length - 1] === 'pinged',
+      `마지막 결과=${outcomes[outcomes.length - 1]}`,
+    );
+  }
+
   // 69c. [LOOP] F 짧은 입력 완료 0 / hold 완료 1 (실 키보드 경로)
   {
     const rig = makeInteractionRig(params);
