@@ -40,7 +40,11 @@
  * 파일은 그 JSON을 읽지 않는다 — 조립부가 검증된 값으로 매핑을 주입한다.
  */
 
-import type { InteractionCollectedEvent, InteractionTargetKind } from '../../contracts/meta';
+import type {
+  ClueIdByInteractableId,
+  InteractionCollectedEvent,
+  InteractionTargetKind,
+} from '../../contracts/meta';
 import type { EventBus } from '../../core/EventBus';
 import type { InteractableKind, InteractionCompletion } from './InteractionSystem';
 
@@ -61,11 +65,15 @@ export function canonicalInteractionKind(kind: InteractableKind): InteractionTar
 }
 
 /**
- * interactable → canonical 단서 ID 매핑 (기획·월드 소유 데이터).
- * 조립부가 `params/boss.json unlock.clueIds`에 실재하는 ID로만 채운다.
+ * interactable → canonical 단서 ID 매핑 — **공식 계약 타입을 그대로 쓴다**
+ * (`contracts/meta.ts` `ClueIdByInteractableId`, INT-CORE-022 §4).
+ *
+ * 작성 정본은 월드 배치 모듈(`src/world/bossCluePlacements.ts` — 그래픽스
+ * 창 신설분)이고, 값은 `params/boss.json unlock.clueIds` 3종에 실재해야
+ * 한다(툴링 검증기가 대조). 게임플레이는 **조회만** 한다.
  * 미주입이면 단서 발행이 성립하지 않는다 — ID를 만들어 내지 않는다.
  */
-export type ClueIdByInteractable = Readonly<Record<string, string>>;
+export type ClueIdByInteractable = ClueIdByInteractableId;
 
 /** 발행 결과 — '왜 발행되지 않았는지'를 구분할 수 있어야 한다 */
 export type InteractionPublishOutcome =

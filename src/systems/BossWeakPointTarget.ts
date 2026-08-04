@@ -148,6 +148,19 @@ export class BossWeakPointTarget implements CombatTarget {
   }
 
   /**
+   * 본체 추적 (INT-CORE-022 §3) — 게임플레이 update 경로가 매 프레임
+   * `weakPoint.syncTo(boss.getPosition())`으로 호출한다.
+   *
+   * 약점 배치는 월드 절대 좌표이고 본체 상대 오프셋이 아니므로, 스폰 이후
+   * 본체가 움직이면 판정 위치도 따라가야 한다. y는 배치가 소유하므로
+   * 수평면만 옮긴다(기존 `setPosition` 경로 재사용 — 별도 정본 없음).
+   */
+  syncTo(position: { readonly x: number; readonly z: number }): void {
+    if (!Number.isFinite(position.x) || !Number.isFinite(position.z)) return;
+    this.setPosition(position.x, position.z);
+  }
+
+  /**
    * 약점 피격/일반 피격 구분 판정 — 개방 여부는 포트(리드 계약)만 사용.
    *
    * **구분은 params 없이도 성립한다**(개방 여부는 포트가 소유하는 사실이다).

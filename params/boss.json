@@ -25,16 +25,16 @@
   "movement": {
     "$comment": "[승인 대기 — INT-CORE-022] 평상시 이동·선회. 공식 근거가 회의록·튜닝표에 없어 value: null 유지 — null이면 보스 이동 unwired(정지). 허용 범위만 계약으로 선고정. 수치는 기획 승인 후 툴링 경로로 입력.",
     "moveSpeedMetersPerSecond": {
-      "value": null,
+      "value": 7.0,
       "range": [2, 14],
       "unit": "m/s",
-      "note": "평상시 순항 속도. 상한 = 돌진 속도 14(로더 관계 제약: 돌진보다 빠를 수 없음). 참고 맥락: 플레이어 최고 10 — 추격 압박과 도주 가능성의 균형은 기획 결정"
+      "note": "[M1M2-INITIAL] 사용자 승인 초기값 — 최초 production Runtime Closure 검증용. 최종 밸런스 확정 아님"
     },
     "turnRateRadiansPerSecond": {
-      "value": null,
+      "value": 0.6,
       "range": [0.1, 2.0],
       "unit": "rad/s",
-      "note": "선회 속도. 대형 함체 관성 표현 하한 0.1 ~ 민첩 상한 2.0 — 수치 근거 없음, 기획 승인 대기"
+      "note": "[M1M2-INITIAL] 사용자 승인 초기값 — 최종 밸런스 확정 아님"
     }
   },
   "patterns": {
@@ -70,10 +70,10 @@
         "note": "돌진 유지 시간 — 14m/s × 2.5s = 35m 주파"
       },
       "contactDamage": {
-        "value": null,
+        "value": 30,
         "range": [5, 60],
         "unit": "hull",
-        "note": "[승인 대기] 돌진 접촉 피해 (선체 120 스케일). null = 돌진 unwired(이동·예고만, 피해 0). 서열 참고: 폭뢰 near 12 < 투사체 18 < 폭뢰 direct 45, 즉사 없음 원칙 — 최종 수치는 기획 결정"
+        "note": "[M1M2-INITIAL] 사용자 승인 초기값 — 최종 밸런스 확정 아님"
       }
     },
     "projectile": {
@@ -110,10 +110,10 @@
         "note": "기존 게임플레이 임시값 0.25의 params 이관 — 약점 노림을 강제하는 서열"
       },
       "hitRadiusMeters": {
-        "value": null,
+        "value": 6.0,
         "range": [1, 12],
         "unit": "meters",
-        "note": "[승인 대기 — M1 완주 직접 차단 항목] 약점 명중 판정 반경(통짜 캡슐 근사 — 회의 11 결의 5). null = 반경 0(약점 명중·격파 경로 미성립). 구 임시값 6은 후보일 뿐 공식 승격 아님 — 기획 승인 필요"
+        "note": "[M1M2-INITIAL] 사용자 승인 초기값 — 최종 밸런스 확정 아님"
       }
     },
     "finalPhase": {

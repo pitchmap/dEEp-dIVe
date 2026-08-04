@@ -40,6 +40,7 @@ import type {
   InteractableKind,
   InteractableTarget,
   InteractionCompletion,
+  InteractionParams,
 } from '../interaction/InteractionSystem';
 import {
   canonicalInteractionKind,
@@ -4469,6 +4470,340 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     );
   }
 
+  /* ═══ 입력 정책 — E 상승 / F hold 회수 (INT-CORE-022 §9) ═════════ */
+
+  // 69b. [LOOP] E와 F가 서로 다른 동작에 배정됐고 서로 간섭하지 않는다
+  {
+    const keySource = new EventTarget();
+    const input = new KeyboardInput();
+    input.attach(keySource);
+
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyE'));
+    const eOnly = { ascend: input.ascend, interact: input.interactHold };
+    keySource.dispatchEvent(keyEvent('keyup', 'KeyE'));
+
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyF'));
+    const fOnly = { ascend: input.ascend, interact: input.interactHold };
+    keySource.dispatchEvent(keyEvent('keyup', 'KeyF'));
+
+    // 상승 병행 키(Ctrl)는 9차 결의 4 그대로 남아 있어야 한다
+    keySource.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+    const ctrlAscend = input.ascend;
+    keySource.dispatchEvent(keyEvent('keyup', 'ControlLeft'));
+    input.detach();
+
+    check(
+      '[LOOP] E = 상승 전용 · F = 회수 전용 (동시 진행 경로 제거)',
+      eOnly.ascend &&
+        !eOnly.interact &&
+        !fOnly.ascend &&
+        fOnly.interact &&
+        ctrlAscend,
+      `E={상승 ${eOnly.ascend}, 회수 ${eOnly.interact}} / F={상승 ${fOnly.ascend}, 회수 ${fOnly.interact}}`,
+    );
+
+    // F가 추적 목록에 없으면 keydown이 버려져 getter가 영원히 false다
+    const tracked = new EventTarget();
+    const trackedInput = new KeyboardInput();
+    trackedInput.attach(tracked);
+    tracked.dispatchEvent(keyEvent('keydown', 'KeyF'));
+    const trackedHold = trackedInput.interactHold;
+    trackedInput.detach();
+    check(
+      '[LOOP] F가 추적 키 목록에 포함 (keydown 유실 0)',
+      trackedHold,
+      `interactHold=${trackedHold}`,
+    );
+  }
+
+  // 69b-2. [LOOP] Q = 액티브 핑 press edge (INT-CORE-022 Q 확정)
+  {
+    const keySource = new EventTarget();
+    const input = new KeyboardInput();
+    input.attach(keySource);
+
+    // Q가 추적된다 — 추적 목록에 없으면 keydown이 버려져 요청이 서지 않는다
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    const first = input.consumeActivePingPressed();
+    const second = input.consumeActivePingPressed();
+    check(
+      '[LOOP] Q keydown → consume true 1회 · 같은 입력 두 번째 consume false',
+      first && !second,
+      `1번째=${first}, 2번째=${second}`,
+    );
+
+    // OS 키 반복은 추가 요청을 만들지 않는다
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyQ', true));
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyQ', true));
+    check(
+      '[LOOP] Q repeat keydown → 추가 요청 0 (반복 연사 없음)',
+      !input.consumeActivePingPressed(),
+      `repeat 후 consume=${input.consumeActivePingPressed()}`,
+    );
+
+    // Q를 누른 채 여러 프레임이 흘러도 요청은 1회뿐
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    let consumedWhileHeld = 0;
+    for (let frame = 0; frame < 120; frame += 1) {
+      if (input.consumeActivePingPressed()) consumedWhileHeld += 1;
+    }
+    check(
+      '[LOOP] Q hold 여러 프레임 → 요청 정확히 1회 (hold boolean 아님)',
+      consumedWhileHeld === 1,
+      `120프레임 소비=${consumedWhileHeld}`,
+    );
+
+    // keyup만으로는 요청이 서지 않는다
+    keySource.dispatchEvent(keyEvent('keyup', 'KeyQ'));
+    check(
+      '[LOOP] Q keyup만으로 요청 0',
+      !input.consumeActivePingPressed(),
+      `keyup 후=${input.consumeActivePingPressed()}`,
+    );
+
+    // release 후 새 press는 새 요청 1회
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    const afterRelease = input.consumeActivePingPressed();
+    keySource.dispatchEvent(keyEvent('keyup', 'KeyQ'));
+    check(
+      '[LOOP] release 후 새 Q press → 새 요청 1회',
+      afterRelease && !input.consumeActivePingPressed(),
+      `새 press=${afterRelease}`,
+    );
+
+    // Q는 이동·상승·회수 상태를 만들지 않는다
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    const noHoldState =
+      !input.ascend && !input.descend && !input.interactHold && !input.throttleForward;
+    input.consumeActivePingPressed();
+
+    // 다른 키로는 핑 요청이 서지 않는다
+    let otherKeyRequests = 0;
+    for (const code of ['KeyE', 'KeyF', 'KeyW', 'KeyH', 'ShiftLeft', 'ControlLeft']) {
+      keySource.dispatchEvent(keyEvent('keydown', code));
+      if (input.consumeActivePingPressed()) otherKeyRequests += 1;
+      keySource.dispatchEvent(keyEvent('keyup', code));
+    }
+    input.detach();
+    check(
+      '[LOOP] Q는 hold 상태 0 · E·F·W·H·Shift·Ctrl로 핑 요청 0',
+      noHoldState && otherKeyRequests === 0,
+      `hold 상태=${!noHoldState}, 타 키 요청=${otherKeyRequests}`,
+    );
+  }
+
+  // 69b-3. [LOOP] blur·hidden·detach는 적립된 핑 요청을 버린다
+  {
+    // blur — 대조군(같은 절차에서 blur만 뺀 것)이 true여야 의미가 있다
+    const blurSource = new EventTarget();
+    const blurInput = new KeyboardInput();
+    blurInput.attach(blurSource);
+    blurSource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    blurSource.dispatchEvent(new Event('blur'));
+    const afterBlur = blurInput.consumeActivePingPressed();
+    blurInput.detach();
+
+    const controlSource = new EventTarget();
+    const controlInput = new KeyboardInput();
+    controlInput.attach(controlSource);
+    controlSource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    const withoutBlur = controlInput.consumeActivePingPressed();
+    controlInput.detach();
+    check(
+      '[LOOP] blur 전 적립된 핑 요청이 blur 후 false (대조군은 true)',
+      withoutBlur && !afterBlur,
+      `대조군=${withoutBlur}, blur 후=${afterBlur}`,
+    );
+
+    // document hidden
+    const hiddenSource = new EventTarget();
+    const visibility = Object.assign(new EventTarget(), {
+      visibilityState: 'visible' as DocumentVisibilityState,
+    });
+    const hiddenInput = new KeyboardInput();
+    hiddenInput.attach(hiddenSource, visibility);
+    hiddenSource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    visibility.visibilityState = 'hidden';
+    visibility.dispatchEvent(new Event('visibilitychange'));
+    const afterHidden = hiddenInput.consumeActivePingPressed();
+    hiddenInput.detach();
+    check(
+      '[LOOP] document hidden 시 적립된 핑 요청 제거',
+      !afterHidden,
+      `hidden 후=${afterHidden}`,
+    );
+
+    // detach / reset
+    const detachSource = new EventTarget();
+    const detachInput = new KeyboardInput();
+    detachInput.attach(detachSource);
+    detachSource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    detachInput.detach();
+    const afterDetach = detachInput.consumeActivePingPressed();
+
+    const resetSource = new EventTarget();
+    const resetInput = new KeyboardInput();
+    resetInput.attach(resetSource);
+    resetSource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    resetInput.reset();
+    const afterReset = resetInput.consumeActivePingPressed();
+    resetInput.detach();
+    check(
+      '[LOOP] detach·reset 후 적립된 핑 요청 제거',
+      !afterDetach && !afterReset,
+      `detach 후=${afterDetach}, reset 후=${afterReset}`,
+    );
+  }
+
+  // 69b-4. [LOOP] edge 소비 → requestActivePing 연결 + 쿨다운 경계
+  {
+    const rig = makeInteractionRig(params);
+    const keySource = new EventTarget();
+    const keyboard = new KeyboardInput();
+    keyboard.attach(keySource);
+    rig.systems.attachSonarContacts(() => SONAR_CONTACT_FIXTURE);
+    rig.systems.attachSonarScopeParams(SONAR_SCOPE_FIXTURE);
+
+    // 조립부가 쓸 정확한 연결 형태 — edge 1회당 command 1회
+    const outcomes: string[] = [];
+    const pumpInput = (): void => {
+      if (keyboard.consumeActivePingPressed()) {
+        outcomes.push(rig.systems.requestActivePing().status);
+      }
+    };
+
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    for (let frame = 0; frame < 60; frame += 1) {
+      pumpInput();
+      rig.systems.update(1 / 60);
+    }
+    check(
+      '[LOOP] Q edge 소비 → requestActivePing 1회 연결 (60프레임 홀드에도 1회)',
+      outcomes.length === 1 && outcomes[0] === 'pinged',
+      `요청=${outcomes.length}, 결과=${outcomes.join('/')}`,
+    );
+
+    // 쿨다운 중 새 Q press → command가 거부한다 (입력 계층은 쿨다운 비소유)
+    keySource.dispatchEvent(keyEvent('keyup', 'KeyQ'));
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    pumpInput();
+    check(
+      '[LOOP] 쿨다운 중 Q press → gameplay command가 cooldown 거부',
+      outcomes.length === 2 && outcomes[1] === 'cooldown',
+      `결과=${outcomes.join('/')}`,
+    );
+
+    // 거부됐다고 입력 edge를 다시 적립하지 않는다 — 자동 재시도 0
+    const beforeRetry = outcomes.length;
+    for (let frame = 0; frame < 120; frame += 1) {
+      pumpInput();
+      rig.systems.update(1 / 60);
+    }
+    check(
+      '[LOOP] cooldown 거부 후 자동 재시도 0 (edge 재적립 없음)',
+      outcomes.length === beforeRetry,
+      `거부 후 추가 요청=${outcomes.length - beforeRetry}`,
+    );
+
+    // 쿨다운 종료 후 새 Q press는 성공한다
+    const cooldownFrames =
+      Math.round((SONAR_SCOPE_FIXTURE.activePingCooldownSeconds ?? 0) * 60) + 5;
+    for (let frame = 0; frame < cooldownFrames; frame += 1) rig.systems.update(1 / 60);
+    keySource.dispatchEvent(keyEvent('keyup', 'KeyQ'));
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    pumpInput();
+    keyboard.detach();
+    check(
+      '[LOOP] cooldown 종료 후 새 Q press 성공',
+      outcomes.length === beforeRetry + 1 && outcomes[outcomes.length - 1] === 'pinged',
+      `마지막 결과=${outcomes[outcomes.length - 1]}`,
+    );
+  }
+
+  // 69c. [LOOP] F 짧은 입력 완료 0 / hold 완료 1 (실 키보드 경로)
+  {
+    const rig = makeInteractionRig(params);
+    const keySource = new EventTarget();
+    const keyboard = new KeyboardInput();
+    keyboard.attach(keySource);
+    // 스텁 대신 **실제 KeyboardInput**을 회수 입력으로 연결한다
+    rig.systems.interaction.attachInput(keyboard);
+    rig.systems.attachInteractionParams(INTERACTION_FIXTURE);
+    const holdFrames = Math.round((INTERACTION_FIXTURE.holdSeconds ?? 0) * 60) + 3;
+
+    // 짧은 탭 — 홀드 시간에 한참 못 미친다
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyF'));
+    for (let i = 0; i < 10; i += 1) rig.systems.update(1 / 60);
+    keySource.dispatchEvent(keyEvent('keyup', 'KeyF'));
+    rig.systems.update(1 / 60);
+    const afterTap = rig.completions.length;
+
+    // 정식 홀드
+    keySource.dispatchEvent(keyEvent('keydown', 'KeyF'));
+    for (let i = 0; i < holdFrames; i += 1) rig.systems.update(1 / 60);
+    keySource.dispatchEvent(keyEvent('keyup', 'KeyF'));
+    keyboard.detach();
+    check(
+      '[LOOP] F 짧은 입력 완료 0 · F hold 완료 정확히 1',
+      afterTap === 0 && rig.completions.length === 1,
+      `짧은 입력=${afterTap}, 홀드 후=${rig.completions.length}`,
+    );
+
+    // E를 눌러도 회수가 시작되지 않는다 (구 바인딩 잔재 0)
+    const eRig = makeInteractionRig(params);
+    const eSource = new EventTarget();
+    const eKeyboard = new KeyboardInput();
+    eKeyboard.attach(eSource);
+    eRig.systems.interaction.attachInput(eKeyboard);
+    eRig.systems.attachInteractionParams(INTERACTION_FIXTURE);
+    eSource.dispatchEvent(keyEvent('keydown', 'KeyE'));
+    for (let i = 0; i < holdFrames * 2; i += 1) eRig.systems.update(1 / 60);
+    eKeyboard.detach();
+    check(
+      '[LOOP] E 홀드로는 회수가 시작되지 않는다 (구 KeyE 바인딩 잔재 0)',
+      eRig.completions.length === 0 &&
+        eRig.systems.interactionReadModel().progress === 0,
+      `완료=${eRig.completions.length}`,
+    );
+  }
+
+  // 69d. [LOOP] interaction params — 항목별 null 차단
+  {
+    const axes: readonly { label: string; params: InteractionParams }[] = [
+      {
+        label: 'holdSeconds',
+        params: { ...INTERACTION_FIXTURE, holdSeconds: null },
+      },
+      {
+        label: 'interactRadiusMeters',
+        params: { ...INTERACTION_FIXTURE, interactRadiusMeters: null },
+      },
+      {
+        label: 'noiseContribution',
+        params: { ...INTERACTION_FIXTURE, noiseContribution: null },
+      },
+    ];
+    let blocked = 0;
+    for (const axis of axes) {
+      const rig = makeInteractionRig(params);
+      rig.systems.attachInteractionParams(axis.params);
+      rig.hold(true);
+      for (let i = 0; i < 60 * 5; i += 1) rig.systems.update(1 / 60);
+      if (
+        rig.completions.length === 0 &&
+        rig.systems.interactionReadModel().unwired &&
+        !rig.systems.interaction.wired
+      ) {
+        blocked += 1;
+      }
+    }
+    check(
+      '[LOOP] interaction params 3축 중 하나라도 null → 회수 unwired (0 변환 0건)',
+      blocked === axes.length,
+      `차단=${blocked}/${axes.length}`,
+    );
+  }
+
   /* ═══ M2 이벤트 어댑터 — interactionCollected 발행 (INT-CORE-021) ══ */
 
   // 70. [LOOP] 완료 1회 발행 · 취소·이탈·중복 0회 · targetId/clueId 분리
@@ -4705,12 +5040,17 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
       `피해=${rig.damages.length}, 값=${rig.damages[0]?.rawDamage}`,
     );
 
-    // 돌진 피해는 params에 없다 → unwired (임시 피해 생성 0)
-    const ram = rig.boss.requestAttack(bossAttack('atk-ram', 'ram', rig.playerAt));
+    // 돌진 피해가 승인 대기(null)면 unwired — 임시 피해를 만들지 않는다.
+    // production `params/boss.json`이 바로 이 상태다(contactDamage: null).
+    const nullRam = makeBossCombatRig(params, {
+      ...BOSS_ENCOUNTER_FIXTURE,
+      ramContactDamage: null,
+    });
+    const ram = nullRam.boss.requestAttack(bossAttack('atk-ram', 'ram', nullRam.playerAt));
     check(
-      '[BOSS] 돌진 접촉 피해 params 부재 → unwired (임시 피해 0)',
-      ram === 'unwired' && !rig.boss.ramWired && rig.damages.length === 1,
-      `ram=${ram}, 피해 누적=${rig.damages.length}`,
+      '[BOSS] 돌진 접촉 피해 null → unwired (임시 피해 0)',
+      ram === 'unwired' && !nullRam.boss.ramWired && nullRam.damages.length === 0,
+      `ram=${ram}, 피해 누적=${nullRam.damages.length}`,
     );
 
     // 플레이어 파괴 후 신규 공격 0
@@ -4786,6 +5126,209 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
           /phase|telegraph|schedule|summon|spin/i.test(name),
         ),
       `포트 표면에 단계·예고·스케줄 API 없음`,
+    );
+  }
+
+  // 76. [BOSS] 구역 진입 edge · locked 상태 spawn 0 (INT-CORE-022 §3)
+  {
+    const rig = makeInteractionRig(params);
+    const entries: string[] = [];
+    rig.systems.onBossZoneEntered((zoneId) => entries.push(zoneId));
+
+    // 경계 미주입 → 항상 '밖' (좌표 발명 0)
+    rig.systems.player.resetTo({ x: 0, y: 0, z: 0, headingRadians: 0 });
+    rig.systems.update(1 / 60);
+    check(
+      '[BOSS] 구역 경계 미주입 → 항상 구역 밖 · edge 0 (좌표 발명 0)',
+      !rig.systems.isPlayerInBossZone() && entries.length === 0 && !rig.systems.bossZone.wired,
+      `안=${rig.systems.isPlayerInBossZone()}, edge=${entries.length}`,
+    );
+
+    rig.systems.attachBossZone(BOSS_ZONE_FIXTURE);
+    // 밖에서 시작 → 안으로 이동 → 머무름 → 밖 → 재진입
+    rig.systems.player.resetTo({ x: 100, y: 0, z: 100, headingRadians: 0 });
+    rig.systems.update(1 / 60);
+    const outside = entries.length;
+    rig.systems.player.resetTo({ x: 0, y: 0, z: 0, headingRadians: 0 });
+    rig.systems.update(1 / 60);
+    const firstEntry = entries.length;
+    // 구역 안에 머무는 동안 60프레임 — 추가 통지 0이어야 한다
+    for (let i = 0; i < 60; i += 1) rig.systems.update(1 / 60);
+    const staying = entries.length;
+    rig.systems.player.resetTo({ x: 100, y: 0, z: 100, headingRadians: 0 });
+    rig.systems.update(1 / 60);
+    rig.systems.player.resetTo({ x: 0, y: 0, z: 0, headingRadians: 0 });
+    rig.systems.update(1 / 60);
+    check(
+      '[BOSS] 진입 edge는 밖→안 전이 1회만 · 머무는 동안 중복 요청 0',
+      outside === 0 &&
+        firstEntry === 1 &&
+        staying === 1 &&
+        entries.length === 2 &&
+        entries[0] === BOSS_ZONE_FIXTURE.id,
+      `밖=${outside}, 첫 진입=${firstEntry}, 머무름=${staying}, 재진입 후=${entries.length}`,
+    );
+
+    // 게이트 허가 전에는 spawn adapter 호출 0 — 보스 미생성 상태에서
+    // spawnBoss()는 false를 돌려주고 아무것도 만들지 않는다
+    check(
+      '[BOSS] 3/3 이전(보스 미생성) → spawn 요청해도 spawn 0',
+      !rig.systems.spawnBoss() && rig.systems.boss === null,
+      `spawn=${rig.systems.spawnBoss()}, boss=${String(rig.systems.boss)}`,
+    );
+
+    // 해금·게이트 로직을 게임플레이가 복제하지 않는다
+    const zoneSurface = Object.getOwnPropertyNames(
+      Object.getPrototypeOf(rig.systems.bossZone) as object,
+    );
+    check(
+      '[BOSS] 구역 소스에 해금·게이트 판정 API 0건 (정본 = BossProgressStore)',
+      !zoneSurface.some((name) => /unlock|requestEntry|clue|granted/i.test(name)),
+      `표면=${zoneSurface.join('/')}`,
+    );
+
+    // 재출항 후 edge 상태 초기화
+    rig.systems.resetSortieSession(params);
+    check(
+      '[BOSS] 재출항 후 진입 edge 상태 초기화',
+      rig.systems.bossZone.entryEdgeCount === 0,
+      `edge=${rig.systems.bossZone.entryEdgeCount}`,
+    );
+  }
+
+  // 77. [BOSS] bossHit 발행 — 종류별 1회 · 배율 후 · 제거 후 0
+  {
+    const rig = makeInteractionRig(params);
+    const hits: { kind: string }[] = [];
+    rig.bus.on('bossHit', (payload: { kind: 'weakPoint' | 'hull' }) => hits.push(payload));
+    const phase = { phase: 1 as BossPhase, weakPointOpen: false };
+    rig.systems.createBoss(
+      BOSS_PLACEMENT_FIXTURE,
+      BOSS_WEAK_POINT_PLACEMENT_FIXTURE,
+      phase,
+      BOSS_ENCOUNTER_FIXTURE,
+      BOSS_WEAK_POINT_FIXTURE,
+    );
+    rig.systems.spawnBoss();
+    const weakPoint = rig.systems.bossWeakPoint as BossWeakPointTarget;
+
+    weakPoint.onTorpedoHit(0, 0, 1);
+    check(
+      '[BOSS] bossHit hull 1회 (명중 판정 1건당 정확히 1회)',
+      hits.length === 1 && hits[0]?.kind === 'hull',
+      `발행=${hits.length}, kind=${hits[0]?.kind}`,
+    );
+
+    phase.weakPointOpen = true;
+    weakPoint.onTorpedoHit(0, 0, 1);
+    check(
+      '[BOSS] bossHit weakPoint 1회 · payload는 kind 하나뿐 (피해량·위치·공격자 비탑재)',
+      hits.length === 2 &&
+        hits[1]?.kind === 'weakPoint' &&
+        Object.keys(hits[1] ?? {}).join(',') === 'kind',
+      `발행=${hits.length}, 필드=${Object.keys(hits[1] ?? {}).join('/')}`,
+    );
+
+    // 격파 명중: bossHit → bossDefeated 순서. 격파 판정·발행은 리드 코어가
+    // 소유하므로 여기서는 sink가 'defeated'를 돌려준 뒤 순서를 확인한다.
+    const order: string[] = [];
+    rig.bus.on('bossHit', () => order.push('bossHit'));
+    rig.bus.on('bossDefeated', () => order.push('bossDefeated'));
+    rig.systems.attachBossDamageSink({
+      applyBossDamage: () => {
+        // 리드 코어가 격파를 확정하는 시점 — 이때 bossDefeated가 나간다
+        rig.bus.emit('bossDefeated', { bossId: 'boss-abyss-01', x: 0, z: 0 });
+        return 'defeated';
+      },
+    });
+    weakPoint.onTorpedoHit(0, 0, 1);
+    check(
+      '[BOSS] 격파 명중은 bossHit → bossDefeated 순서',
+      order.join(',') === 'bossHit,bossDefeated',
+      `순서=${order.join('→')}`,
+    );
+
+    // 제거된 보스에는 발행 0
+    const before = hits.length;
+    (rig.systems.boss as BossEncounter).markRemoved();
+    weakPoint.onTorpedoHit(0, 0, 1);
+    check(
+      '[BOSS] 제거된 보스에 bossHit 발행 0',
+      hits.length === before,
+      `제거 전=${before}, 제거 후=${hits.length}`,
+    );
+  }
+
+  // 78. [BOSS] boss params 축별 null → 해당 축만 wiring 차단
+  {
+    const axes: readonly { label: string; encounter: BossEncounterParamsShape; expect: 'motion' | 'ram' }[] = [
+      {
+        label: 'moveSpeed',
+        encounter: { ...BOSS_ENCOUNTER_FIXTURE, moveSpeedMetersPerSecond: null },
+        expect: 'motion',
+      },
+      {
+        label: 'turnRate',
+        encounter: { ...BOSS_ENCOUNTER_FIXTURE, turnRateRadiansPerSecond: null },
+        expect: 'motion',
+      },
+      {
+        label: 'ramContactDamage',
+        encounter: { ...BOSS_ENCOUNTER_FIXTURE, ramContactDamage: null },
+        expect: 'ram',
+      },
+    ];
+    let blocked = 0;
+    for (const axis of axes) {
+      const rig = makeBossCombatRig(params, axis.encounter);
+      if (axis.expect === 'motion' && !rig.boss.motionWired && rig.boss.projectileWired) blocked += 1;
+      if (axis.expect === 'ram' && !rig.boss.ramWired && rig.boss.projectileWired) blocked += 1;
+    }
+    check(
+      '[BOSS] params 축별 null → 그 축만 unwired (다른 축은 살아 있다)',
+      blocked === axes.length,
+      `차단=${blocked}/${axes.length}`,
+    );
+
+    // 약점 반경 null → production 약점 표적 등록 불가(반경 0)
+    const rig = makeInteractionRig(params);
+    rig.systems.createBoss(
+      BOSS_PLACEMENT_FIXTURE,
+      BOSS_WEAK_POINT_PLACEMENT_FIXTURE,
+      { phase: 1 as BossPhase, weakPointOpen: false },
+      BOSS_ENCOUNTER_FIXTURE,
+      { ...BOSS_WEAK_POINT_FIXTURE, hitRadiusMeters: null },
+    );
+    rig.systems.spawnBoss();
+    const weakPoint = rig.systems.bossWeakPoint as BossWeakPointTarget;
+    check(
+      '[BOSS] 약점 반경 null → 판정 반경 0 · 누적 피해 0 (격파 경로 미성립)',
+      !weakPoint.wired && weakPoint.hitRadius === 0,
+      `wired=${weakPoint.wired}, radius=${weakPoint.hitRadius}`,
+    );
+  }
+
+  // 79. [BOSS] 약점 본체 추적 — syncTo (INT-CORE-022 §3)
+  {
+    const rig = makeInteractionRig(params);
+    rig.systems.createBoss(
+      BOSS_PLACEMENT_FIXTURE,
+      BOSS_WEAK_POINT_PLACEMENT_FIXTURE,
+      { phase: 1 as BossPhase, weakPointOpen: false },
+      BOSS_ENCOUNTER_FIXTURE,
+      BOSS_WEAK_POINT_FIXTURE,
+    );
+    rig.systems.spawnBoss();
+    const boss = rig.systems.boss as BossEncounter;
+    const weakPoint = rig.systems.bossWeakPoint as BossWeakPointTarget;
+    boss.moveForward(1);
+    rig.systems.update(1 / 60);
+    const moved = boss.getPosition();
+    check(
+      '[BOSS] 약점 판정 위치가 본체를 따라간다 (syncTo — 별도 포즈 정본 0)',
+      Math.abs(weakPoint.positionX - moved.x) < 1e-9 &&
+        Math.abs(weakPoint.positionZ - moved.z) < 1e-9,
+      `본체=(${moved.x.toFixed(2)}, ${moved.z.toFixed(2)}), 약점=(${weakPoint.positionX.toFixed(2)}, ${weakPoint.positionZ.toFixed(2)})`,
     );
   }
 
@@ -4899,7 +5442,7 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     const passiveIds = passive.blips.map((blip) => blip.targetId).sort().join(',');
     check(
       '[LOOP] 패시브 = 소음원만 표시 · 거리 없음 (소리 없는 대상은 안 보인다)',
-      passiveIds === 'boss-1,ship-1' &&
+      passiveIds === 'boss-1,ship-1,torpedo-1' &&
         passive.blips.every((blip) => blip.distanceMeters === null && !blip.fromActivePing),
       `표시=${passiveIds}`,
     );
@@ -4965,7 +5508,8 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
     check(
       '[LOOP] 액티브 핑 = 소음 없는 접점 포함 전체 정확 표시 (거리 포함·번짐 0)',
       ping.status === 'pinged' &&
-        activeIds === 'boss-1,depthcharge-1,ship-1,torpedo-1' &&
+        activeIds ===
+          'boss-1,clue-1,deep-1,depthcharge-1,gold-1,salvage-1,ship-1,torpedo-1' &&
         active.blips.every(
           (blip) => blip.fromActivePing && blip.distanceMeters !== null && blip.bearingSpreadRadians === 0,
         ),
@@ -4977,6 +5521,34 @@ export function runGameplayVerification(rawParams: RawParamFiles): VerificationR
         (SONAR_SCOPE_FIXTURE.activePingDetectionGaugeRise ?? 0) &&
         rig.systems.detection.wired,
       `게이지 ${gaugeBefore} → ${rig.systems.detection.gauge}`,
+    );
+
+    // 탐색 4종은 **패시브에 절대 나타나지 않는다** — 종류 선노출 금지
+    const explorationKinds = ['goldCache', 'salvage', 'clue', 'deepSite'] as const;
+    check(
+      '[LOOP] 패시브에 탐색 blip 0건 (핑 없이 종류 선노출 금지)',
+      passive.blips.every((blip) => !(explorationKinds as readonly string[]).includes(blip.kind)),
+      `패시브 kinds=${[...new Set(passive.blips.map((blip) => blip.kind))].join('/')}`,
+    );
+
+    // 액티브 핑 노출 중에만 탐색 4종이 전부 나온다
+    const revealedExploration = active.blips.filter((blip) =>
+      (explorationKinds as readonly string[]).includes(blip.kind),
+    );
+    check(
+      '[LOOP] 액티브 핑 노출 중 탐색 4종 공급 (goldCache·salvage·clue·deepSite)',
+      revealedExploration.length === 4 &&
+        [...new Set(revealedExploration.map((blip) => blip.kind))].sort().join(',') ===
+          'clue,deepSite,goldCache,salvage' &&
+        revealedExploration.every((blip) => blip.fromActivePing && blip.distanceMeters !== null),
+      `탐색 blip=${revealedExploration.map((blip) => blip.kind).sort().join('/')}`,
+    );
+
+    // 지형은 blip이 아니다 — 접점 어휘에 지형이 없다
+    check(
+      '[LOOP] 지형 blip 0건 (렌더가 레이아웃 단일 소스로 배경층 묘화)',
+      !active.blips.some((blip) => String(blip.kind) === 'terrain'),
+      `kinds=${[...new Set(active.blips.map((blip) => blip.kind))].join('/')}`,
     );
 
     // 계약 규칙: blip은 **월드 좌표를 싣지 않는다**. 보스는 계약 어휘에
@@ -5071,12 +5643,31 @@ const BOSS_WEAK_POINT_PLACEMENT_FIXTURE: BossWeakPointPlacement = Object.freeze(
  * 검증 전용 보스 실행 수치 **픽스처** — production params가 아니다.
  * `ramContactDamage`는 `params/boss.json`에 **없어서** null이다(INT-GAME-017).
  */
-const BOSS_ENCOUNTER_FIXTURE = Object.freeze({
+type BossEncounterParamsShape = {
+  readonly moveSpeedMetersPerSecond: number | null;
+  readonly turnRateRadiansPerSecond: number | null;
+  readonly projectileSpeedMetersPerSecond: number | null;
+  readonly projectileDamage: number | null;
+  readonly ramContactDamage: number | null;
+};
+
+/** 검증용 보스 구역 — 월드 배치 모듈(`BOSS_ZONE`)이 아니다 */
+const BOSS_ZONE_FIXTURE = Object.freeze({
+  id: 'boss-zone-abyss',
+  minX: -20,
+  maxX: 20,
+  minZ: -20,
+  maxZ: 20,
+});
+
+const BOSS_ENCOUNTER_FIXTURE: BossEncounterParamsShape = Object.freeze({
   moveSpeedMetersPerSecond: 6,
   turnRateRadiansPerSecond: 0.8,
   projectileSpeedMetersPerSecond: 16,
   projectileDamage: 18,
-  ramContactDamage: null,
+  // 픽스처는 '값이 있을 때'의 동작을 검증하기 위한 것이다 — production은
+  // `params/boss.json`이 승인 대기(null)라 여전히 unwired다.
+  ramContactDamage: 25,
 });
 
 /** 검증 전용 파밍 보상 **픽스처** — 금액은 기획·월드 소유 데이터다 */
@@ -5109,15 +5700,19 @@ const SONAR_SCOPE_FIXTURE = Object.freeze({
 });
 
 /**
- * 검증용 스코프 접점 — 소음원 여부로 패시브 표시 자격이 갈린다.
- * kind는 **계약 어휘(ship/torpedo/depthCharge) + boss**만 쓴다 — 보상·단서·
- * 지형 blip은 계약에 kind가 없어 표현할 수 없다(INT-GAME-017).
+ * 검증용 스코프 접점 — 전투 3종 + **탐색 4종**(INT-CORE-022).
+ * 지형은 blip이 아니므로 접점에 없다 — 렌더가 레이아웃으로 직접 그린다.
+ * 탐색 접점은 소음을 내지 않으며 액티브 핑 노출 중에만 blip이 된다.
  */
 const SONAR_CONTACT_FIXTURE: readonly SonarContact[] = Object.freeze([
   { contactId: 'ship-1', kind: 'ship', positionX: 0, positionZ: -50, noiseEmitting: true },
   { contactId: 'boss-1', kind: 'boss', positionX: 30, positionZ: -30, noiseEmitting: true },
-  { contactId: 'torpedo-1', kind: 'torpedo', positionX: -20, positionZ: -10, noiseEmitting: false },
+  { contactId: 'torpedo-1', kind: 'torpedo', positionX: -20, positionZ: -10, noiseEmitting: true },
   { contactId: 'depthcharge-1', kind: 'depthCharge', positionX: 5, positionZ: -5, noiseEmitting: true },
+  { contactId: 'gold-1', kind: 'goldCache', positionX: 12, positionZ: -12, noiseEmitting: false },
+  { contactId: 'salvage-1', kind: 'salvage', positionX: -12, positionZ: -12, noiseEmitting: false },
+  { contactId: 'clue-1', kind: 'clue', positionX: 8, positionZ: 8, noiseEmitting: false },
+  { contactId: 'deep-1', kind: 'deepSite', positionX: -8, positionZ: 8, noiseEmitting: false },
 ]);
 /**
  * 검증 전용 회수 수치 **픽스처** — production params가 아니다.
@@ -5355,7 +5950,10 @@ function bossAttack(
  * 보스 전투 rig — 포트 단독 검증용. 피해는 **기존 계약 형태**로 수집하며
  * 이 rig가 피해 규칙을 대신 계산하지 않는다.
  */
-function makeBossCombatRig(_params: GameParams): {
+function makeBossCombatRig(
+  _params: GameParams,
+  encounterParams: BossEncounterParamsShape = BOSS_ENCOUNTER_FIXTURE,
+): {
   boss: BossEncounter;
   damages: DamageRequest[];
   playerAt: { readonly x: number; readonly y: number; readonly z: number };
@@ -5368,7 +5966,7 @@ function makeBossCombatRig(_params: GameParams): {
   const boss = new BossEncounter(
     BOSS_PLACEMENT_FIXTURE,
     player,
-    BOSS_ENCOUNTER_FIXTURE,
+    encounterParams,
     null,
     {
       applyDamage: (request) => {
