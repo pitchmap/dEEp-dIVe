@@ -25,7 +25,7 @@ export type DetectionStage = 'safe' | 'searching' | 'detected';
 
 import type {
   BossPhase,
-  InteractionTargetKind,
+  InteractionCollectedEvent,
   LootSource,
   MetaStateId,
   SortieSettlement,
@@ -166,12 +166,18 @@ export interface GameEvents {
    *  구독: SaveSystem(툴링) */
   saveRequested: { cause: 'settlement' | 'rarePart' };
 
-  /** E 키 상호작용 회수 확정 — 2초 홀드 완료 1회 (발행: 게임플레이
-   *  `InteractionSystem` — 16차 결의 2-4). 조준·접근·홀드 중단으로는
-   *  발행하지 않는다. 구독: 리드 단서 진행(`kind === 'clue'`만 소비),
+  /** E 키 상호작용 회수 확정 — 2초 홀드 완료 1회 (16차 결의 2-4).
+   *  payload는 `InteractionCollectedEvent`(contracts/meta.ts) discriminated
+   *  union — `targetId`는 월드 interactable 고유 ID(단서 ID로 해석 금지),
+   *  `clueId`는 canonical 단서 ID로 `kind === 'clue'`에서만 존재한다.
+   *  발행: 게임플레이 조립부 어댑터(InteractionSystem 완료 콜백 →
+   *  interactableId→clueId 매핑 + kind 변환 후 발행 — 후속 창).
+   *  ⚠ 현재 dev에는 이 이벤트의 발행자가 0이다(InteractionSystem은 로컬
+   *  completionListeners만 제공). 조준·접근·홀드 중단으로는 발행하지
+   *  않는다. 구독: 리드 단서 진행(`kind === 'clue'`의 `clueId`만 소비),
    *  economy 판정(금괴·salvage 보상), 렌더(회수 연출), 오디오.
    *  회수 중 소음 발생은 게임플레이가 기존 소음 경로로 별도 처리한다 */
-  interactionCollected: { kind: InteractionTargetKind; targetId: string; x: number; z: number };
+  interactionCollected: InteractionCollectedEvent;
 
   /** M2 단서 진행 변경 — 반영 성공 시 1회 (발행: 리드 BossProgressStore).
    *  중복·미지 단서는 발행하지 않는다. 구독: UI(0/3 표시), 렌더 */

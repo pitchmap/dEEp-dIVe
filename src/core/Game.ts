@@ -390,11 +390,14 @@ export class Game {
         `크레딧 ${loaded.data.credits} · 희귀 부품 ${loaded.data.rareParts}`,
     );
 
-    // ⓪-b2 M2 단서·보스 해금 진행 (INT-CORE-020) — 공인 보스 params 로드는
-    //      composition root 1회. 진행 복원도 지갑과 같은 규약(부팅 1회).
-    //      단서 획득 정본은 게임플레이 InteractionSystem의 interactionCollected
-    //      이벤트 — 여기서는 kind==='clue'만 리드 진행 스토어로 잇는다
-    //      (창 2 도착 전에는 이벤트가 없을 뿐, 구독 배선은 계약대로 상시).
+    // ⓪-b2 M2 단서·보스 해금 진행 (INT-CORE-020/021) — 공인 보스 params
+    //      로드는 composition root 1회. 진행 복원도 지갑과 같은 규약(부팅 1회).
+    //      단서 진행의 정본(원장·중복 방지·저장 복원·해금·게이트)은
+    //      BossProgressStore 하나다. interactableId→clueId 매핑·이벤트 발행은
+    //      게임플레이 어댑터(무상태) 소유 — 여기서는 kind==='clue'의
+    //      canonical `clueId`만 소비한다. `targetId`는 월드 interactable
+    //      ID이므로 단서 ID로 해석하지 않는다 (현재 dev 발행자 0 —
+    //      구독 배선은 계약대로 상시).
     const bossParams = loadBossParams();
     const bossProgress = new BossProgressStore(
       {
@@ -407,7 +410,7 @@ export class Game {
     this.bossProgress = bossProgress;
     this.registerUnsubscribe(
       this.bus.on('interactionCollected', (payload) => {
-        if (payload.kind === 'clue') bossProgress.collectClue(payload.targetId);
+        if (payload.kind === 'clue') bossProgress.collectClue(payload.clueId);
       }),
     );
     // 격파 → 진행 기록 + 기존 lootDropped 보상 경로 (수치는 params/boss.json)

@@ -3,9 +3,17 @@
  *
  * ## 규칙
  *
- *  - 단서 획득 자체는 게임플레이 `InteractionSystem`의 `interactionCollected`
- *    이벤트가 정본이다 — 이 스토어는 `kind === 'clue'`만 **소비**하며 별도
- *    상호작용 판정을 만들지 않는다 (조립부가 구독을 잇는다).
+ *  - **정본 소유권 (INT-CORE-021)**: 단서 *진행*의 정본 — 원장(수집 id
+ *    목록)·중복 방지·저장 복원·해금 판정·보스 구역 게이트 — 은 이 스토어
+ *    하나다. 게임플레이 어댑터(후속 창)는 interactableId→canonical clueId
+ *    매핑과 `interactionCollected` 이벤트 발행만 소유하는 **무상태** 변환
+ *    계층이며, 진행 상태를 따로 들지 않는다. 게임플레이 쪽
+ *    `CluePickupProgress`류의 영속·복원·중복 방지 로직은 병합 대상이
+ *    아니다(중복 정본 금지).
+ *  - 단서 *획득 판정* 자체는 게임플레이 `InteractionSystem`이 정본이다 —
+ *    이 스토어는 `kind === 'clue'`의 canonical `clueId`만 **소비**하며 별도
+ *    상호작용 판정을 만들지 않는다 (조립부가 구독을 잇는다. `targetId`는
+ *    월드 interactable ID이므로 여기 전달하지 않는다).
  *  - **동일 단서 중복 반영 금지**: 반영 단위는 단서 id다. 재접속 후에도
  *    id 목록이 저장(`progress.bossCluesCollected`, 스키마 v2)에서 복원되므로
  *    같은 단서는 영구히 한 번만 세어진다.
