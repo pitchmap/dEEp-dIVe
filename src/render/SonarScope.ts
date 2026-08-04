@@ -18,10 +18,39 @@
  * 수치는 renderVisualParams.json artDirection.sonarScope 소유.
  */
 
-import type { SonarScopeReadModel } from '../contracts/sonar';
+import type { SonarBlipKind, SonarScopeReadModel } from '../contracts/sonar';
 import visualParams from './renderVisualParams.json';
 
 const SCOPE = visualParams.sonarScope;
+
+/**
+ * kind별 색 — 받은 kind로만 분기한다 (재추측·재분류 금지, INT-CORE-022).
+ * 탐색 4종은 계약상 액티브 핑 노출 중에만 공급된다 — 여기서 필터링하지
+ * 않는다(공급 규칙은 게임플레이 소유).
+ */
+const BLIP_COLORS: Readonly<Record<SonarBlipKind, string>> = Object.freeze({
+  ship: SCOPE.contactColor,
+  torpedo: SCOPE.blipTorpedoColor,
+  depthCharge: SCOPE.blipDepthChargeColor,
+  goldCache: SCOPE.blipGoldCacheColor,
+  salvage: SCOPE.blipSalvageColor,
+  clue: SCOPE.blipClueColor,
+  deepSite: SCOPE.blipDeepSiteColor,
+});
+
+/**
+ * 거리 미상 방위 호의 kind별 대시 패턴 — 저품질·색약 환경에서도 색 외
+ * 채널로 구분되게 한다 (빈 배열 = 실선).
+ */
+const ARC_DASH: Readonly<Record<SonarBlipKind, readonly number[]>> = Object.freeze({
+  ship: [],
+  torpedo: [6, 3],
+  depthCharge: [2, 3],
+  goldCache: [4, 2],
+  salvage: [4, 2],
+  clue: [4, 2],
+  deepSite: [4, 2],
+});
 
 /**
  * 읽기 모델 폴링 소스 — 게임플레이 공급자를 composition root가 주입한다
@@ -177,11 +206,14 @@ export class SonarScope {
   }
 
   /**
-   * blip — 공급된 bearing·spread·distance·kind 그대로 그린다.
-   *  - distance null(패시브 청음): 외곽 링 위 방위 호(번짐 폭 = spread)
-   *  - distance 있음: 해당 반경 위치의 블롭 (번짐 = spread 비례)
-   *  - fromActivePing: 또렷한 밝은 윤곽 (핑 반사 구분)
-   *  - kind별 색: ship / torpedo / depthCharge — 필터링·추가 없음
+   * blip — 공급된 bearing·spread·distance·kind 그대로 그린다 (7종 정본
+   * `SonarBlipKind` — 받은 kind로만 분기, 필터링·추가·재분류 없음).
+   *  - distance null(패시브 청음): 외곽 링 위 방위 호(번짐 폭 = spread,
+   *    kind별 대시 패턴 — 색 외 채널).
+   *  - distance 있음: 해당 반경 위치에 kind별 도형. 모든 품질 단계에서
+   *    동일한 2D 도형이라 low에서도 색 외(도형·패턴·펄스)로 구분된다.
+   *  - fromActivePing: 또렷한 밝은 윤곽 추가 (핑 반사 구분 — 탐색 4종은
+   *    계약상 핑 노출 중에만 온다).
    */
   private drawBlips(
     ctx: CanvasRenderingContext2D,
@@ -190,48 +222,43 @@ export class SonarScope {
     view: SonarScopeReadModel,
   ): void {
     for (const blip of view.blips) {
-      const color =
-        blip.kind === 'torpedo'
-          ? SCOPE.blipTorpedoColor
-          : blip.kind === 'depthCharge'
-            ? SCOPE.blipDepthChargeColor
-            : SCOPE.contactColor;
+      const color = BLIP_COLORS[blip.kind] ?? SCOPE.contactColor;
       // 화면 각: 위 = 선수 기준 방위 (공급값 그대로 — 재계산 없음)
       const sin = Math.sin(blip.bearingRadians);
       const cos = Math.cos(blip.bearingRadians);
 
       if (blip.distanceMeters === null) {
-        // 거리 미상 — 외곽 링 위 방위 호 (폭 = 번짐)
+        // 거리 미상 — 외곽 링 위 방위 호 (폭 = 번짐, kind별 대시)
         const arcHalf = Math.max(blip.bearingSpreadRadians / 2, 0.04);
         // 캔버스 호 각도(0 = +x축): 화면 점 (sin, -cos) 방향
         const screenAngle = Math.atan2(-cos, sin);
         ctx.strokeStyle = `${color}bb`;
         ctx.lineWidth = 4;
+        ctx.setLineDash([...(ARC_DASH[blip.kind] ?? [])]);
         ctx.beginPath();
         ctx.arc(center, center, radius * 0.86, screenAngle - arcHalf, screenAngle + arcHalf);
         ctx.stroke();
+        ctx.setLineDash([]);
         continue;
       }
 
       const ratio = Math.min(blip.distanceMeters / SCOPE.rangeMeters, 0.92);
       const px = center + sin * ratio * radius;
       const py = center - cos * ratio * radius;
-      const blur = Math.max(
-        radius * 0.035,
-        radius * blip.bearingSpreadRadians * ratio * 0.5,
-      );
+      this.drawBlipShape(ctx, radius, blip.kind, px, py, sin, cos, color);
       if (blip.fromActivePing) {
-        // 핑 반사 — 또렷한 점 + 밝은 윤곽 (번짐 없음)
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.arc(px, py, radius * 0.03, 0, Math.PI * 2);
-        ctx.fill();
+        // 핑 반사 — 밝은 윤곽 (도형과 병행되는 공통 구분 채널)
         ctx.strokeStyle = 'rgba(190,245,238,0.9)';
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.arc(px, py, radius * 0.055, 0, Math.PI * 2);
         ctx.stroke();
-      } else {
+      } else if (blip.kind === 'ship') {
+        // 패시브 선박 청음 — 기존 번짐 블롭 (spread 비례)
+        const blur = Math.max(
+          radius * 0.035,
+          radius * blip.bearingSpreadRadians * ratio * 0.5,
+        );
         const gradient = ctx.createRadialGradient(px, py, 0, px, py, blur);
         gradient.addColorStop(0, `${color}cc`);
         gradient.addColorStop(1, `${color}00`);
@@ -239,6 +266,104 @@ export class SonarScope {
         ctx.beginPath();
         ctx.arc(px, py, blur, 0, Math.PI * 2);
         ctx.fill();
+      }
+    }
+  }
+
+  /**
+   * kind별 도형 — 7종 전부 서로 다른 실루엣 (색 외 구분 채널, 가짜 문자·
+   * 네온 없음). 전투 3종: 원점 / 방위 정렬 대시 / X 표. 탐색 4종:
+   * 마름모(금괴) / 정사각(salvage) / 삼각+펄스(단서) / 이중 원(심층 지점).
+   */
+  private drawBlipShape(
+    ctx: CanvasRenderingContext2D,
+    radius: number,
+    kind: SonarBlipKind,
+    px: number,
+    py: number,
+    sin: number,
+    cos: number,
+    color: string,
+  ): void {
+    const s = radius * 0.042;
+    ctx.fillStyle = color;
+    ctx.strokeStyle = color;
+    switch (kind) {
+      case 'torpedo': {
+        // 방위 방향으로 정렬된 대시 — 이동 위협 실루엣
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(px - sin * s * 1.6, py + cos * s * 1.6);
+        ctx.lineTo(px + sin * s * 1.6, py - cos * s * 1.6);
+        ctx.stroke();
+        return;
+      }
+      case 'depthCharge': {
+        // X 표 + 점멸 — 낙하 위험물
+        const blink = (this.elapsed % 0.8) < 0.4 ? 1 : 0.45;
+        ctx.globalAlpha = blink;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(px - s, py - s);
+        ctx.lineTo(px + s, py + s);
+        ctx.moveTo(px - s, py + s);
+        ctx.lineTo(px + s, py - s);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        return;
+      }
+      case 'goldCache': {
+        // 마름모 (45° 회전 정사각)
+        ctx.beginPath();
+        ctx.moveTo(px, py - s * 1.3);
+        ctx.lineTo(px + s * 1.3, py);
+        ctx.lineTo(px, py + s * 1.3);
+        ctx.lineTo(px - s * 1.3, py);
+        ctx.closePath();
+        ctx.fill();
+        return;
+      }
+      case 'salvage': {
+        // 축 정렬 정사각
+        ctx.fillRect(px - s, py - s, s * 2, s * 2);
+        return;
+      }
+      case 'clue': {
+        // 삼각 + 느린 확장 펄스 링 (목표 지점 신호)
+        ctx.beginPath();
+        ctx.moveTo(px, py - s * 1.4);
+        ctx.lineTo(px + s * 1.2, py + s);
+        ctx.lineTo(px - s * 1.2, py + s);
+        ctx.closePath();
+        ctx.fill();
+        const pulse =
+          (this.elapsed % SCOPE.explorationPulseSeconds) / SCOPE.explorationPulseSeconds;
+        ctx.globalAlpha = (1 - pulse) * 0.7;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(px, py, s * (1.4 + pulse * 2.2), 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        return;
+      }
+      case 'deepSite': {
+        // 이중 원 (외곽 링 + 중심점) — 탐사 지점
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(px, py, s * 1.3, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(px, py, s * 0.4, 0, Math.PI * 2);
+        ctx.fill();
+        return;
+      }
+      case 'ship':
+      default: {
+        // 원점 — 핑 반사 시 또렷한 점 (패시브 번짐은 호출부에서 병행)
+        ctx.beginPath();
+        ctx.arc(px, py, radius * 0.03, 0, Math.PI * 2);
+        ctx.fill();
+        return;
       }
     }
   }

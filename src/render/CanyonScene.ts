@@ -62,6 +62,8 @@ import { IdentificationTags } from './IdentificationTags';
 import type { ShipIdentificationSource } from '../contracts/identification';
 import type { SalvageStateSource } from './SalvageVisuals';
 import { SalvageVisuals } from './SalvageVisuals';
+import { ClueMarkerVisuals } from './ClueMarkerVisuals';
+import { BOSS_PLACEMENT } from '../world/bossPlacement';
 import { DriftParticles } from './DriftParticles';
 import { PropellerWake } from './PropellerWake';
 import { buildRockShellGeometry, buildSeabedGeometry } from './RockShell';
@@ -155,6 +157,8 @@ export class CanyonScene implements ManagedScene {
   private readonly torpedoVisuals = new TorpedoVisuals();
   private readonly leadIndicator = new LeadShotIndicator();
   private readonly salvageVisuals = new SalvageVisuals();
+  /** 단서 표식 — 배치 데이터 표현 전용 (회수 반영은 interactionCollected 통지) */
+  private readonly clueMarkers = new ClueMarkerVisuals();
   private readonly environment: EnvironmentDressing;
   private periscope: PeriscopeView | null = null;
   /** 소나 스코프 — 계기 층 다이제틱 HUD (판정 소비만, SonarScope 참조) */
@@ -313,6 +317,7 @@ export class CanyonScene implements ManagedScene {
     this.scene.add(this.torpedoVisuals.root);
     this.scene.add(this.leadIndicator.root);
     this.scene.add(this.salvageVisuals.root);
+    this.scene.add(this.clueMarkers.root);
 
     this.rig = new CameraRig(this.renderer.camera);
     // 렌더 검증용: ?lookup 플래그 시 카메라를 아래로 내려 해수면·실루엣 확인
@@ -407,6 +412,36 @@ export class CanyonScene implements ManagedScene {
     } catch (error) {
       this.bossSpike = null;
       console.warn('[CanyonScene] 보스 스파이크 초기화 실패 — 기본 장면은 계속 작동합니다.', error);
+    }
+  }
+
+  /**
+   * production 보스 시각물 지연 장착 — `BossCoreView` 공급자가 처음으로
+   * 비-null 뷰를 준 프레임에 1회 장착한다 (INT-CORE-022 소비 마감).
+   *
+   *  - 위치는 월드 배치 정본 `world/bossPlacement`의 스폰 포즈를 **읽기만**
+   *    한다 (묘화 위치 — 인계표 §3 렌더 경계). 자체 순찰·이동 발명 없음:
+   *    보스 포즈 read model이 계약에 없으므로 스폰 포즈 고정이 정직한
+   *    표현이다 (이동 params는 승인 대기 null — 보스 이동 unwired).
+   *  - 상태(phase·telegraph·weakPointOpen·defeated·피격)는 전부
+   *    `applyCoreView`·공식 이벤트로만 구동된다. autoDemo 없음, 검수 키
+   *    6/7 없음 (fixture 전용 — mountBossSpikeIfRequested 격리).
+   */
+  private mountProductionBossSpike(): void {
+    try {
+      const staticSpawnPose: BossMotionStyle = {
+        update: (_deltaSeconds: number, root: THREE.Group): void => {
+          root.position.set(
+            BOSS_PLACEMENT.spawnX, BOSS_PLACEMENT.spawnY, BOSS_PLACEMENT.spawnZ,
+          );
+          root.rotation.y = meshYawRadians(BOSS_PLACEMENT.headingRadians);
+        },
+      };
+      this.bossSpike = new BossSegmentSpike(staticSpawnPose, false);
+      this.scene.add(this.bossSpike.root);
+    } catch (error) {
+      this.bossSpike = null;
+      console.warn('[CanyonScene] 보스 시각물 장착 실패 — 기본 장면은 계속 작동합니다.', error);
     }
   }
 
@@ -633,7 +668,7 @@ export class CanyonScene implements ManagedScene {
       this.applyFloodingSeverity(payload.severity);
     });
     // 보스 통지 이벤트 — 발행 정본(bossPhaseChanged·bossWeakPointChanged·
-    // bossDefeated)을 표현으로만 매핑한다. 보스 시각물 미장착 시 무시.
+    // bossDefeated·bossHit)을 표현으로만 매핑한다. 보스 시각물 미장착 시 무시.
     this.unsubscribeBossEvents.forEach((unsubscribe) => unsubscribe());
     this.unsubscribeBossEvents.length = 0;
     this.unsubscribeBossEvents.push(
@@ -642,6 +677,17 @@ export class CanyonScene implements ManagedScene {
         this.bossSpike?.setWeakpointActive(active),
       ),
       bus.on('bossDefeated', () => this.bossSpike?.applyCoreViewDefeated()),
+      // 보스 피격 통지(INT-CORE-022) — 명중 확정 1건당 1회 수신, kind로
+      // 약점/일반 플래시만 분기한다. 피해·배율 재계산 0 (통지 전용 소비).
+      // 검수 키 [6]/[7]은 ?bossSpike=1 fixture 경로에만 격리돼 있다.
+      bus.on('bossHit', ({ kind }) => {
+        if (kind === 'weakPoint') this.bossSpike?.notifyWeakpointHit();
+        else this.bossSpike?.notifyNormalHit();
+      }),
+      // 회수 확정 통지 — 단서 표식 제거 (kind 무관 targetId 대조만, 판정 0)
+      bus.on('interactionCollected', ({ targetId }) =>
+        this.clueMarkers.markCollected(targetId),
+      ),
     );
     // 조준경: 게임플레이가 발행한 조준 상태만 소비 — 렌더 독자 전환 없음
     this.unsubscribeAimMode?.();
@@ -800,6 +846,7 @@ export class CanyonScene implements ManagedScene {
     this.environment.update(deltaSeconds);
     this.torpedoVisuals.update(deltaSeconds, this.torpedoSource);
     this.salvageVisuals.update(deltaSeconds);
+    this.clueMarkers.update(deltaSeconds);
     this.periscope?.update(deltaSeconds);
     // 스프린트 B 오버레이 — 계약 read model → 화면 좌표 매핑만 (판정 없음)
     this.floodingXray?.update(deltaSeconds);
@@ -819,8 +866,11 @@ export class CanyonScene implements ManagedScene {
       this.renderer.camera.position.z,
     );
     this.xraySpike?.update(deltaSeconds);
-    // 보스 정본 읽기 모델 — 주입돼 있으면 매 프레임 매핑 (이벤트와 멱등 병행)
+    // 보스 정본 읽기 모델 — 주입돼 있으면 매 프레임 매핑 (이벤트와 멱등 병행).
+    // production에서는 공급자가 처음으로 비-null 뷰를 준 시점(보스 활성)에
+    // 시각물을 지연 장착한다 — fixture(?bossSpike=1)와 이중 장착 없음.
     const bossView = this.bossViewSource?.coreView() ?? null;
+    if (bossView && !this.bossSpike) this.mountProductionBossSpike();
     if (bossView && this.bossSpike) this.bossSpike.applyCoreView(bossView);
     this.bossSpike?.update(deltaSeconds);
   }
@@ -996,6 +1046,7 @@ export class CanyonScene implements ManagedScene {
     this.propWake.dispose();
     this.torpedoVisuals.dispose();
     this.salvageVisuals.dispose();
+    this.clueMarkers.dispose();
     this.leadIndicator.dispose();
     this.environment.dispose();
     this.submarine.dispose();
@@ -1189,9 +1240,10 @@ export class CanyonScene implements ManagedScene {
   /**
    * 소나 스코프 **표시 규칙 검수 fixture** — `?sonardemo=1` (production 아님).
    * 게임플레이 공급자가 없는 동안 계약 형태의 표본(`SonarScopeReadModel`)을
-   * 시간 순환으로 물려 blip 3종·번짐·거리 미상·핑·테두리 3색·소음을
-   * 브라우저에서 검수한다. 배지로 구분하며, 정식 공급자 주입 시(조립부
-   * attachSonarScopeSource) 이 경로는 사용하지 않는다.
+   * 시간 순환으로 물려 blip 7종(전투 3 + 탐색 4)·번짐·거리 미상·핑·테두리
+   * 3색·소음을 브라우저에서 검수한다. 탐색 4종은 공급 규칙(액티브 핑 노출
+   * 중에만)대로 핑 구간에만 표본을 물린다. 배지로 구분하며, 정식 공급자
+   * 주입 시(조립부 attachSonarScopeSource) 이 경로는 사용하지 않는다.
    */
   private mountSonarDemoIfRequested(): void {
     if (new URLSearchParams(window.location.search).get('sonardemo') !== '1') return;
@@ -1214,8 +1266,19 @@ export class CanyonScene implements ManagedScene {
             { targetId: 'demo-charge', kind: 'depthCharge', bearingRadians: -2.6,
               bearingSpreadRadians: 0.08, distanceMeters: 25, fromActivePing: false },
             ...(pingCycle < 3
-              ? [{ targetId: 'demo-ping', kind: 'ship' as const, bearingRadians: 1.6,
-                  bearingSpreadRadians: 0, distanceMeters: 80, fromActivePing: true }]
+              ? [
+                  { targetId: 'demo-ping', kind: 'ship' as const, bearingRadians: 1.6,
+                    bearingSpreadRadians: 0, distanceMeters: 80, fromActivePing: true },
+                  // 탐색 4종 — 계약 공급 규칙대로 액티브 핑 노출 중에만
+                  { targetId: 'demo-gold', kind: 'goldCache' as const, bearingRadians: 0.2,
+                    bearingSpreadRadians: 0, distanceMeters: 95, fromActivePing: true },
+                  { targetId: 'demo-salvage', kind: 'salvage' as const, bearingRadians: -0.7,
+                    bearingSpreadRadians: 0, distanceMeters: 55, fromActivePing: true },
+                  { targetId: 'demo-clue', kind: 'clue' as const, bearingRadians: 3.0,
+                    bearingSpreadRadians: 0, distanceMeters: 70, fromActivePing: true },
+                  { targetId: 'demo-deep', kind: 'deepSite' as const, bearingRadians: -1.9,
+                    bearingSpreadRadians: 0, distanceMeters: 110, fromActivePing: true },
+                ]
               : []),
           ],
           activePingRemainingSeconds: pingCycle < 3 ? 3 - pingCycle : 0,

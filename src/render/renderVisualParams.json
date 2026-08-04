@@ -52,6 +52,11 @@
     "contactColor": "#9fb4ba",
     "blipTorpedoColor": "#e0985a",
     "blipDepthChargeColor": "#e6d36a",
+    "blipGoldCacheColor": "#c9b168",
+    "blipSalvageColor": "#a9bd8f",
+    "blipClueColor": "#8fc7d8",
+    "blipDeepSiteColor": "#a89ed0",
+    "explorationPulseSeconds": 1.8,
     "pingCooldownDisplayCapSeconds": 10,
     "noiseRingColor": "#7fd8cf"
   },
