@@ -150,9 +150,18 @@ function guardSpawnWiring() {
   const location = scan((line) =>
     /attachLocationStrategy\(\s*(?!null)/.test(line) && !/^\s*[/*]/.test(line),
   );
-  const factory = scan((line) =>
-    /attachFactory\(\s*createProductionDestroyerAIFactory\(/.test(line),
-  );
+  // 줄 단위로 보면 `attachFactory(\n  createProductionDestroyerAIFactory(...)`
+  // 처럼 포매터가 인자를 다음 줄로 내린 경우를 놓친다 — 실제로 배선돼 있는데
+  // 미연결로 보고하는 거짓 음성이 된다. 파일 전체를 이어 붙여 검사한다.
+  const factory = [];
+  for (const { rel, lines } of SOURCES) {
+    const body = lines.join('\n');
+    const pattern = /attachFactory\(\s*createProductionDestroyerAIFactory\(/g;
+    let match;
+    while ((match = pattern.exec(body)) !== null) {
+      factory.push({ rel, line: body.slice(0, match.index).split('\n').length });
+    }
+  }
   const nullMotion = scan((line) => /create:\s*\(\)\s*=>\s*null/.test(line));
   return {
     locationStrategySites: location.map((h) => `${h.rel}:${h.line}`),

@@ -22,6 +22,7 @@ import { validateUpgradeCatalog } from '../economyMath';
 import { detectKeyboardLockSupport, KeyboardLockManager } from '../KeyboardLockManager';
 import { AudioCueRouter, type AudioCueId } from '../../audio/AudioCueRouter';
 import { WebAudioSystem } from '../../audio/WebAudioSystem';
+import { DepthChargeRunSystem } from '../../systems/combat/DepthChargeRunSystem';
 import { EventBus } from '../../core/EventBus';
 
 export interface CheckResult {
@@ -457,6 +458,138 @@ export async function runToolingVerificationAsync(): Promise<CheckResult[]> {
     router.trigger('baseDepart');
     router.dispose();
     return '무등록 큐 재생 요청이 던지지 않음';
+  });
+
+  /* ── 폭뢰 lifecycle 이벤트 (production 경로 단언) ────────────── */
+
+  /**
+   * 실제 `DepthChargeRunSystem`을 돌린다 — 이벤트를 손으로 emit하지 않는다.
+   * 손으로 쏘면 '버스가 동작한다'만 확인될 뿐, 판정 경로가 실제로 발행하는지는
+   * 검증되지 않는다.
+   */
+  const runDepthCharge = (): {
+    system: DepthChargeRunSystem;
+    bus: EventBus;
+    entered: { id: number; fuseSeconds: number }[];
+    exploded: { id: number }[];
+  } => {
+    const bus = new EventBus();
+    const entered: { id: number; fuseSeconds: number }[] = [];
+    const exploded: { id: number }[] = [];
+    bus.on('depthChargeEnteredWater', (payload) => entered.push(payload));
+    bus.on('depthChargeExploded', (payload) => exploded.push(payload));
+    const system = new DepthChargeRunSystem(
+      { applyDamage: () => ({ outcome: 'applied', appliedDamage: 0, hull: null as never }) },
+      () => [],
+      3,
+      null,
+      null,
+    );
+    system.attachEventBus(bus);
+    return { system, bus, entered, exploded };
+  };
+
+  const dropRequest = {
+    attackerEntityId: 8000,
+    targetEntityId: -1,
+    worldX: 10,
+    worldY: 0,
+    worldZ: 20,
+    dropFromY: 12,
+    correlationId: 'atk-1',
+  };
+
+  await check('폭뢰: 입수 시 depthChargeEnteredWater 정확히 1회', async () => {
+    const { system, entered, exploded } = runDepthCharge();
+    system.drop(dropRequest);
+    assert(entered.length === 1, `입수 1회 기대 (실제 ${entered.length})`);
+    assert(entered[0]!.fuseSeconds === 3, `적용 신관이 실려야 합니다 (실제 ${entered[0]!.fuseSeconds})`);
+    // 아직 터지지 않았다 — 폭발음이 먼저 나면 리듬이 거짓이 된다.
+    assert(exploded.length === 0, `입수만으로 폭발 발행 금지 (실제 ${exploded.length})`);
+    return `입수 1회 · fuseSeconds=${entered[0]!.fuseSeconds} · 폭발 0회`;
+  });
+
+  await check('폭뢰: 폭발 시 depthChargeExploded 정확히 1회 (프레임 분할 무관)', async () => {
+    const { system, entered, exploded } = runDepthCharge();
+    system.drop(dropRequest);
+    // 신관 3초를 잘게 쪼개 돌린 뒤에도 발행은 1회여야 한다.
+    for (let i = 0; i < 40; i += 1) system.update(0.1);
+    assert(entered.length === 1, `입수는 여전히 1회 (실제 ${entered.length})`);
+    assert(exploded.length === 1, `폭발 1회 기대 (실제 ${exploded.length})`);
+    assert(exploded[0]!.id === entered[0]!.id, '입수·폭발 id가 같은 폭뢰를 가리켜야 합니다');
+    return `입수 1 · 폭발 1 · id 일치(${exploded[0]!.id})`;
+  });
+
+  await check('폭뢰: 신관 만료 전에는 폭발 발행 0회', async () => {
+    const { system, exploded } = runDepthCharge();
+    system.drop(dropRequest);
+    system.update(1.0);
+    system.update(1.0);
+    assert(exploded.length === 0, `신관 2/3 경과 시점 폭발 금지 (실제 ${exploded.length})`);
+    return '2.0s 경과 — 폭발 0회';
+  });
+
+  await check('폭뢰: 투하 거부(동시 상한·비유한 좌표)는 입수 발행 0회', async () => {
+    const { system, entered } = runDepthCharge();
+    system.attachCombatParams({ simultaneousLimit: 1 });
+    system.drop(dropRequest);
+    // 상한 초과 — 물에 들어가지 않았으므로 입수음이 나면 안 된다.
+    const rejected = system.drop({ ...dropRequest, correlationId: 'atk-2' });
+    assert(rejected === null, '동시 상한 초과는 투하 거부');
+    const invalid = system.drop({ ...dropRequest, worldX: Number.NaN, correlationId: 'atk-3' });
+    assert(invalid === null, '비유한 좌표는 투하 거부');
+    assert(entered.length === 1, `성립한 투하 1건만 발행 (실제 ${entered.length})`);
+    return '거부 2건 발행 0 · 성립 1건만 발행';
+  });
+
+  await check('폭뢰: 출항 리셋(제거 경로)은 폭발 발행 0회', async () => {
+    const { system, entered, exploded } = runDepthCharge();
+    system.drop(dropRequest);
+    system.update(1.0);
+    // 낙하 중 리셋 — 폭발이 아니라 제거다.
+    system.resetForNewSortie();
+    system.update(5.0);
+    assert(entered.length === 1, '입수는 리셋 전 1회 그대로');
+    assert(exploded.length === 0, `제거 경로에서 폭발 발행 금지 (실제 ${exploded.length})`);
+    return '리셋 후 폭발 0회 (터지지 않은 폭뢰의 폭발음 없음)';
+  });
+
+  await check('폭뢰: 사운드가 같은 이벤트를 소비 (자체 타이머 없음)', async () => {
+    const bus = new EventBus();
+    const cues: AudioCueId[] = [];
+    const router = new AudioCueRouter(new WebAudioSystem(), bus, (cue) => cues.push(cue));
+    const system = new DepthChargeRunSystem(
+      { applyDamage: () => ({ outcome: 'applied', appliedDamage: 0, hull: null as never }) },
+      () => [],
+      3,
+      null,
+      null,
+    );
+    system.attachEventBus(bus);
+    system.drop(dropRequest);
+    for (let i = 0; i < 40; i += 1) system.update(0.1);
+    router.dispose();
+    assert(
+      cues.join(',') === 'depthChargeSplash,depthChargeExplosion',
+      `큐 순서 불일치: ${cues.join(',')}`,
+    );
+    return '판정 발행 → 사운드 소비 (풍덩 → 폭발)';
+  });
+
+  await check('폭뢰: 버스 미연결이어도 판정은 동작 (이벤트는 통지 전용)', async () => {
+    const system = new DepthChargeRunSystem(
+      { applyDamage: () => ({ outcome: 'applied', appliedDamage: 0, hull: null as never }) },
+      () => [],
+      3,
+      null,
+      null,
+    );
+    // attachEventBus를 부르지 않는다 — 결정적 검증 경로와 동일한 조건.
+    const dropped = system.drop(dropRequest);
+    assert(dropped !== null, '버스 없이도 투하는 성립해야 합니다');
+    for (let i = 0; i < 40; i += 1) system.update(0.1);
+    assert(system.activeCount === 0, '버스 없이도 신관 만료·제거가 진행되어야 합니다');
+    return '버스 미연결 시 발행 0 · 판정 정상';
   });
 
   return results;

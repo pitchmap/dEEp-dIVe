@@ -89,6 +89,14 @@ export const EXCLUDED_PRESSURE_FIELDS = [
  * `unwired` 상태로 남는다.
  */
 export interface CombatParamsResult {
+  /**
+   * 패시브 소나 스코프에 낙하 중 폭뢰를 표시할지 (초기값 false).
+   *
+   * 소나 표시 정책이므로 C9 4블록과 달리 **미확정 null을 두지 않는다** —
+   * 표시/미표시 둘 중 하나는 반드시 정해져 있어야 하고, 기본은 '보여주지
+   * 않음'이다. 소비 측은 이 값이 false면 폭뢰를 스코프에 그리지 않는다.
+   */
+  readonly depthChargeOnPassiveScope: boolean;
   readonly hull: HullBaseParams | null;
   readonly depthCharge: DepthChargeDamageParams | null;
   readonly flooding: FloodingParams | null;
@@ -181,6 +189,27 @@ export function validateCombatParams(raw: unknown): CombatParamsResult {
   const track = (path: string, value: unknown): void => {
     if (value === null) pending.push(path);
   };
+
+  /* ── 소나 표시 정책 ───────────────────────────────────── */
+  // 키 자체가 없으면 거부한다 — 정책은 '미확정'으로 둘 수 없고, 누락을
+  // 조용히 false로 읽으면 정책이 바뀐 줄 모르고 지나간다.
+  const scopeEntry = raw['depthChargeOnPassiveScope'];
+  if (!isRecord(scopeEntry) || !('value' in scopeEntry)) {
+    throw new ParamValidationError(
+      COMBAT_FILE,
+      'depthChargeOnPassiveScope',
+      '{ "value": true|false } 가 필요합니다 (소나 표시 정책 — null 불가)',
+    );
+  }
+  const scopeValue = scopeEntry['value'];
+  if (typeof scopeValue !== 'boolean') {
+    throw new ParamValidationError(
+      COMBAT_FILE,
+      'depthChargeOnPassiveScope.value',
+      `true/false가 필요합니다 (받은 값: ${JSON.stringify(scopeValue)})`,
+    );
+  }
+  const depthChargeOnPassiveScope = scopeValue;
 
   /* ── 선체 ─────────────────────────────────────────────── */
   const hullBlock = requireBlock(raw, 'hull');
@@ -402,7 +431,14 @@ export function validateCombatParams(raw: unknown): CombatParamsResult {
     }
   }
 
-  return { hull, depthCharge, flooding, detectionTuning, pendingFields: pending };
+  return {
+    depthChargeOnPassiveScope,
+    hull,
+    depthCharge,
+    flooding,
+    detectionTuning,
+    pendingFields: pending,
+  };
 }
 
 /** C9 공식 수치가 전부 확정됐는가 (하나라도 null이면 false) */
