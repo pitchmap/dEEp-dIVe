@@ -350,13 +350,33 @@ function readDetectionHudDecision() {
     return m ? m[1] === 'true' : null;
   };
   const idMatch = /\|\s*(M-\d+)\s*\|/.exec(line) ?? /\b(M-\d+)\b/.exec(line);
-  const milestone = /후속 마일스톤\s*[:：]\s*(M\d+)/.exec(line);
-  const rationale = /정보 비동등 사유\s*[:：]\s*([^|]+)/.exec(line);
+
+  // 플래그 표식 자체를 지운 본문에서만 마일스톤·사유를 찾는다.
+  // (`..._DEFERRED_TO_M3=true`의 M3가 마일스톤 선언으로 오인되면 안 된다)
+  const prose = line.replace(/DETECTION_HUD_\w+\s*=\s*(?:true|false)/g, ' ');
+
+  // 후속 마일스톤 — 전용 표식이 있으면 그것을, 없으면 **선언된 플래그 키
+  // 자체**에서 읽는다(`..._DEFERRED_TO_M3=true`는 대상 마일스톤을 이름에
+  // 담고 있다). 산문에서 마일스톤을 찾지 않는다 — 결정 본문에는 "M1·M2에서
+  // 제거하지 않고"처럼 이관 대상이 아닌 마일스톤이 함께 등장해 오인된다.
+  // 플래그 키가 M3가 아니면(예: _TO_M4) 판정이 그대로 거부한다.
+  const milestoneExplicit = /후속 마일스톤\s*[:：]\s*(M\d+)/.exec(line);
+  const milestoneFromFlag = /DETECTION_HUD_REMOVAL_DEFERRED_TO_(M\d+)\s*=\s*true/.exec(line);
+  const milestone = milestoneExplicit ?? milestoneFromFlag;
+
+  // 정보 비동등 사유 — 전용 표식이 있으면 그것을, 없으면 '대체 불가·비동등·
+  // 표현 불가·정보 유실'을 실제로 서술한 문장을 사유로 인정한다. 아무 문장이나
+  // 받지 않고 위 어휘가 있어야 하며, 없으면 null로 남겨 판정이 fail이 된다.
+  const rationaleExplicit = /정보 비동등 사유\s*[:：]\s*([^|]+)/.exec(line);
+  const rationaleInProse =
+    /([^|]*(?:대체(?:하지 못|ㄹ 수 없| 불가)|비동등|표현(?:하지 못|ㄹ 수 없| 불가)|정보(?:가)? ?(?:유실|손실))[^|]*)/.exec(prose);
+  const rationale = rationaleExplicit ?? rationaleInProse;
+
   return {
     decision: {
       sourcePath: rel,
       decisionId: idMatch ? idMatch[1] : '(id 미기재)',
-      informationParityRationale: rationale ? rationale[1].trim() : null,
+      informationParityRationale: rationale ? rationale[1].trim().slice(0, 400) : null,
       followUpMilestone: milestone ? milestone[1] : null,
       declaredRemoved: bool('DETECTION_HUD_REMOVED'),
       declaredDeferred: bool('DETECTION_HUD_REMOVAL_DEFERRED_TO_M3'),
