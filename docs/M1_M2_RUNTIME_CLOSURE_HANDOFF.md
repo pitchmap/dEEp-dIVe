@@ -210,6 +210,28 @@ M3에서 다음 중 **하나를 결정**한다 — 이 단계에서는 어느 �
 2. 별도 탐지 상태 UI를 유지하되 전체 HUD 구조를 재설계
 3. SonarScope와 DetectionHud의 역할을 명확히 분리해 **둘 다 유지**
 
+#### 7-2-1. 동반 필수 조치 — BossHealthHud 레이아웃 앵커 [1·2안 공통]
+
+**`src/ui/BossHealthHud.ts`는 DetectionHud의 DOM 요소를 레이아웃 앵커로
+쓴다.** DetectionHud를 제거·통합하면 보스 체력 HUD가 **예외 없이 조용히**
+위로 이동한다 — 오류·경고가 나지 않으므로 회귀를 놓치기 쉽다.
+
+| 항목 | 현재 production 구현 |
+|---|---|
+| 앵커 요소 | `[data-ui-detection-hud]` (속성 부여: `src/ui/DetectionHud.ts`) |
+| 현재 배치 | `syncLayout()`이 앵커의 **실제 하단(`getBoundingClientRect().bottom`) + 12px**를 `top`에 넣는다 (고정 좌표 미사용 — `ResizeObserver`로 높이 변화 추종) |
+| 앵커 부재·높이 0 시 | **상단 12px 고정 폴백**(`TOP_MARGIN_PX`) — 예외를 던지지 않는다 |
+| 위험 | **무증상 레이아웃 회귀** — 보스 체력 HUD가 상단 중앙에서 위로 밀려 올라가거나 다른 HUD와 겹칠 수 있고, 콘솔·페이지 오류 0으로 통과한다 |
+
+따라서 M3에서 DetectionHud를 제거·통합하는 방식(1·2안)을 택하면 **같은 작업
+단위에서** ① 보스 체력 HUD의 **상단 중앙 배치를 유지할 대체 앵커를 함께
+결정**하고(예: 통합 후 남는 탐지 UI 요소 또는 새 앵커 속성) ② **production
+레이아웃 회귀를 실측 검증**해야 한다(겹침 0·화면 밖 잘림 0 — PR #18의 HUD
+교차 검사와 같은 기준). 3안(둘 다 유지)을 택하면 앵커는 그대로 유효하다.
+
+> 참고: `src/ui/PerformanceOverlay.ts`는 `[data-ui-economy-hud]`를 앵커로
+> 쓰므로 이 의존과 무관하다 — DetectionHud 앵커 소비자는 BossHealthHud뿐이다.
+
 ## 8. 역할별 Runtime Closure 배정 + 파일 소유표
 
 동시 작업 충돌 방지 원칙: **같은 파일을 두 역할이 수정하지 않는다.**
