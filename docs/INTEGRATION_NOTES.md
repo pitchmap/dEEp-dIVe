@@ -90,6 +90,20 @@
 
 ## 제안 목록
 
+### INT-CORE-023 — DetectionHud 정보 비동등 확정 · 제거 M3 공식 이관 (리드 결정 — production UI 무변경)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (base = dev `045b02f` — PR #18 통합 배선 병합 후) |
+| 배경 | 인계표 §7 원안은 "provider 연결 후 DetectionHud 제거"였다. PR #18로 **production SonarScope provider 연결이 완료**(Exit 14 wired 확인)돼 제거 조건 1~4단계가 충족됐고, 4단계 **정보 동등성 검토**를 수행했다 |
+| **정보 비동등 2건** | ① **`DetectionHudView.gauge`**(0~1 연속 피탐지 누적) — `SonarScopeReadModel.ringState`는 safe/searching/detected **3단계 이산값**이라 진행률 표현 불가. `noiseFactor`는 **플레이어 자신의 소음 출력**이며 피탐지 누적이 아니라 대체 불가 ② **`TrackingStateSource.trackedShips`**(entity별 patrol/alert/attack/lost) — `SonarBlip`에 추적 상태 필드가 없고 kind는 `ship`까지만 구분해 "어느 함선이 추격 중인가"를 표현 불가 |
+| 결정 | **M1·M2에서 제거하지 않는다 — DetectionHud 유지, M3(은신·탐지·적 AI 통합)로 공식 이관**(DECISIONS M-14). 제거되지 않은 상태를 제거 완료로 위장하지 않으며 이중 표시는 M3 결정까지 유지 |
+| Exit Criteria 개정 | 16번을 '단순 제거'에서 **'provider 연결 확인 → 정보 동등성 검토 → 동등 시 제거 / 비동등 시 유실 정보·후속 마일스톤 명시 + 리드 승인 이관'**으로 개정(인계표 §7). 이번 판정은 비동등이므로 **'이관 기록 완료'로 충족** |
+| M3 후속 조건 | ⓐ `SonarScopeReadModel` 계약 확장으로 연속 게이지·추적 상태 수용 / ⓑ 별도 탐지 UI 유지 + 전체 HUD 구조 재설계 / ⓒ SonarScope·DetectionHud 역할 분리 후 둘 다 유지 — **셋 중 하나를 M3에서 결정**하며 이 단계에서는 방식 결정·선행 구현을 하지 않는다. ⓐ·ⓑ(제거·통합) 선택 시 **`BossHealthHud`의 `[data-ui-detection-hud]` 앵커 교체 + 레이아웃 회귀 검증이 동반 필수**다 — 상세는 인계표 §7-2-1 |
+| 변경 범위 | **문서 전용.** `src/contracts/**`·`src/core/**`·`src/systems/**`·`src/render/**`·`src/ui/**`·`params/**` 변경 **0건** — DetectionHud 삭제·축소 0, SonarScope 확장 0, 신규 HUD 0, M3 기능 선행 구현 0 |
+| 상태 플래그 | `DETECTION_HUD_INFORMATION_PARITY=false` · `DETECTION_HUD_REMOVED=false` · `DETECTION_HUD_REMOVAL_DEFERRED_TO_M3=true`. **최종 게이트는 전부 false 유지**: `M1_EXIT_GATE_PASSED`·`M2_PROGRESS_GATE_PASSED`·`M1_M2_INTEGRATED_COMPLETE`·`M3_START_ALLOWED`. 파밍 blocker도 유지: `FARMING_REWARD_DATA_WIRED=false`·`FARMING_CAP_PRODUCTION_VERIFIED=false` |
+| 개발 리드 결정 | 승인 — 그래픽스는 이번 스프린트에 DetectionHud를 제거하지 않는다(§8 배정에서 제외). M3 착수는 별도 승인 사항이며 이 이관이 `M3_START_ALLOWED`를 올리지 않는다 |
+
 ### INT-GAME-018 — M1·M2 Runtime Closure 게임플레이 마감 (INT-CORE-022 이행)
 
 | 필드 | 내용 |
