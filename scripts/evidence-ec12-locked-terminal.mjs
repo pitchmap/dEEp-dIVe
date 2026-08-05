@@ -28,7 +28,8 @@ import {
   openSession, acquirePointerLock, pointerLockId, hasDebugHandle,
   writeEnvelope, printReport, projectRoot, sleep,
 } from './lib/evidence-harness.mjs';
-import { chooseNavigationInput, hasNewDamage, horizontalDistance } from './lib/evidence-navigation.mjs';
+import { chooseNavigationInput, hasNewDamage, horizontalDistance,
+  readCollectionCount, inferHeadingFromMovement } from './lib/evidence-navigation.mjs';
 
 // 판정식은 **한 벌만** 둔다 — 러너 안에 복제하지 않고 순수 모듈을 그대로 쓴다.
 // Node 22 type stripping으로 .ts를 직접 import한다(하네스도 같은 방식).
@@ -159,11 +160,25 @@ const probe = () =>
     const d = globalThis.__deepDiveDebug;
     const ev = globalThis.__ec12 ?? { counts: {}, order: [], lockChanges: [], hullEvents: [] };
     // 관측 API 형태가 역할별로 달라 방어적으로 읽는다 — 어떤 경로로도 쓰지 않는다.
+    // pose는 snapshot()→readModel()→pose()→직접 속성 순으로 읽고,
+    // **heading·forward를 버리지 않는다** — 예전 구현은 x/y/z만 남겨
+    // 이후 pose?.heading이 구조적으로 항상 undefined였다.
     const readPose = (src) => {
       if (!src) return null;
       try {
-        const v = typeof src === 'function' ? src() : (typeof src.pose === 'function' ? src.pose() : src);
-        return v && typeof v.x === 'number' ? { x: v.x, y: v.y ?? null, z: v.z } : null;
+        const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+        let v = src;
+        if (typeof src === 'function') v = src();
+        else if (typeof src.snapshot === 'function') v = src.snapshot();
+        else if (typeof src.readModel === 'function') v = src.readModel();
+        else if (typeof src.pose === 'function') v = src.pose();
+        if (!v || typeof v.x !== 'number') return null;
+        const fwd = v.forward ?? v.forwardVector ?? null;
+        return {
+          x: v.x, y: num(v.y), z: v.z,
+          headingRadians: num(v.headingRadians ?? v.heading ?? v.yaw ?? v.rotationY),
+          forwardX: num(fwd?.x), forwardZ: num(fwd?.z),
+        };
       } catch { return null; }
     };
     const pose = readPose(d?.pose);
@@ -184,9 +199,18 @@ const probe = () =>
       bossView: d?.runtimeClosure?.bossView ?? null,
       bossZone: (() => { try { return d?.runtimeClosure?.bossZone ?? d?.runtimeClosure?.bossPlacement ?? null; } catch { return null; } })(),
       bossSpawned: d?.runtimeClosure?.bossSpawned ?? null,
+      // heading 우선순위: 명시 heading/yaw → forward vector → camera.
+      // 이동 벡터 추정은 러너 쪽에서 직전 pose와 비교해 보강한다.
       heading: (() => {
-        try { const h = pose?.heading ?? d?.camera?.rotation?.y; return typeof h === 'number' ? h : null; }
-        catch { return null; }
+        try {
+          if (pose?.headingRadians !== null && pose?.headingRadians !== undefined) return pose.headingRadians;
+          if (pose?.forwardX !== null && pose?.forwardZ !== null
+              && pose?.forwardX !== undefined && pose?.forwardZ !== undefined) {
+            return Math.atan2(pose.forwardX, pose.forwardZ);
+          }
+          const c = d?.camera?.rotation?.y;
+          return typeof c === 'number' && Number.isFinite(c) ? c : null;
+        } catch { return null; }
       })(),
       counts: { ...ev.counts },
       order: [...ev.order],
@@ -233,6 +257,10 @@ try {
 
   // ── 프로필 선행조건: clues 3/3 **실측** ─────────────────────
   //   storageState가 로드됐다는 사실만으로 clues 3/3을 가정하지 않는다.
+  //   개수 판정은 순수 helper 한 벌만 쓴다 — 페이지 안에 같은 함수를 주입한다.
+  await page.evaluate((src) => {
+    globalThis.__readCollectionCount = new Function(`return (${src})`)();
+  }, readCollectionCount.toString());
   const clues = await page.evaluate(() => {
     try {
       const p = globalThis.__deepDiveDebug?.bossProgress;
@@ -240,7 +268,9 @@ try {
       // 관측 API 형태가 달라 방어적으로 읽되, **숫자가 아니면 null**로 둔다 —
       // 객체를 그대로 실어 "[object Object]/3" 같은 무의미한 진단을 남기지 않는다.
       const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-      const count = (v) => (Array.isArray(v) ? v.length : num(v));
+      // Set/Map도 개수로 인정한다 — 실제 collected는 Set이며, 배열·숫자만
+      // 지원하면 진짜 3/3에서도 null이 되어 거짓 차단이 난다.
+      const count = globalThis.__readCollectionCount;
       return {
         collected: count(rm?.collected) ?? count(rm?.clues) ?? count(rm?.collectedClueIds),
         required: num(rm?.required) ?? num(rm?.requiredClues),
@@ -357,21 +387,37 @@ try {
   } else {
     const navStartPose = start.player;
     const navBegan = Date.now();
+    let scanStep = 0;
+    let inferredHeading = null;
     while ((Date.now() - navBegan) / 1000 < NAV_SECONDS) {
       const target = readNavTarget(last);
+      const previousPose = last.player;
       const move = chooseNavigationInput({
-        player: last.player, target: target.pose, headingRadians: last.heading,
+        player: last.player, target: target.pose,
+        headingRadians: last.heading ?? inferredHeading,
+        scanStep,
       });
+      if (move.keys.length === 0 && move.mouseDx !== 0) scanStep += 1;
       if (move.keys.length > 0) {
         navInputs += 1;
         for (const k of move.keys) await page.keyboard.down(k);
         if (move.mouseDx !== 0) await page.mouse.move(move.mouseDx, 0);
         await sleep(1500);
         for (const k of move.keys) await page.keyboard.up(k).catch(() => {});
+      } else if (move.mouseDx !== 0) {
+        // sweep: 실제 마우스 회전 후 짧게 전진해 **이동 방향을 관측**한다.
+        await page.mouse.move(move.mouseDx, 0);
+        navInputs += 1;
+        await page.keyboard.down('KeyW');
+        await sleep(1200);
+        await page.keyboard.up('KeyW').catch(() => {});
       } else {
         await sleep(1500);
       }
       last = await probe();
+      // 관측된 실제 이동 벡터로 heading을 추정해 다음 회전을 정한다.
+      const moved = inferHeadingFromMovement(previousPose, last.player);
+      if (moved !== null) inferredHeading = moved;
       if (last.bossSpawned === true) { bossReached = true; break; }
       if (last.metaState !== 'SORTIE') break;
     }
@@ -429,7 +475,7 @@ try {
         const before = last;
         const target = readNavTarget(last);
         const move = chooseNavigationInput({
-          player: last.player, target: target.pose, headingRadians: last.heading,
+          player: last.player, target: target.pose, headingRadians: last.heading, scanStep: nudges,
         });
         const usedKeys = move.keys.length > 0 ? move.keys : ['KeyW'];
         for (const k of usedKeys) await page.keyboard.down(k);
@@ -438,7 +484,8 @@ try {
         // 보정 후 **전부 해제** — 보정을 회피 기동으로 만들지 않는다.
         for (const k of MOVE_KEYS) await page.keyboard.up(k).catch(() => {});
         const damageBeforeWait = last.counts.hullDamaged ?? 0;
-        await sleep(3000);
+        const OBSERVATION_WINDOW_MS = 3000;
+        await sleep(OBSERVATION_WINDOW_MS);
         const afterNudge = await probe();
         nudges += 1;
         nudgeLog.push({
@@ -451,7 +498,10 @@ try {
           keys: usedKeys,
           durationMs: 1500,
           idleSecondsBefore: Math.round(idleSeconds),
-          damagedWithin30s: (afterNudge.counts.hullDamaged ?? 0) > damageBeforeWait,
+          // 필드명과 실제 대기 시간을 일치시킨다 — 3초만 기다리면서
+          // 이름에 30초라고 적으면 사실과 다른 기록이 된다.
+          observationWindowMs: OBSERVATION_WINDOW_MS,
+          damagedWithinObservationWindow: (afterNudge.counts.hullDamaged ?? 0) > damageBeforeWait,
         });
         last = afterNudge;
         lastDamageAt = Date.now();

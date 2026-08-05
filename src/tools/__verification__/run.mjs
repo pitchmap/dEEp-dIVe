@@ -676,7 +676,7 @@ const runGuard = (cwd, args = []) =>
   results.push({
     name: 'damage: nudge 기록에 sequence·pose·거리·키·피해 여부 포함',
     passed: ['sequence', 'startPose', 'endPose', 'bossPose', 'distance', 'keys',
-      'idleSecondsBefore', 'damagedWithin30s'].every((k) => runnerSrc.includes(`${k}:`)),
+      'idleSecondsBefore', 'damagedWithinObservationWindow'].every((k) => runnerSrc.includes(`${k}:`)),
     detail: 'nudge마다 진단을 남긴다',
   });
 
@@ -759,6 +759,139 @@ const runGuard = (cwd, args = []) =>
     })(),
     detail: '거리·깊이에 따라 키만 고르고 목표 반경 안에서는 정지',
   });
+}
+
+// ── Final Static Correctness Closure 테스트 (§9) ───────────────
+{
+  const { readFileSync } = await import('node:fs');
+  const { readCollectionCount, inferHeadingFromMovement, chooseNavigationInput } =
+    await import('../../../scripts/lib/evidence-navigation.mjs');
+  const runnerSrc = readFileSync(
+    new URL('../../../scripts/evidence-ec12-locked-terminal.mjs', import.meta.url), 'utf8');
+
+  // 1~4. Set 형태 clue count
+  results.push({
+    name: 'clue count: Set size 3 → 3 · Set size 0 → 0',
+    passed: readCollectionCount(new Set(['a', 'b', 'c'])) === 3
+      && readCollectionCount(new Set()) === 0,
+    detail: '실제 bossProgress.collected는 Set이다',
+  });
+  results.push({
+    name: 'clue count: number·array·Map 지원',
+    passed: readCollectionCount(3) === 3
+      && readCollectionCount(['a', 'b', 'c']) === 3
+      && readCollectionCount(new Map([['a', 1], ['b', 2], ['c', 3]])) === 3,
+    detail: '세 형태 모두 3',
+  });
+  results.push({
+    name: 'clue count: 일반 객체·문자열·NaN/음수 size 거부',
+    passed: readCollectionCount({ a: 1 }) === null
+      && readCollectionCount('abc') === null
+      && readCollectionCount({ size: Number.NaN }) === null
+      && readCollectionCount({ size: -1 }) === null
+      && readCollectionCount(null) === null,
+    detail: '문자열 length·임의 객체를 개수로 오인하지 않는다',
+  });
+  results.push({
+    name: 'clue count: Set 3/3 + unlockedFlag=true → profile pass 조건 성립',
+    passed: (() => {
+      const collected = readCollectionCount(new Set(['c1', 'c2', 'c3']));
+      const required = 3;
+      const unlocked = true;
+      return collected !== null && required !== null && collected >= required && unlocked === true;
+    })(),
+    detail: '거짓 PROFILE_STATE_DOES_NOT_MATCH_PROVENANCE 방지',
+  });
+  results.push({
+    name: 'clue count: 러너가 helper 한 벌만 사용 (Array.isArray 분기 제거)',
+    passed: /globalThis\.__readCollectionCount/.test(runnerSrc)
+      && !/const count = \(v\) => \(Array\.isArray\(v\) \? v\.length : num\(v\)\)/.test(runnerSrc),
+    detail: '판정식 복제 없이 순수 helper 주입',
+  });
+
+  // 6~8. heading 관측·추정
+  results.push({
+    name: 'heading: pose가 headingRadians/yaw를 보존함',
+    passed: /headingRadians: num\(v\.headingRadians \?\? v\.heading \?\? v\.yaw \?\? v\.rotationY\)/.test(runnerSrc)
+      && !/pose\?\.heading \?\? d\?\.camera\?\.rotation\?\.y/.test(runnerSrc),
+    detail: 'x/y/z만 남겨 heading이 사라지던 경로 제거',
+  });
+  results.push({
+    name: 'heading: forward vector로 heading 계산',
+    passed: /Math\.atan2\(pose\.forwardX, pose\.forwardZ\)/.test(runnerSrc)
+      && /forwardX: num\(fwd\?\.x\)/.test(runnerSrc),
+    detail: '명시 heading 없으면 forward로 계산',
+  });
+  results.push({
+    name: 'heading: 이동 벡터 +Z → 0 근처 · -Z → π 근처',
+    passed: (() => {
+      const fwd = inferHeadingFromMovement({ x: 0, z: 0 }, { x: 0, z: 5 });
+      const back = inferHeadingFromMovement({ x: 0, z: 0 }, { x: 0, z: -5 });
+      const still = inferHeadingFromMovement({ x: 0, z: 0 }, { x: 0, z: 0.01 });
+      return Math.abs(fwd) < 1e-6 && Math.abs(Math.abs(back) - Math.PI) < 1e-6 && still === null;
+    })(),
+    detail: '미세 이동은 null (추정하지 않는다)',
+  });
+
+  // 9~10. unknown heading sweep · 반대 방향 회귀
+  results.push({
+    name: 'heading null → mouseDx가 0이 아니고 KeyW만 반복하지 않음',
+    passed: (() => {
+      const r0 = chooseNavigationInput({
+        player: { x: 0, y: 0, z: 0 }, target: { x: 0, y: 0, z: 43 }, headingRadians: null, scanStep: 0,
+      });
+      const r1 = chooseNavigationInput({
+        player: { x: 0, y: 0, z: 0 }, target: { x: 0, y: 0, z: 43 }, headingRadians: null, scanStep: 1,
+      });
+      return r0.mouseDx !== 0 && r1.mouseDx !== 0 && Math.sign(r0.mouseDx) !== Math.sign(r1.mouseDx)
+        && r0.keys.length === 0 && r1.keys.length === 0;
+    })(),
+    detail: '실제 마우스 sweep으로 방향 탐색',
+  });
+  results.push({
+    name: '회귀: 목표 z=+43인데 반대(-z)로 향하면 KeyW 반복 대신 회전',
+    passed: (() => {
+      // 실측 재현 — 목표는 +z인데 heading이 -z(π)를 향한 상태.
+      const r = chooseNavigationInput({
+        player: { x: 0, y: 0, z: -12 }, target: { x: 0, y: 0, z: 43 }, headingRadians: Math.PI,
+      });
+      // 전진하지 않고 먼저 돌아서야 한다.
+      return !r.keys.includes('KeyW') && r.mouseDx !== 0;
+    })(),
+    detail: '목표가 후방(±90° 밖)이면 전진 전에 회전',
+  });
+  results.push({
+    name: '회귀: 목표가 전방이면 정상 전진',
+    passed: (() => {
+      const r = chooseNavigationInput({
+        player: { x: 0, y: 0, z: 0 }, target: { x: 0, y: 0, z: 43 }, headingRadians: 0,
+      });
+      return r.keys.includes('KeyW');
+    })(),
+    detail: '회전 규칙이 정상 전진을 막지 않는다',
+  });
+
+  // 11. nudge 관측창 명칭
+  results.push({
+    name: 'nudge: 관측창 필드명이 실제 대기 시간과 일치',
+    passed: /observationWindowMs: OBSERVATION_WINDOW_MS/.test(runnerSrc)
+      && /damagedWithinObservationWindow/.test(runnerSrc)
+      && !/damagedWithin30s/.test(runnerSrc),
+    detail: '3초 대기에 30s라고 적던 이름 제거',
+  });
+
+  // 12. 외부 candidate와 corrected-runner reproduced 분리
+  {
+    const doc = readFileSync(
+      new URL('../../../docs/M1_M2_EVIDENCE_RUNNERS.md', import.meta.url), 'utf8');
+    results.push({
+      name: '증적 분리: 외부 EC12 candidate와 corrected runner 재현 상태가 별개로 기록됨',
+      passed: /EC12_POINTER_LOCKED_PATH_VERIFIED_CANDIDATE=true/.test(doc)
+        && /CORRECTED_RUNNER_PRODUCTION_REPRODUCED=false/.test(doc)
+        && /BLOCKED_PROFILE_HANDOFF_NOT_AVAILABLE/.test(doc),
+      detail: '러너 미재현이 외부 production PASS를 뒤집지 않는다',
+    });
+  }
 }
 
 let failures = 0;

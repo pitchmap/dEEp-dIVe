@@ -332,6 +332,55 @@ clues 실측이 미달이면 **출항·Pointer Lock·20분 대기를 하지 않�
 `lastDamageSource`에서만 읽고, 없으면 `null`로 둔다. hull 상태는
 `snapshot()` → `readModel()` → 직접 속성 순으로 읽는다.
 
+## 증적 분리 — 외부 PASS와 러너 재현은 별개다
+
+```
+EVIDENCE_TYPE=HEADLESS_PRODUCTION_BROWSER
+EC12_POINTER_LOCKED_PATH=PASS
+EC12_POINTER_LOCKED_PATH_VERIFIED_CANDIDATE=true      ← 외부 production 증적 (유효)
+
+CORRECTED_RUNNER_PRODUCTION_REPRODUCED=false          ← 교정 러너 자체 재현
+CORRECTED_RUNNER_BLOCKER=PROFILE_HANDOFF_NOT_AVAILABLE
+```
+
+**교정 러너가 실행되지 않은 것과, 이미 확보된 EC12 production evidence의
+유효성은 별개다.** 러너 미재현을 이유로 외부 candidate를 `false`로 뒤집지
+않는다.
+
+이 환경에는 실제 clues 3/3 storageState가 없어
+**`BLOCKED_PROFILE_HANDOFF_NOT_AVAILABLE`** 이 정본이며,
+`RUNNER_FAILED`·`EC12_FAILED`·`HEADLESS_UNSUPPORTED`로 바꾸지 않는다.
+
+### fail-closed 동작은 검증됐다
+
+프로필이 없을 때 러너는 **false PASS를 만들지 않는다** — 실측으로 확인:
+
+```
+profile 미달 → 출항 0 · Pointer Lock 0 · navigation 0 · combat 대기 0
+candidate=no
+```
+
+### Set 형태 clue count (거짓 차단 교정)
+
+실제 `bossProgress.collected`는 **`Set`**(관측 시 size 0)이다. 배열·숫자만
+지원하면 진짜 3/3 프로필에서도 `collected=null`이 되어
+`PROFILE_STATE_DOES_NOT_MATCH_PROVENANCE`로 **거짓 차단**된다.
+`readCollectionCount()`가 number·array·`Set`·`Map`을 모두 읽고, 문자열 `length`나
+임의 객체·`NaN`·음수 `size`는 **거부**한다.
+
+### heading 미관측 시 sweep (거짓 차단 교정)
+
+이전 구현은 `pose`에서 x/y/z만 남겨 `heading`이 **구조적으로 항상 undefined**
+였고, `chooseNavigationInput()`은 heading이 없으면 `KeyW`만 반환했다. 그래서
+목표가 뒤에 있어도 영원히 반대로 전진했다 — 실측에서 목표 `z=+43`인데
+`z=−12`로 이동한 뒤 경계에서 멈췄다.
+
+교정: pose가 `headingRadians`/`yaw`/`forward`를 보존하고, heading 우선순위는
+**명시 heading → forward vector → camera → 실제 이동 벡터 추정 → 마우스 sweep**
+이다. heading을 모르면 `mouseDx`가 0이 아닌 sweep을 반환하고, 짧은 전진의
+이동 벡터로 heading을 추정해 다음 회전을 정한다. 목표가 후방(±90° 밖)이면
+전진하지 않고 먼저 돌아선다.
+
 ## 금지 사항 준수
 
 내부 상태 주입 0 — 좌표·체력·재화·장비·업그레이드·boss hull·약점·spawn·save
