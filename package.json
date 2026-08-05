@@ -23,7 +23,10 @@
     "verify:sprint-b": "node scripts/verify-sprint-b.mjs",
     "verify:sprint-c": "node scripts/verify-sprint-c.mjs",
     "verify:runtime-closure": "node scripts/verify-runtime-closure.mjs",
-    "verify:closure-browser": "node scripts/runtime-closure-browser.mjs"
+    "verify:closure-browser": "node scripts/runtime-closure-browser.mjs",
+    "evidence:ec12": "node scripts/evidence-ec12-debrief.mjs",
+    "evidence:boss": "node scripts/evidence-boss-closure.mjs",
+    "evidence:ec12-locked": "node scripts/evidence-ec12-locked-terminal.mjs"
   },
   "dependencies": {
     "three": "^0.185.1"

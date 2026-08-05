@@ -18,3 +18,8 @@ dist/
 # 로그
 npm-debug.log*
 *.log
+
+# 실행 증적 — evidence 러너 결과·스크린샷은 저장소에 넣지 않는다.
+# 저장소에는 러너와 검증 코드만 두고, 결과는 실행할 때마다 재생성한다
+# (docs/M1_M2_EVIDENCE_RUNNERS.md §결과 파일).
+scratchpad/
