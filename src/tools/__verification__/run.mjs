@@ -219,6 +219,90 @@ const runGuard = (cwd, args = []) =>
   });
 }
 
+// ── EC12 locked-path 판정 자체 테스트 (§7) ──────────────────────
+{
+  const { judgeEc12LockedPath } = await import('../evidenceSchema.ts');
+  const PASSING = {
+    urlQuery: '', fixtureLoaded: false, lockAfterCanvasClick: 'game-canvas',
+    hullDamagedCount: 7, playerDestroyed: 1, sortieFailed: 1,
+    lockBeforeLethal: 'game-canvas', lockAfterDebrief: null,
+    resumeOverlayVisible: false, aiming: false,
+    confirmClickTrusted: true, confirmClickTarget: 'BUTTON',
+    reachedBase: true, settlementCount: 1, saveRequestedCount: 1, errorCount: 0,
+  };
+  results.push({
+    name: 'EC12 판정: Phase C 전체 조건 충족 시 PASS',
+    passed: judgeEc12LockedPath(PASSING).status === 'pass',
+    detail: '14개 조건 전부 충족',
+  });
+  const notPass = (label, mutate, wanted) => {
+    const v = judgeEc12LockedPath({ ...PASSING, ...mutate });
+    results.push({
+      name: `EC12 판정: ${label}`,
+      passed: v.status === wanted && v.status !== 'pass',
+      detail: `status=${v.status} (${wanted} 기대) · 미충족=${v.unmet.length}건`,
+    });
+  };
+  // boss 미생성 = 선행조건 blocked (EC12_FAILED로 적지 않는다)
+  notPass('boss 미생성·피해 0 → precondition blocked',
+    { hullDamagedCount: 0, playerDestroyed: 0, sortieFailed: 0, lockAfterDebrief: 'game-canvas', reachedBase: false, settlementCount: 0, saveRequestedCount: 0 },
+    'blocked');
+  notPass('실제 DEBRIEF 미도달 → PASS 아님', { reachedBase: false }, 'fail');
+  notPass('Pointer Lock null만으로는 PASS 아님 (피해 0)',
+    { hullDamagedCount: 0, playerDestroyed: 0 }, 'blocked');
+  notPass('trusted 아닌 클릭 → PASS 아님', { confirmClickTrusted: false }, 'fail');
+  notPass('클릭 대상이 BUTTON이 아니면 PASS 아님', { confirmClickTarget: 'CANVAS' }, 'fail');
+  notPass('settlement 2회 → PASS 아님', { settlementCount: 2 }, 'fail');
+  notPass('save 0회 → PASS 아님', { saveRequestedCount: 0 }, 'fail');
+  notPass('오류 1건이라도 있으면 PASS 아님', { errorCount: 1 }, 'fail');
+  notPass('치명 피해 직전 잠금이 canvas가 아니면 PASS 아님', { lockBeforeLethal: null }, 'fail');
+  notPass('DEBRIEF 후 잠금 잔류 → PASS 아님', { lockAfterDebrief: 'game-canvas' }, 'fail');
+  notPass('resume overlay 표시 → PASS 아님', { resumeOverlayVisible: true }, 'fail');
+  notPass('쿼리 진입 → PASS 아님', { urlQuery: '?x=1' }, 'fail');
+  notPass('fixture 장착 → PASS 아님', { fixtureLoaded: true }, 'fail');
+}
+
+// ── 러너가 존재하지 않는 이벤트 이름을 쓰지 않는가 ──────────────
+{
+  const { readFileSync } = await import('node:fs');
+  const contract = readFileSync(new URL('../../contracts/events.ts', import.meta.url), 'utf8');
+  const declared = new Set(
+    [...contract.matchAll(/^\s{2}([a-z][A-Za-z0-9]*)\??:/gm)].map((m) => m[1]),
+  );
+  const runners = [
+    'evidence-ec12-locked-terminal.mjs',
+    'evidence-ec12-debrief.mjs',
+    'evidence-boss-closure.mjs',
+  ];
+  const bogus = [];
+  for (const file of runners) {
+    const src = readFileSync(new URL(`../../../scripts/${file}`, import.meta.url), 'utf8');
+    // `bus.on('name'` 형태의 구독만 검사한다.
+    for (const m of src.matchAll(/bus\.on\(\s*'([A-Za-z0-9]+)'/g)) {
+      if (!declared.has(m[1])) bogus.push(`${file}:${m[1]}`);
+    }
+    // 배열로 나열한 구독 목록도 검사한다.
+    for (const list of src.matchAll(/for \(const \w+ of \[([^\]]+)\]\)/g)) {
+      for (const lit of list[1].matchAll(/'([A-Za-z0-9]+)'/g)) {
+        if (!declared.has(lit[1])) bogus.push(`${file}:${lit[1]}`);
+      }
+    }
+  }
+  results.push({
+    name: '러너가 계약에 없는 이벤트 이름을 구독하지 않음 (playerDamaged 등)',
+    passed: bogus.length === 0,
+    detail: bogus.length === 0
+      ? `구독 이름 전부 src/contracts/events.ts에 실재 (계약 ${declared.size}종 대조)`
+      : `계약에 없는 이름: ${bogus.join(', ')}`,
+  });
+  results.push({
+    name: "러너에 'playerDamaged' 사용 0건",
+    passed: !runners.some((f) =>
+      readFileSync(new URL(`../../../scripts/${f}`, import.meta.url), 'utf8').includes('playerDamaged')),
+    detail: 'playerDamaged는 production 이벤트 계약에 존재하지 않는다',
+  });
+}
+
 let failures = 0;
 for (const { name, passed, detail } of results) {
   if (!passed) failures += 1;

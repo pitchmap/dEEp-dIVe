@@ -58,14 +58,18 @@ async function attachObservers() {
     globalThis.__ev = { log, counts, phases, telegraphs };
     const bump = (n) => (counts[n] = (counts[n] ?? 0) + 1);
     for (const name of [
+      // 계약(src/contracts/events.ts)에 실재하는 이름만 구독한다 —
+      // 없는 이름은 영원히 0건이 나와 '발생하지 않았다'로 오독된다.
       'metaStateChanged', 'sortieEnded', 'saveRequested', 'bossDefeated',
-      'bossHit', 'bossSpawned', 'interactionCollected', 'torpedoFired',
-      'sortieFailed', 'lootCollected',
+      'bossHit', 'interactionCollected', 'torpedoFired',
+      'sortieFailed', 'lootDropped', 'hullDamaged', 'bossWeakPointChanged',
     ]) {
       dbg.bus.on(name, (p) => { bump(name); log.push({ name, p }); });
     }
     dbg.bus.on('bossPhaseChanged', (p) => { bump('bossPhaseChanged'); phases.push(p?.phase); });
-    dbg.bus.on('bossTelegraphStarted', (p) => telegraphs.push({ kind: p?.kind, at: 'start' }));
+    // telegraph 전용 이벤트는 계약에 없다 — 약점 개방 전이를 관측 대용으로
+    // 쓰되, 이것이 telegraph 계측 자체는 아님을 판정문에 명시한다.
+    dbg.bus.on('bossWeakPointChanged', (p) => telegraphs.push({ active: p?.active ?? null }));
     return true;
   });
 }
@@ -78,6 +82,8 @@ const snap = () =>
     return {
       metaState: meta?.state ?? meta?.metaState ?? null,
       wallet: dbg?.economy?.wallet ? { ...dbg.economy.wallet } : null,
+      // bossSpawned는 이벤트가 아니라 runtimeClosure 읽기 전용 상태다.
+      bossSpawned: (() => { try { return dbg?.runtimeClosure?.bossSpawned ?? null; } catch { return null; } })(),
       counts: { ...ev.counts },
       phases: [...ev.phases],
       telegraphs: [...ev.telegraphs],
@@ -150,14 +156,14 @@ try {
     { observed: { interactionCollected: mid.counts.interactionCollected ?? 0 }, expected: { interactionCollected: 3 } });
 
   // ── EC9 보스 hull·phase ─────────────────────────────────────
-  const bossSeen = (mid.counts.bossSpawned ?? 0) > 0;
+  const bossSeen = mid.bossSpawned === true;
   add('EC9', '보스 hull 12 → 7(phase2) → 2(phase3) → 0(격파), 약점 개방마다 1발',
     bossSeen ? 'notRun' : 'blocked',
     bossSeen
       ? `보스는 spawn됐으나 중어뢰 3발 실측을 완주하지 않았다 (bossHit=${mid.counts.bossHit ?? 0}) — ` +
         'boss hull 직접 변경·bossHit 직접 발행을 쓰지 않으므로 미완주를 pass로 올리지 않는다'
       : '단서 3/3 미달로 보스 구역에 진입하지 못했다 — 강제 spawn을 쓰지 않는다',
-    { observed: { bossSpawned: mid.counts.bossSpawned ?? 0, bossHit: mid.counts.bossHit ?? 0 } });
+    { observed: { bossSpawned: mid.bossSpawned, bossHit: mid.counts.bossHit ?? 0 } });
 
   add('EC9-phase', 'phase 1→2 정확히 1회 · 2→3 정확히 1회 · 역행 0 · 중복 0',
     mid.phases.length === 0 ? 'blocked' : 'notRun',

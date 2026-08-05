@@ -50,12 +50,45 @@ async function attachObservers() {
     const counts = {};
     const order = [];
     const lockChanges = [];
-    globalThis.__ec12 = { counts, order, lockChanges };
+    const hullEvents = [];
+    globalThis.__ec12 = { counts, order, lockChanges, hullEvents };
     const bump = (n) => (counts[n] = (counts[n] ?? 0) + 1);
-    for (const n of ['metaStateChanged', 'sortieEnded', 'saveRequested', 'sortieFailed',
-                     'playerDestroyed', 'destroyed', 'bossDefeated', 'depthChargeDetonated']) {
+
+    // **계약(src/contracts/events.ts)에 실재하는 이름만 구독한다.**
+    // 존재하지 않는 이름을 구독하면 영원히 0건이 나오고, 그 0을 '피격이
+    // 성립하지 않는다'는 결론으로 오독하게 된다 — Phase B가 정확히 그랬다.
+    for (const n of ['metaStateChanged', 'sortieEnded', 'saveRequested',
+                     'sortieFailed', 'playerDestroyed', 'bossDefeated', 'lootDropped']) {
       dbg.bus.on(n, (p) => { bump(n); order.push(n === 'metaStateChanged' ? `meta:${p?.next}` : n); });
     }
+
+    // hullDamaged — 실제 피해 정본. 매 건의 맥락을 함께 남긴다.
+    const readPose = (src) => {
+      try {
+        const v = typeof src === 'function' ? src() : (typeof src?.pose === 'function' ? src.pose() : src);
+        return v && typeof v.x === 'number' ? { x: v.x, y: v.y ?? null, z: v.z } : null;
+      } catch { return null; }
+    };
+    dbg.bus.on('hullDamaged', (p) => {
+      bump('hullDamaged');
+      const player = readPose(dbg.pose);
+      const bossView = (() => { try { return dbg.runtimeClosure?.bossView ?? null; } catch { return null; } })();
+      const bossPos = bossView && typeof bossView.x === 'number' ? { x: bossView.x, z: bossView.z } : null;
+      const dist = player && bossPos
+        ? Math.hypot(player.x - bossPos.x, player.z - bossPos.z) : null;
+      hullEvents.push({
+        amount: p?.amount ?? null,
+        hullRemaining: p?.hullRemaining ?? null,
+        cause: p?.cause ?? null,
+        player,
+        bossPos,
+        distance: dist,
+        bossPhase: bossView?.phase ?? null,
+        pointerLockElement: document.pointerLockElement?.id ?? null,
+        metaState: dbg.meta?.state ?? dbg.meta?.metaState ?? null,
+      });
+    });
+
     // pointerlockchange는 **구독만** 한다 — 잠금을 걸거나 풀지 않는다.
     document.addEventListener('pointerlockchange', () => {
       lockChanges.push({ el: document.pointerLockElement?.id ?? null });
@@ -64,11 +97,26 @@ async function attachObservers() {
   });
 }
 
+/**
+ * 피해량 분류 — 직접적인 공격 종류 이벤트가 없으므로 **추론**임을 이름에
+ * 박아 둔다. 치명타에서 적용량이 남은 선체와 같으면 `applyDamage()`의 clamp
+ * (appliedDamage = min(rawDamage, currentHull)) 결과이므로 raw 공격 종류를
+ * 확정하지 않는다 — 12를 폭뢰 near로 분류하면 사실이 아닌 결론이 된다.
+ */
+export function classifyDamage(amount, hullRemaining, hullBefore) {
+  if (hullRemaining === 0 && hullBefore != null && amount === hullBefore) {
+    return 'LETHAL_ENEMY_WEAPON_DAMAGE_CLAMPED_TO_REMAINING_HULL';
+  }
+  if (amount === 18) return 'INFERRED_PROJECTILE_FROM_DAMAGE_18';
+  if (amount === 30) return 'INFERRED_RAM_FROM_DAMAGE_30';
+  return `INFERRED_UNKNOWN_FROM_DAMAGE_${amount}`;
+}
+
 /** 읽기 전용 관측 — 어떤 필드에도 쓰지 않는다 */
 const probe = () =>
   page.evaluate(() => {
     const d = globalThis.__deepDiveDebug;
-    const ev = globalThis.__ec12 ?? { counts: {}, order: [], lockChanges: [] };
+    const ev = globalThis.__ec12 ?? { counts: {}, order: [], lockChanges: [], hullEvents: [] };
     // 관측 API 형태가 역할별로 달라 방어적으로 읽는다 — 어떤 경로로도 쓰지 않는다.
     const readPose = (src) => {
       if (!src) return null;
@@ -97,6 +145,7 @@ const probe = () =>
       counts: { ...ev.counts },
       order: [...ev.order],
       lockChanges: [...ev.lockChanges],
+      hullEvents: [...(ev.hullEvents ?? [])],
     };
   });
 
@@ -150,24 +199,51 @@ try {
   const destroyed = (last.counts.playerDestroyed ?? last.counts.destroyed ?? 0) > 0;
   const failed = (last.counts.sortieFailed ?? 0) > 0;
 
-  // ── 패배 유도 결과 ──────────────────────────────────────────
+  // ── 선행조건 판정 (§3-4) ────────────────────────────────────
+  //   보스가 생성되지 않았다면 이 실행은 **러너 커버리지 부족**이다.
+  //   'headless에서 피해가 불가능하다'는 결론으로 일반화하지 않는다.
+  const bossReady = last.bossSpawned === true;
+  const hullEvents = last.hullEvents ?? [];
+  if (!bossReady && !reachedDebrief) {
+    add('EC12B-PRE', '러너 선행조건 — 단서 3/3 · boss spawn', 'blocked',
+      'BLOCKED_RUNNER_PRECONDITION_NOT_REACHED — bossSpawned=false. ' +
+      '이 실행은 단서 수집·보스 구역 항해를 수행하지 않아 플레이어가 시작 지점에 남았다. ' +
+      'production의 헤드리스 한계가 아니라 **러너 커버리지의 한계**다 — ' +
+      'HEADLESS_DAMAGE_UNSUPPORTED·EC12_FAILED·POINTER_LOCK_FIX_FAILED로 적지 않는다. ' +
+      `player=${JSON.stringify(last.player)} · hullDamaged=${hullEvents.length}건`,
+      { observed: { bossSpawned: last.bossSpawned, player: last.player, hullDamagedCount: hullEvents.length } });
+  } else {
+    add('EC12B-PRE', '러너 선행조건 — 단서 3/3 · boss spawn', 'pass',
+      `bossSpawned=${String(last.bossSpawned)} — 실제 production 프로필로 보스 구역 도달`,
+      { observed: { bossSpawned: last.bossSpawned } });
+  }
+
+  // ── 실제 피해·파괴 (§3-2 상세 기록) ─────────────────────────
+  const classified = hullEvents.map((e, i) => ({
+    ...e,
+    classification: classifyDamage(e.amount, e.hullRemaining, i === 0 ? null : hullEvents[i - 1].hullRemaining),
+  }));
   if (!reachedDebrief) {
-    // §8-3 진단 기록 — 강제 피해로 바꾸지 않는다.
-    add('EC12B-3', '실제 적 공격에 의한 파괴 → DEBRIEF 자동 진입', 'blocked',
-      `${HUNT_SECONDS}초 실제 플레이 동안 파괴가 발생하지 않았다 (강제 피해를 쓰지 않는다). ` +
+    add('EC12B-3', '실제 적 공격에 의한 파괴 → DEBRIEF 자동 진입',
+      bossReady ? 'blocked' : 'blocked',
+      (bossReady
+        ? `보스 구역에는 도달했으나 ${HUNT_SECONDS}초 안에 파괴에 이르지 못했다`
+        : 'BLOCKED_RUNNER_PRECONDITION_NOT_REACHED — 보스 미생성으로 피해 경로에 도달하지 못했다') +
+      ` (강제 피해를 쓰지 않는다). hullDamaged ${hullEvents.length}회 · ` +
       `hull ${JSON.stringify(hullStart)} → ${JSON.stringify(hullEnd)} · ` +
       `player=${JSON.stringify(last.player)} · bossSpawned=${String(last.bossSpawned)} · ` +
-      `bossView=${JSON.stringify(last.bossView)} · destroyed=${last.counts.playerDestroyed ?? 0} · ` +
-      `sortieFailed=${last.counts.sortieFailed ?? 0} · 관측 이벤트=[${last.order.join(' → ')}]. ` +
-      `헤드리스에서 실제 피격이 성립하지 않아 blocked로 남긴다`,
-      { observed: { hullStart, hullEnd, player: last.player, counts: last.counts } });
+      `playerDestroyed=${last.counts.playerDestroyed ?? 0} · sortieFailed=${last.counts.sortieFailed ?? 0} · ` +
+      `분류=${JSON.stringify(classified.map((c) => c.classification))} · 이벤트=[${last.order.join(' → ')}]`,
+      { observed: { hullEvents: classified, counts: last.counts, player: last.player } });
   } else {
+    const destroyedOnce = (last.counts.playerDestroyed ?? 0) === 1;
+    const failedOnce = (last.counts.sortieFailed ?? 0) === 1;
     add('EC12B-3', '실제 적 공격에 의한 파괴 → DEBRIEF 자동 진입',
-      destroyed && failed ? 'pass' : 'fail',
-      `destroyed=${last.counts.playerDestroyed ?? last.counts.destroyed ?? 0} · ` +
-      `sortieFailed=${last.counts.sortieFailed ?? 0} · hull ${JSON.stringify(hullStart)} → ${JSON.stringify(hullEnd)} · ` +
-      `전이=[${last.order.join(' → ')}]`,
-      { observed: { destroyed, failed, counts: last.counts } });
+      destroyedOnce && failedOnce && hullEvents.length > 0 ? 'pass' : 'fail',
+      `hullDamaged ${hullEvents.length}회 ${JSON.stringify(classified.map((c) => c.amount))} · ` +
+      `playerDestroyed=${last.counts.playerDestroyed ?? 0} · sortieFailed=${last.counts.sortieFailed ?? 0} · ` +
+      `분류=${JSON.stringify(classified.map((c) => c.classification))} · 이벤트=[${last.order.join(' → ')}]`,
+      { observed: { hullEvents: classified, counts: last.counts } });
   }
 
   // ── **핵심** DEBRIEF 관측 시점의 pointerLockElement ─────────

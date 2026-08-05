@@ -80,19 +80,88 @@ PR #23은 `terminalMetaUnlock` 플래그로 해제 출처를 표시해, 종료 �
 `blocked`로 남겼다 — §8-3 진단(hull·위치·boss 상태·이벤트 순서)을 결과 JSON에
 싣는다. 저장소에 sortie 시간 제한이 없어 타이머 종료 경로도 없다.
 
-**`EC12_POINTER_LOCKED_PATH_VERIFIED` candidate 아님.** 정본 플래그는 이 역할이
-바꾸지 않는다.
+### ⚠️ Phase B 결론 정정 (Phase C 증적으로 교정)
 
-## 다음에 할 일
+Phase B가 적었던 **"헤드리스에서 실제 피격이 성립하지 않는다"는 잘못된
+일반화**였다. 정확한 설명:
 
-locked DEBRIEF에 실제로 도달할 경로를 확보해야 한다 — 실제 피격이 성립하는
-환경(비헤드리스 실기기 수동 검증)이거나, 중어뢰를 확보해 실제 보스 격파까지
-완주하는 경로다. 어느 쪽이든 **강제 피해·강제 격파를 쓰지 않는다.**
+> Phase B 초기 러너는 단서 수집·보스 구역 항해를 수행하지 않아 player가 시작
+> 지점에 남았고 `bossSpawned=false`였다. 게다가 러너가 **`hullDamaged`를 아예
+> 구독하지 않았고**(계약에 없는 `destroyed` 등을 구독) 피해가 나도 0으로
+> 보였다. 따라서 당시 blocked는 production의 헤드리스 한계가 아니라
+> **runner coverage의 한계**였다.
+>
+> 실제 clues 3/3 production 프로필과 실제 항해를 사용하면 **headless
+> production browser에서도 보스 생성·피해·파괴·locked DEBRIEF가 모두
+> 성립한다** (Phase C).
 
-locked path가 **실제 pass**일 때만 검증기를 최종 활성화하고 기존 suite에
-연결한다(기존 assertion은 삭제·변경하지 않고 개수만 늘린다). 그때까지 PR은
-Draft로 두며 default CI에 production gate를 강제로 넣지 않는다 — 장시간
-production evidence 러너는 opt-in npm 명령으로만 유지한다.
+Phase A·B 당시 결과 자체는 역사적 사실이므로 삭제하지 않는다.
+
+## Phase C — EC12 locked defeat **PASS** (외부 production 증적)
+
+```
+EVIDENCE_TYPE=HEADLESS_PRODUCTION_BROWSER
+EC12_POINTER_LOCKED_PATH=PASS
+EC12_POINTER_LOCKED_PATH_VERIFIED_CANDIDATE=true
+```
+
+통합 관리자가 production browser에서 locked-defeat 경로를 완주했다.
+Playwright의 실제 keyboard/mouse API를 쓴 production browser 증적이며,
+DISPLAY·X11/Wayland·`/dev/input`·GPU seat가 없으므로 **물리 입력 증적이
+아니다** — `HEADED_MANUAL`·`PHYSICAL_INPUT`·`USER_MANUAL_INPUT`로 표기하지
+않는다.
+
+| 항목 | 값 |
+|---|---|
+| 전투 관측 | 629초 · `hullDamaged` **7회** (18·18·18·18·18·18·12) · 선체 120 → 0 |
+| 파괴 | `playerDestroyed` 1 · `sortieFailed` 1 · `destroyedByEntityId=7000` · `damageSource=enemyWeapon` |
+| Pointer Lock | 치명 직전 `game-canvas` → 파괴·실패·DEBRIEF 시점 **`null`** · 획득 1 + 해제 1 · 재잠금 0 |
+| UI | resume overlay 미표시 · `aiming=false` |
+| 확인 클릭 | `BUTTON "확인 (기지로)"` · mousedown/up/click 전부 `isTrusted=true` · DOM click 0 · `dispatchEvent` 0 |
+| 결과 | BASE 복귀 · `sortieEnded`/settlement/`saveRequested('settlement')` 각 **1** · 중복 0 · 오류 0 |
+
+**lethal amount 12 해석** — 마지막 `amount=12`는 남은 선체가 12였기 때문에
+`PlayerHullSystem.applyDamage()`의 적용량 clamp
+(`appliedDamage = min(rawDamage, currentHull)`)로 나온 값이다. **폭뢰 near
+12로 분류하지 않는다.** raw 공격이 projectile 18이었는지 ram 30이었는지는
+공격 종류의 직접 이벤트가 없어 확정하지 않고
+`LETHAL_ENEMY_WEAPON_DAMAGE_CLAMPED_TO_REMAINING_HULL`로 표기한다.
+
+**피해 분류는 반드시 `INFERRED_` 접두사를 붙인다** — 18 →
+`INFERRED_PROJECTILE_FROM_DAMAGE_18`, 30 → `INFERRED_RAM_FROM_DAMAGE_30`.
+공격 종류 이벤트가 없으므로 추론임을 이름에 박아 둔다.
+
+**trusted click 기준** — `page.mouse.move/down/up`으로만 누르고
+`elementFromPoint`가 `BUTTON`이며 세 이벤트 모두 `isTrusted=true`여야 한다.
+DOM `click()`·`dispatchEvent`·confirm command 직접 호출은 전부 0이어야 한다.
+
+**raw evidence는 통합 검증 worktree의 scratchpad에 보관되며 git에서 제외된다**
+(`.gitignore`의 `scratchpad/`). 이 저장소 worktree에서는 접근할 수 없어,
+위 수치는 통합 관리자 최종 보고를 외부 production 증적으로 인용한 것이다.
+
+## EC12와 나머지 EC는 분리한다
+
+EC12 PASS는 **EC9·EC10 phaseShift·EC11·EC13·EC17을 자동으로 PASS로 만들지
+않는다.** 각각 실제 보스전 완주가 필요하며 여전히 미검증이다.
+
+## 선행조건 미달 판정
+
+단서 3/3 또는 boss spawn을 확보하지 못한 실행은
+**`BLOCKED_RUNNER_PRECONDITION_NOT_REACHED`** 로 판정한다.
+`HEADLESS_DAMAGE_UNSUPPORTED`·`EC12_FAILED`·`POINTER_LOCK_FIX_FAILED`로
+적지 않는다 — 러너가 경로에 도달하지 못한 것과 production이 깨진 것은 다르다.
+
+## 장시간 러너 운용
+
+`evidence:ec12` · `evidence:ec12-locked` · `evidence:boss`는 **opt-in 명령**이며
+default CI에 넣지 않는다. `evidence:ec12-locked` 실행 조건:
+
+- 실제 production clues 3/3 프로필 필요
+- boss spawn 후 **정지 전략** 권장 (회피하지 않고 공격 범위에 머문다)
+- 무피해 90초 이상일 때만 실제 입력으로 위치 보정
+- 장시간 실행 가능 (Phase C 실측 629초)
+
+`DEEP_DIVE_EC12_HUNT_SECONDS`로 관측 시간을 늘릴 수 있다(기본 90).
 
 ## 금지 사항 준수
 

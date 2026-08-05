@@ -183,3 +183,84 @@ export function summarize(env: EvidenceEnvelope): EvidenceSummary {
     unsatisfied,
   };
 }
+
+/* ═══ EC12 locked-path PASS 판정 ═══════════════════════════════ */
+
+/**
+ * EC12 locked terminal transition 관측치. **14개 조건 전부**를 충족할 때만
+ * PASS다 — Pointer Lock이 null이라는 사실 하나로는 PASS가 아니고, DEBRIEF에
+ * 도달하지 못한 실행도 PASS가 아니다.
+ */
+export interface Ec12LockedObservation {
+  readonly urlQuery: string;
+  readonly fixtureLoaded: boolean;
+  /** 실제 canvas 클릭으로 얻은 잠금 대상 id */
+  readonly lockAfterCanvasClick: string | null;
+  /** 실제 production 적 피해 건수 (hullDamaged) */
+  readonly hullDamagedCount: number;
+  readonly playerDestroyed: number;
+  readonly sortieFailed: number;
+  /** 치명 피해 직전의 잠금 대상 */
+  readonly lockBeforeLethal: string | null;
+  /** DEBRIEF 이후의 잠금 대상 */
+  readonly lockAfterDebrief: string | null;
+  readonly resumeOverlayVisible: boolean;
+  readonly aiming: boolean;
+  /** 실제 신뢰 입력으로 BUTTON을 눌렀는가 */
+  readonly confirmClickTrusted: boolean;
+  readonly confirmClickTarget: string;
+  readonly reachedBase: boolean;
+  readonly settlementCount: number;
+  readonly saveRequestedCount: number;
+  readonly errorCount: number;
+}
+
+export interface Ec12Verdict {
+  readonly status: EvidenceStatus;
+  /** 충족하지 못한 조건 목록 — 비어야 PASS */
+  readonly unmet: readonly string[];
+  readonly detail: string;
+}
+
+/**
+ * `blocked`·`harness`·`manual`·`notRun`·`fail`은 충족 상태가 아니다.
+ * 조건을 하나라도 못 채우면 PASS를 내지 않는다.
+ */
+export function judgeEc12LockedPath(o: Ec12LockedObservation): Ec12Verdict {
+  const unmet: string[] = [];
+  if (o.urlQuery !== '') unmet.push(`urlQuery 비어 있지 않음(${o.urlQuery})`);
+  if (o.fixtureLoaded) unmet.push('fixtureLoaded=true');
+  if (o.lockAfterCanvasClick !== 'game-canvas') unmet.push('실제 canvas 클릭 잠금 미획득');
+  if (o.hullDamagedCount <= 0) unmet.push('실제 production 적 피해 0건');
+  if (o.playerDestroyed !== 1) unmet.push(`playerDestroyed=${o.playerDestroyed} (1이어야 함)`);
+  if (o.sortieFailed !== 1) unmet.push(`sortieFailed=${o.sortieFailed} (1이어야 함)`);
+  if (o.lockBeforeLethal !== 'game-canvas') unmet.push('치명 피해 직전 잠금이 canvas가 아님');
+  if (o.lockAfterDebrief !== null) unmet.push(`DEBRIEF 이후 잠금이 남음(${String(o.lockAfterDebrief)})`);
+  if (o.resumeOverlayVisible) unmet.push('resume overlay 표시됨');
+  if (o.aiming) unmet.push('aiming 잔류');
+  if (!o.confirmClickTrusted) unmet.push('확인 클릭이 trusted 입력이 아님');
+  if (o.confirmClickTarget !== 'BUTTON') unmet.push(`확인 클릭 대상이 BUTTON이 아님(${o.confirmClickTarget})`);
+  if (!o.reachedBase) unmet.push('BASE 미복귀');
+  if (o.settlementCount !== 1) unmet.push(`settlement=${o.settlementCount} (1이어야 함)`);
+  if (o.saveRequestedCount !== 1) unmet.push(`saveRequested=${o.saveRequestedCount} (1이어야 함)`);
+  if (o.errorCount !== 0) unmet.push(`오류 ${o.errorCount}건`);
+
+  if (unmet.length > 0) {
+    // 보스 미생성처럼 경로 자체에 도달하지 못한 경우는 러너 커버리지 문제다.
+    const precondition = o.hullDamagedCount === 0 && o.playerDestroyed === 0;
+    return {
+      status: precondition ? 'blocked' : 'fail',
+      unmet,
+      detail: precondition
+        ? `BLOCKED_RUNNER_PRECONDITION_NOT_REACHED — 미충족 ${unmet.length}건: ${unmet.join(' · ')}`
+        : `미충족 ${unmet.length}건: ${unmet.join(' · ')}`,
+    };
+  }
+  return {
+    status: 'pass',
+    unmet: [],
+    detail:
+      `EC12 locked terminal transition 14개 조건 전부 충족 — hullDamaged ${o.hullDamagedCount}회 · ` +
+      'lock game-canvas → null · trusted BUTTON click · BASE · settlement/save 각 1 · 오류 0',
+  };
+}

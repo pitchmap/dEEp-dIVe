@@ -70,7 +70,7 @@ async function attachCounters() {
       'saveRequested',
       'sortieFailed',
       'playerDestroyed',
-      'destroyed',
+      'hullDamaged',
     ]) {
       dbg.bus.on(name, (payload) => {
         counts[name] = (counts[name] ?? 0) + 1;
