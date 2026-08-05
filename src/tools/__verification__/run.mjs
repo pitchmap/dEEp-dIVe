@@ -579,6 +579,188 @@ const runGuard = (cwd, args = []) =>
   }
 }
 
+// ── Phase C Final Runner Path Correction 테스트 (§16) ──────────
+{
+  const { readFileSync } = await import('node:fs');
+  const { mkdtempSync, writeFileSync: wf, mkdirSync: md, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const nodePath = (await import('node:path')).default;
+  const { chooseNavigationInput, hasNewDamage, horizontalDistance } =
+    await import('../../../scripts/lib/evidence-navigation.mjs');
+  const { resolveEvidenceStorageState, HarnessStorageStateError, projectRoot } =
+    await import('../../../scripts/lib/evidence-harness.mjs');
+  const runnerSrc = readFileSync(
+    new URL('../../../scripts/evidence-ec12-locked-terminal.mjs', import.meta.url), 'utf8');
+
+  // 1~3. 프로필 미달 조기 종료 · combat timer 시작 순서
+  results.push({
+    name: 'nav: clues 미달 시 출항·잠금·대기 없이 즉시 종료',
+    passed: /if \(!cluesComplete\) \{/.test(runnerSrc)
+      && /프로필 선행조건 미달로 실행하지 않았다/.test(runnerSrc),
+    detail: 'blocked 항목을 채우고 envelope만 쓰고 끝낸다',
+  });
+  results.push({
+    name: 'nav: profile mismatch 시 20분 loop 진입 0',
+    passed: /PROFILE_STATE_DOES_NOT_MATCH_PROVENANCE/.test(runnerSrc)
+      && runnerSrc.indexOf('if (!cluesComplete)') < runnerSrc.indexOf('HUNT_SECONDS)'),
+    detail: '미달 분기가 combat loop보다 앞에 있다',
+  });
+  results.push({
+    name: 'nav: bossSpawned 전에는 combat timer를 시작하지 않음',
+    passed: /if \(bossReached\) \{\n    const combatBegan = Date\.now\(\);/.test(runnerSrc)
+      && /보스 생성 전 대기 시간은 1200초에 포함하지 않는다/.test(runnerSrc),
+    detail: 'combat timer가 bossReached 안에서만 시작',
+  });
+  results.push({
+    name: 'nav: navigation 성공 후 combat timer 시작',
+    passed: /bossReached = true; break;/.test(runnerSrc)
+      && runnerSrc.indexOf('EC12B-NAV') < runnerSrc.indexOf('const combatBegan'),
+    detail: 'NAV → bossReached → combat 순서',
+  });
+  results.push({
+    name: 'nav: timeout → BLOCKED_RUNNER_NAVIGATION_DID_NOT_REACH_BOSS_ZONE',
+    passed: /BLOCKED_RUNNER_NAVIGATION_DID_NOT_REACH_BOSS_ZONE/.test(runnerSrc)
+      && /HEADLESS_UNSUPPORTED·BOSS_SPAWN_BROKEN·EC12_FAILED로 일반화하지 않는다/.test(runnerSrc),
+    detail: 'nav 실패를 production 결함으로 일반화하지 않는다',
+  });
+  results.push({
+    name: 'nav: NAV_SECONDS 기본 300초 · combat과 분리',
+    passed: /DEEP_DIVE_EC12_NAV_SECONDS \?\? 300/.test(runnerSrc)
+      && /DEEP_DIVE_EC12_HUNT_SECONDS \?\? 1200/.test(runnerSrc),
+    detail: 'nav 300 / combat 1200',
+  });
+  results.push({
+    name: 'nav: bossSpawned=true에서 모든 이동 키 해제',
+    passed: /const MOVE_KEYS = \['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ControlLeft'\]/.test(runnerSrc)
+      && /if \(bossReached\) \{\n    for \(const k of MOVE_KEYS\) await page\.keyboard\.up\(k\)/.test(runnerSrc),
+    detail: '정지 전략 — 회피 기동 없음',
+  });
+
+  // 7~10. 신규 피해 count 추적
+  results.push({
+    name: 'damage: 누적 수가 0보다 큰지만 보는 방식 제거',
+    passed: !/const damaged = \(last\.counts\.hullDamaged \?\? 0\) > 0/.test(runnerSrc)
+      && /hasNewDamage\(previousDamageCount, currentDamageCount\)/.test(runnerSrc),
+    detail: '증가분으로만 판단한다',
+  });
+  results.push({
+    name: 'damage: 첫 피해 이후 count 변화 없으면 lastDamageAt 갱신 안 함',
+    passed: hasNewDamage(3, 3) === false && hasNewDamage(3, 2) === false,
+    detail: '동일·감소는 신규 피해가 아니다',
+  });
+  results.push({
+    name: 'damage: count 증가 시에만 신규 피해로 판정',
+    passed: hasNewDamage(3, 4) === true && hasNewDamage(0, 1) === true,
+    detail: '증가분 감지',
+  });
+  results.push({
+    name: 'damage: 연속 polling에서 nudge timer가 영구 차단되지 않음',
+    passed: (() => {
+      // 첫 피해 후 count가 고정된 채 폴링이 반복돼도 갱신이 일어나지 않아야
+      // idle 시간이 실제로 누적된다.
+      let prev = 1, refreshed = 0;
+      for (let i = 0; i < 50; i++) {
+        const cur = 1; // 신규 피해 없음
+        if (hasNewDamage(prev, cur)) { prev = cur; refreshed += 1; }
+      }
+      return refreshed === 0;
+    })(),
+    detail: '50회 폴링 동안 갱신 0회 → idle 타이머가 실제로 흐른다',
+  });
+  results.push({
+    name: 'damage: max nudge 안전장치',
+    passed: /DEEP_DIVE_EC12_MAX_NUDGES \?\? 10/.test(runnerSrc)
+      && /nudges < MAX_NUDGES/.test(runnerSrc),
+    detail: '무한 보정 방지',
+  });
+  results.push({
+    name: 'damage: nudge 기록에 sequence·pose·거리·키·피해 여부 포함',
+    passed: ['sequence', 'startPose', 'endPose', 'bossPose', 'distance', 'keys',
+      'idleSecondsBefore', 'damagedWithin30s'].every((k) => runnerSrc.includes(`${k}:`)),
+    detail: 'nudge마다 진단을 남긴다',
+  });
+
+  // 12~14. hull snapshot · cause 분리
+  results.push({
+    name: 'hull: snapshot()/readModel() 형태 지원',
+    passed: /typeof hullSrc\.snapshot === 'function'/.test(runnerSrc)
+      && /typeof hullSrc\.readModel === 'function'/.test(runnerSrc),
+    detail: '직접 속성만 읽지 않는다',
+  });
+  results.push({
+    name: 'hull: cause와 lastDamageSource 분리',
+    passed: /damageCause: p\?\.cause/.test(runnerSrc)
+      && /lastDamageSource: typeof hullState\?\.lastDamageSource === 'string'/.test(runnerSrc)
+      && !/lastDamageSource: p\?\.cause/.test(runnerSrc),
+    detail: "direct/near를 enemyWeapon으로 쓰지 않는다",
+  });
+
+  // 15. tracked 절대 경로 우회 방지
+  {
+    const dir = mkdtempSync(nodePath.join(tmpdir(), 'dd-nav-'));
+    const state = { cookies: [], origins: [{ origin: 'http://localhost:5211', localStorage: [] }] };
+    const PROV = { DEEP_DIVE_EVIDENCE_PROFILE_PROVENANCE: 'p' };
+    try {
+      // 저장소 밖 일반 파일 → 허용
+      const outside = nodePath.join(dir, 's.json');
+      wf(outside, JSON.stringify(state), 'utf8');
+      const okOutside = resolveEvidenceStorageState('http://localhost:5211/',
+        { DEEP_DIVE_EVIDENCE_STORAGE_STATE: outside, ...PROV });
+      // 저장소 내부 tracked 파일(절대 경로) → 거부
+      const trackedAbs = nodePath.join(projectRoot, 'package.json');
+      let trackedRejected = false;
+      try {
+        resolveEvidenceStorageState('http://localhost:5211/',
+          { DEEP_DIVE_EVIDENCE_STORAGE_STATE: trackedAbs, ...PROV });
+      } catch (e) { trackedRejected = e instanceof HarnessStorageStateError; }
+      // 저장소 내부 gitignored scratchpad → 허용
+      const scratch = nodePath.join(projectRoot, 'scratchpad', 'nav-test');
+      md(scratch, { recursive: true });
+      const ignored = nodePath.join(scratch, 's.json');
+      wf(ignored, JSON.stringify(state), 'utf8');
+      const okIgnored = resolveEvidenceStorageState('http://localhost:5211/',
+        { DEEP_DIVE_EVIDENCE_STORAGE_STATE: ignored, ...PROV });
+      rmSync(scratch, { recursive: true, force: true });
+
+      results.push({
+        name: 'storageState: 저장소 내부 tracked 파일을 절대 경로로 줘도 거부',
+        passed: trackedRejected,
+        detail: '상대 경로로 ls-files 조회',
+      });
+      results.push({
+        name: 'storageState: gitignored scratchpad·저장소 밖 파일은 허용',
+        passed: okIgnored.storageStateLoaded === true && okOutside.storageStateLoaded === true,
+        detail: 'untracked는 정상 경로',
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // 16~17. navigation이 좌표를 쓰지 않음 · boss 미생성 candidate=false
+  results.push({
+    name: 'nav: navigation 입력이 좌표를 쓰지 않음',
+    passed: !/pose\.x\s*=|position\.x\s*=|\.setPosition\(|teleport/i.test(runnerSrc)
+      && /chooseNavigationInput\(/.test(runnerSrc),
+    detail: 'read-only pose로 누를 키만 고른다',
+  });
+  results.push({
+    name: 'nav: chooseNavigationInput은 키 선택만 반환 (상태 변경 없음)',
+    passed: (() => {
+      const r = chooseNavigationInput({
+        player: { x: 0, y: 0, z: 0 }, target: { x: 0, y: -10, z: 50 }, headingRadians: 0,
+      });
+      const near = chooseNavigationInput({
+        player: { x: 0, y: 0, z: 0 }, target: { x: 0, y: 0, z: 6 }, headingRadians: 0,
+      });
+      return Array.isArray(r.keys) && r.keys.includes('KeyW') && r.keys.includes('ControlLeft')
+        && near.arrived === true && near.keys.length === 0
+        && horizontalDistance({ x: 0, y: 0, z: 0 }, { x: 3, y: 0, z: 4 }) === 5;
+    })(),
+    detail: '거리·깊이에 따라 키만 고르고 목표 반경 안에서는 정지',
+  });
+}
+
 let failures = 0;
 for (const { name, passed, detail } of results) {
   if (!passed) failures += 1;

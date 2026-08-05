@@ -279,6 +279,59 @@ scratchpad 아래 저장 · 파일 내용·cookie 값을 PR 본문에 복사하�
 **앱 localStorage 값을 읽어 새 JSON을 수작업으로 조립하면 안 된다.**
 raw 프로필은 `.gitignore`의 `scratchpad/`로 git에서 제외된다.
 
+## Navigation phase와 Combat phase는 분리된다
+
+**storageState만으로 보스가 자동 생성되지 않는다.** clues 3/3은 **unlock 조건일
+뿐** 보스 구역 진입을 대신하지 않는다 — 보스는 출항 시작 위치에 생기지 않으므로
+실제 키·마우스로 **보스 구역까지 항해**해야 `bossSpawned=true`가 된다.
+
+| phase | 기본 제한 | env | 종료 조건 |
+|---|---|---|---|
+| `EC12B-NAV` 항해 | **300초** | `DEEP_DIVE_EC12_NAV_SECONDS` | `bossSpawned=true` |
+| combat hunt | **1200초** | `DEEP_DIVE_EC12_HUNT_SECONDS` | 파괴 → DEBRIEF |
+
+**보스 생성 전 대기 시간은 combat 1200초에 포함하지 않는다.** 항해가 제한 안에
+끝나지 않으면 **`BLOCKED_RUNNER_NAVIGATION_DID_NOT_REACH_BOSS_ZONE`** 이며,
+`HEADLESS_UNSUPPORTED`·`BOSS_SPAWN_BROKEN`·`EC12_FAILED`로 일반화하지 않는다.
+
+### 순서 — 잠금을 먼저 잡고 항해한다
+
+```
+출항 → 실제 canvas 클릭으로 Pointer Lock 획득 → lock 유지한 채 실제 항해
+→ bossSpawned=true → 모든 입력 해제 → combat hunt 시작
+```
+
+locked path 선행조건을 처음부터 유지한다. 잠금을 얻지 못하면 항해를 계속하지
+않고 `harness`로 끝낸다.
+
+항해는 **read-only pose로 누를 키만 고른다**(`chooseNavigationInput`, 순수
+함수). position 직접 쓰기·teleport·transform 변경·강제 spawn·trigger 직접
+호출은 없다. 목표는 `runtimeClosure`의 보스·구역 값을 우선 쓰고, 없으면 이전
+증적에서 관측된 traversal target을 **방향 결정에만** 쓴다(좌표 쓰기 아님).
+
+### 프로필 미달이면 즉시 종료
+
+clues 실측이 미달이면 **출항·Pointer Lock·20분 대기를 하지 않고** envelope만
+쓰고 끝낸다. 미달 상태의 장시간 실행은 아무 증거도 만들지 못한다.
+
+### boss spawn 후 정지 · 신규 피해 기준 idle 타이머
+
+`bossSpawned=true`인 순간 모든 이동 키를 해제하고 정지한다. 보정은 **마지막
+신규 피해 이후 90초 초과**일 때만 하고, 보정 직후 전부 해제해 회피 기동이
+되지 않게 한다. 보정 횟수는 `DEEP_DIVE_EC12_MAX_NUDGES`(기본 10)로 제한하며
+매 보정마다 sequence·pose·거리·키·직전 무피해 시간·이후 피해 여부를 남긴다.
+
+⚠️ idle 타이머는 반드시 **신규 피해 증가분**으로 갱신한다. 누적 수가 0보다
+큰지만 보면 첫 피해 이후 매 폴링마다 갱신돼 **nudge가 영영 발생하지 않는다**
+(이전 구현의 실제 결함).
+
+### `cause`와 damage source는 다르다
+
+`hullDamaged.cause`는 `direct | near`(폭뢰 근접도)이며 **피해 출처가 아니다.**
+`direct`를 `enemyWeapon`이라고 쓰지 않는다. 출처는 PlayerHull snapshot의
+`lastDamageSource`에서만 읽고, 없으면 `null`로 둔다. hull 상태는
+`snapshot()` → `readModel()` → 직접 속성 순으로 읽는다.
+
 ## 금지 사항 준수
 
 내부 상태 주입 0 — 좌표·체력·재화·장비·업그레이드·boss hull·약점·spawn·save

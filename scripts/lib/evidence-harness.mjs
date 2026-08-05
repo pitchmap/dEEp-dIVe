@@ -70,14 +70,26 @@ export function resolveEvidenceStorageState(baseUrl, env = process.env) {
 
   // 저장소 tracked 파일을 프로필로 쓰지 않는다 — production 프로필은
   // scratchpad 전용이며 git에 들어가면 안 된다.
-  try {
-    execFileSync('git', ['ls-files', '--error-unmatch', file],
-      { cwd: projectRoot, stdio: 'ignore' });
-    throw new HarnessStorageStateError('HARNESS_STORAGE_STATE_INVALID',
-      'storageState가 저장소 tracked 파일입니다 — production 프로필은 scratchpad에 두고 git에 넣지 않는다');
-  } catch (error) {
-    if (error instanceof HarnessStorageStateError) throw error;
-    // ls-files 실패 = untracked. 정상 경로다.
+  //
+  // 절대 경로를 그대로 넘기면 tracked 파일을 놓칠 수 있어, 저장소 **내부**
+  // 파일만 상대 경로로 조회한다. 저장소 밖 파일은 애초에 이 저장소의 tracked
+  // 파일일 수 없으므로 검사를 건너뛴다.
+  const relative = path.relative(projectRoot, file);
+  const insideRepository =
+    relative !== '' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+  if (insideRepository) {
+    let tracked = false;
+    try {
+      execFileSync('git', ['ls-files', '--error-unmatch', '--', relative],
+        { cwd: projectRoot, stdio: 'ignore' });
+      tracked = true;
+    } catch {
+      tracked = false; // untracked(예: gitignored scratchpad) — 정상 경로다.
+    }
+    if (tracked) {
+      throw new HarnessStorageStateError('HARNESS_STORAGE_STATE_INVALID',
+        'storageState가 저장소 tracked 파일입니다 — production 프로필은 scratchpad에 두고 git에 넣지 않는다');
+    }
   }
 
   const text = readFileSync(file, 'utf8');

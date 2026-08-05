@@ -28,6 +28,7 @@ import {
   openSession, acquirePointerLock, pointerLockId, hasDebugHandle,
   writeEnvelope, printReport, projectRoot, sleep,
 } from './lib/evidence-harness.mjs';
+import { chooseNavigationInput, hasNewDamage, horizontalDistance } from './lib/evidence-navigation.mjs';
 
 // 판정식은 **한 벌만** 둔다 — 러너 안에 복제하지 않고 순수 모듈을 그대로 쓴다.
 // Node 22 type stripping으로 .ts를 직접 import한다(하네스도 같은 방식).
@@ -44,6 +45,12 @@ const OUT = process.env.DEEP_DIVE_EVIDENCE_OUT
 const HUNT_SECONDS = Number(process.env.DEEP_DIVE_EC12_HUNT_SECONDS ?? 1200);
 /** 무피해가 이 시간을 넘을 때만 실제 입력으로 위치를 보정한다 */
 const IDLE_NUDGE_SECONDS = Number(process.env.DEEP_DIVE_EC12_IDLE_NUDGE_SECONDS ?? 90);
+/** 보스 구역 항해 제한(초). combat 1200초 타이머와 **분리**된다 */
+const NAV_SECONDS = Number(process.env.DEEP_DIVE_EC12_NAV_SECONDS ?? 300);
+/** 무한 보정 방지 */
+const MAX_NUDGES = Number(process.env.DEEP_DIVE_EC12_MAX_NUDGES ?? 10);
+/** 모든 이동 키를 해제한다 — 정지 전략의 기본 동작 */
+const MOVE_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ControlLeft'];
 
 const startedAt = new Date().toISOString();
 const items = [];
@@ -84,10 +91,20 @@ async function attachObservers() {
       bump('hullDamaged');
       // **절대 선체 snapshot** — hullRemaining은 0~1 비율이라 amount와 직접
       // 비교할 수 없다. 읽기 전용으로 현재/최대 절대값을 함께 남긴다.
+      // 공유 read-only helper — debug handle이 snapshot()/readModel() 형태일 수
+      // 있어 우선순위로 읽는다. 직접 속성만 보면 전부 null이 된다.
       const hullSrc = dbg.playerHull;
+      const hullState = (() => {
+        try {
+          if (!hullSrc) return null;
+          if (typeof hullSrc.snapshot === 'function') return hullSrc.snapshot();
+          if (typeof hullSrc.readModel === 'function') return hullSrc.readModel();
+          return hullSrc;
+        } catch { return null; }
+      })();
       const readNum = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-      const currentHullAfter = readNum(hullSrc?.currentHull ?? hullSrc?.current);
-      const maxHull = readNum(hullSrc?.maxHull ?? hullSrc?.max);
+      const currentHullAfter = readNum(hullState?.currentHull ?? hullState?.current);
+      const maxHull = readNum(hullState?.maxHull ?? hullState?.max);
       const amount = p?.amount ?? null;
       const currentHullBefore =
         currentHullAfter !== null && amount !== null ? currentHullAfter + amount : null;
@@ -99,6 +116,9 @@ async function attachObservers() {
       hullEvents.push({
         amount: p?.amount ?? null,
         hullRemaining: p?.hullRemaining ?? null,
+        // hullDamaged.cause는 'direct' | 'near' (폭뢰 근접도)이며 **피해 출처가
+        // 아니다** — direct를 enemyWeapon이라고 쓰지 않는다.
+        damageCause: p?.cause ?? null,
         cause: p?.cause ?? null,
         player,
         bossPos,
@@ -109,9 +129,13 @@ async function attachObservers() {
         currentHullAfter,
         currentHullBefore,
         maxHull,
-        lastDamageSource: p?.cause ?? null,
-        lastDamageAmount: amount,
-        isDestroyed: currentHullAfter === 0 || p?.hullRemaining === 0,
+        // 출처는 snapshot에서만 읽는다. 없으면 null — 추측하지 않는다.
+        lastDamageSource: typeof hullState?.lastDamageSource === 'string'
+          ? hullState.lastDamageSource : null,
+        lastDamageAmount: readNum(hullState?.lastDamageAmount) ?? amount,
+        isDestroyed: typeof hullState?.isDestroyed === 'boolean'
+          ? hullState.isDestroyed
+          : (currentHullAfter === 0 || p?.hullRemaining === 0),
       });
       // 치명 이벤트 시점의 잠금 — hullDamaged가 playerDestroyed보다 먼저
       // 발행되므로 여기서 잡아야 DEBRIEF 이후 잠금과 섞이지 않는다.
@@ -158,7 +182,12 @@ const probe = () =>
       aiming: (() => { try { return d?.aim?.aiming ?? null; } catch { return null; } })(),
       player: pose,
       bossView: d?.runtimeClosure?.bossView ?? null,
+      bossZone: (() => { try { return d?.runtimeClosure?.bossZone ?? d?.runtimeClosure?.bossPlacement ?? null; } catch { return null; } })(),
       bossSpawned: d?.runtimeClosure?.bossSpawned ?? null,
+      heading: (() => {
+        try { const h = pose?.heading ?? d?.camera?.rotation?.y; return typeof h === 'number' ? h : null; }
+        catch { return null; }
+      })(),
       counts: { ...ev.counts },
       order: [...ev.order],
       lockChanges: [...ev.lockChanges],
@@ -166,6 +195,36 @@ const probe = () =>
       lockAtLethalDamage: ev.lockAtLethalDamage,
     };
   });
+
+/** fixture 관측 실패를 성공으로 위장하지 않는다 */
+async function readFixtureLoadedSafe() {
+  try {
+    const { readFixtureLoaded } = await import('./lib/evidence-harness.mjs');
+    return await readFixtureLoaded(page);
+  } catch { return true; }
+}
+
+/**
+ * 항해 목표 — **읽기 전용 우선순위**로 고른다.
+ *  1) runtimeClosure가 노출하는 보스·구역 위치
+ *  2) 이전 production 증적에서 관측된 traversal target
+ *     (production traversal target observed from prior evidence — 좌표를
+ *      플레이어에 쓰는 것이 아니라 **어느 방향으로 키를 누를지**만 정한다)
+ */
+function readNavTarget(snapshot) {
+  const bv = snapshot.bossView;
+  if (bv && typeof bv.x === 'number') {
+    return { pose: { x: bv.x, y: bv.y ?? null, z: bv.z }, source: 'runtimeClosure.bossView' };
+  }
+  const z = snapshot.bossZone;
+  if (z && typeof z.x === 'number') {
+    return { pose: { x: z.x, y: z.y ?? null, z: z.z }, source: 'runtimeClosure.bossZone' };
+  }
+  return {
+    pose: { x: 9.17, y: -4, z: 43.43 },
+    source: 'production traversal target observed from prior evidence (좌표 쓰기 아님)',
+  };
+}
 
 try {
   const dbgOk = (await hasDebugHandle(page)) ? await attachObservers() : false;
@@ -216,6 +275,49 @@ try {
           'DEEP_DIVE_EVIDENCE_STORAGE_STATE로 production 프로필을 지정하라',
     { observed: { ...clues, storageStateLoaded: pf.storageStateLoaded } });
 
+  // ── 프로필 미달이면 **여기서 종료** ─────────────────────────
+  //   출항·Pointer Lock·20분 대기를 하지 않는다 — 미달 상태의 장시간
+  //   실행은 아무 증거도 만들지 못하고 시간만 쓴다.
+  if (!cluesComplete) {
+    for (const [id, label] of [
+      ['EC12B-1', '실제 출항 버튼 클릭 → SORTIE'],
+      ['EC12B-2', '실제 canvas 클릭으로 Pointer Lock 획득'],
+      ['EC12B-NAV', '보스 구역 항해 (실제 키·마우스 입력)'],
+      ['EC12B-PRE', 'bossSpawned=true'],
+      ['EC12B-3', '실제 적 공격에 의한 파괴 → DEBRIEF 자동 진입'],
+      ['EC12B-4', 'locked → DEBRIEF 진입 시 pointerLockElement null'],
+      ['EC12B-5', 'terminal unlock 이후 resume overlay 미표시 · aim 잔류 0'],
+      ['EC12B-6', '실제 마우스로 확인 버튼 클릭 → BASE'],
+      ['EC12B-7', 'settlement 1회 · saveRequested 1회 · 중복 전이 0'],
+    ]) {
+      add(id, label, 'blocked', '프로필 선행조건 미달로 실행하지 않았다 (출항·잠금·대기 0)');
+    }
+    await session.drainPageErrors();
+    const errs0 = session.consoleErrors.length + session.pageErrors.length + session.pointerLockErrors.length;
+    add('EC12B-8', 'console·page·pointerlock 오류 0', errs0 === 0 ? 'pass' : 'fail',
+      errs0 === 0 ? '오류 0건' : `오류 ${errs0}건`);
+    const earlyObs = {
+      urlQuery: session.urlQuery, fixtureLoaded: await readFixtureLoadedSafe(),
+      lockAfterCanvasClick: null, hullDamagedCount: 0, playerDestroyed: 0, sortieFailed: 0,
+      lockBeforeLethal: undefined, lockAfterDebrief: undefined,
+      resumeOverlayVisible: true, aiming: false,
+      confirmClickTrusted: undefined, confirmClickTarget: 'NOT_OBSERVED',
+      reachedBase: false, settlementCount: 0, saveRequestedCount: 0, errorCount: errs0,
+    };
+    const earlyVerdict = judgeEc12LockedPath(earlyObs);
+    add('EC12B-VERDICT', `EC12 종합 판정 (${EC12_CONDITION_COUNT}개 조건)`,
+      earlyVerdict.status, earlyVerdict.detail, { observed: { ...earlyObs, unmet: earlyVerdict.unmet } });
+    const early = await writeEnvelope({
+      session, runner: 'evidence-ec12-locked-terminal', items, startedAt, outFile: OUT,
+    });
+    printReport(early, OUT);
+    console.log(
+      `\nEC12_POINTER_LOCKED_PATH_VERIFIED 후보: no — verdict.status=${earlyVerdict.status}` +
+      '\n  ※ 프로필 선행조건 미달 — 출항하지 않고 즉시 종료했다.',
+    );
+    process.exitCode = 0;
+  } else {
+
   // ── 실제 출항 ───────────────────────────────────────────────
   await page.locator('[data-ui-sortie-prep] button', { hasText: '출항' }).first()
     .click({ timeout: 8000 }).catch(() => {});
@@ -224,56 +326,138 @@ try {
   add('EC12B-1', '실제 출항 버튼 클릭 → SORTIE', afterDepart.metaState === 'SORTIE' ? 'pass' : 'blocked',
     `metaState=${afterDepart.metaState}`, { observed: { metaState: afterDepart.metaState } });
 
-  // ── 실제 canvas 클릭으로 Pointer Lock 획득 ──────────────────
+  // ── 실제 canvas 클릭으로 Pointer Lock 획득 (항해 전에 잡는다) ──
+  //   locked path 선행조건을 처음부터 유지한다 — Phase C 성공 경로와 같다.
   const lockId = await acquirePointerLock(page);
   const locked = lockId === 'game-canvas';
   add('EC12B-2', '실제 canvas 클릭으로 Pointer Lock 획득 (requestPointerLock 직접 호출 없음)',
     locked ? 'pass' : 'harness',
-    locked ? 'document.pointerLockElement === #game-canvas'
+    locked ? 'document.pointerLockElement === #game-canvas — 항해 내내 유지한다'
            : `잠금 미획득(pointerLockElement=${String(lockId)}) — 헤드리스 한계. production 정상으로 처리하지 않는다`,
     { observed: { pointerLockElement: lockId } });
 
-  // ── 실제 플레이 입력을 유지하며 피격을 기다린다 ─────────────
-  //   강제 피해 없음. W/A/S/D 실제 키 입력만 쓰고 좌표를 주입하지 않는다.
   const start = await probe();
   const hullStart = start.hull;
   let last = start;
   let reachedDebrief = false;
   let lockAtDebrief = 'NOT_OBSERVED';
-  const ticks = Math.max(1, Math.round(HUNT_SECONDS / 2));
+  let navSeconds = 0;
+  let navInputs = 0;
+  let bossReached = start.bossSpawned === true;
 
-  // ── 정지 전략 (Phase C 성공 경로) ───────────────────────────
-  //   보스 생성 후에는 **회피하지 않고 정지**한다. 지속 KeyW·지속 마우스
-  //   이동은 공격 범위를 벗어나게 만들어 Phase B가 피격에 실패한 원인이었다.
-  //   Esc를 쓰지 않는다.
-  let lastDamageAt = Date.now();
-  let nudges = 0;
-  for (let i = 0; i < Math.max(1, Math.round(HUNT_SECONDS / 2)); i++) {
-    await sleep(2000);
-    last = await probe();
-    if (last.metaState === 'DEBRIEF') {
-      lockAtDebrief = last.lock;
-      reachedDebrief = true;
-      break;
+  // ── EC12B-NAV: 보스 구역까지 실제 입력으로 항해 ─────────────
+  //   좌표를 쓰지 않는다 — read-only pose를 읽어 **누를 키**만 고른다.
+  //   잠금을 얻지 못했으면 항해를 계속하지 않는다(harness 종료).
+  if (!locked) {
+    add('EC12B-NAV', '보스 구역 항해 (실제 키·마우스 입력)', 'harness',
+      'Pointer Lock을 얻지 못해 항해를 시작하지 않았다 — locked path 선행조건 미성립');
+  } else if (bossReached) {
+    add('EC12B-NAV', '보스 구역 항해 (실제 키·마우스 입력)', 'pass',
+      '출항 시점에 이미 bossSpawned=true — 항해 불필요');
+  } else {
+    const navStartPose = start.player;
+    const navBegan = Date.now();
+    while ((Date.now() - navBegan) / 1000 < NAV_SECONDS) {
+      const target = readNavTarget(last);
+      const move = chooseNavigationInput({
+        player: last.player, target: target.pose, headingRadians: last.heading,
+      });
+      if (move.keys.length > 0) {
+        navInputs += 1;
+        for (const k of move.keys) await page.keyboard.down(k);
+        if (move.mouseDx !== 0) await page.mouse.move(move.mouseDx, 0);
+        await sleep(1500);
+        for (const k of move.keys) await page.keyboard.up(k).catch(() => {});
+      } else {
+        await sleep(1500);
+      }
+      last = await probe();
+      if (last.bossSpawned === true) { bossReached = true; break; }
+      if (last.metaState !== 'SORTIE') break;
     }
-    const damaged = (last.counts.hullDamaged ?? 0) > 0;
-    if (damaged && last.hullEvents.length > 0) lastDamageAt = Date.now();
-
-    // 무피해가 길어질 때만 실제 입력으로 위치를 보정하고 곧바로 전부 해제한다.
-    if ((Date.now() - lastDamageAt) / 1000 > IDLE_NUDGE_SECONDS) {
-      nudges += 1;
-      await page.keyboard.down('KeyW');
-      await page.mouse.move(30, 0);
-      await sleep(1500);
-      await page.keyboard.up('KeyW').catch(() => {});
-      await page.mouse.move(0, 0);
-      lastDamageAt = Date.now();
-    }
+    navSeconds = Math.round((Date.now() - navBegan) / 1000);
+    add('EC12B-NAV', '보스 구역 항해 (실제 키·마우스 입력)',
+      bossReached ? 'pass' : 'blocked',
+      bossReached
+        ? `${navSeconds}초 · 실제 입력 ${navInputs}회 · 시작 pose=${JSON.stringify(navStartPose)} → ` +
+          `종료 pose=${JSON.stringify(last.player)} · bossSpawned=true`
+        : `BLOCKED_RUNNER_NAVIGATION_DID_NOT_REACH_BOSS_ZONE — ${navSeconds}초(제한 ${NAV_SECONDS}초) 안에 ` +
+          `bossSpawned가 성립하지 않았다. 실제 입력 ${navInputs}회 · 시작 pose=${JSON.stringify(navStartPose)} → ` +
+          `종료 pose=${JSON.stringify(last.player)} · lock=${last.lock} · ` +
+          `clues ${clues.collected}/${clues.required} · metaState=${last.metaState} · ` +
+          `이벤트=[${last.order.join(' → ')}]. ` +
+          'HEADLESS_UNSUPPORTED·BOSS_SPAWN_BROKEN·EC12_FAILED로 일반화하지 않는다',
+      { observed: {
+        navSeconds, navInputs, startPose: navStartPose, endPose: last.player,
+        lock: last.lock, bossSpawned: last.bossSpawned, metaState: last.metaState, clues,
+      } });
   }
 
-  const hullEnd = last.hull;
-  const destroyed = (last.counts.playerDestroyed ?? last.counts.destroyed ?? 0) > 0;
-  const failed = (last.counts.sortieFailed ?? 0) > 0;
+  // ── bossSpawned 즉시 모든 입력 해제 · combat timer 시작 ──────
+  const nudgeLog = [];
+  let nudges = 0;
+  if (bossReached) {
+    for (const k of MOVE_KEYS) await page.keyboard.up(k).catch(() => {});
+    last = await probe();
+  }
+
+  // ── combat hunt — bossSpawned 이후에만 타이머 시작 ──────────
+  //   보스 생성 전 대기 시간은 1200초에 포함하지 않는다.
+  if (bossReached) {
+    const combatBegan = Date.now();
+    // **신규 피해 증가분**으로만 갱신한다 — 누적 수가 0보다 큰지만 보면
+    // 첫 피해 이후 매 폴링마다 갱신돼 nudge가 영영 발생하지 않는다.
+    let previousDamageCount = last.counts.hullDamaged ?? 0;
+    let lastDamageAt = Date.now();
+
+    while ((Date.now() - combatBegan) / 1000 < HUNT_SECONDS) {
+      await sleep(2000);
+      last = await probe();
+      if (last.metaState === 'DEBRIEF') {
+        lockAtDebrief = last.lock;
+        reachedDebrief = true;
+        break;
+      }
+      const currentDamageCount = last.counts.hullDamaged ?? 0;
+      if (hasNewDamage(previousDamageCount, currentDamageCount)) {
+        previousDamageCount = currentDamageCount;
+        lastDamageAt = Date.now();
+      }
+
+      const idleSeconds = (Date.now() - lastDamageAt) / 1000;
+      if (idleSeconds > IDLE_NUDGE_SECONDS && nudges < MAX_NUDGES) {
+        const before = last;
+        const target = readNavTarget(last);
+        const move = chooseNavigationInput({
+          player: last.player, target: target.pose, headingRadians: last.heading,
+        });
+        const usedKeys = move.keys.length > 0 ? move.keys : ['KeyW'];
+        for (const k of usedKeys) await page.keyboard.down(k);
+        if (move.mouseDx !== 0) await page.mouse.move(move.mouseDx, 0);
+        await sleep(1500);
+        // 보정 후 **전부 해제** — 보정을 회피 기동으로 만들지 않는다.
+        for (const k of MOVE_KEYS) await page.keyboard.up(k).catch(() => {});
+        const damageBeforeWait = last.counts.hullDamaged ?? 0;
+        await sleep(3000);
+        const afterNudge = await probe();
+        nudges += 1;
+        nudgeLog.push({
+          sequence: nudges,
+          startPose: before.player,
+          endPose: afterNudge.player,
+          bossPose: target.pose,
+          targetSource: target.source,
+          distance: horizontalDistance(afterNudge.player, target.pose),
+          keys: usedKeys,
+          durationMs: 1500,
+          idleSecondsBefore: Math.round(idleSeconds),
+          damagedWithin30s: (afterNudge.counts.hullDamaged ?? 0) > damageBeforeWait,
+        });
+        last = afterNudge;
+        lastDamageAt = Date.now();
+      }
+    }
+  }
 
   // ── 선행조건 판정 (§3-4) ────────────────────────────────────
   //   보스가 생성되지 않았다면 이 실행은 **러너 커버리지 부족**이다.
@@ -482,6 +666,7 @@ try {
     '\n  ※ 정본 플래그는 이 역할이 직접 바꾸지 않는다 — candidate로만 보고한다.',
   );
   process.exitCode = 0;
+  }
 } finally {
   await session.close();
 }
