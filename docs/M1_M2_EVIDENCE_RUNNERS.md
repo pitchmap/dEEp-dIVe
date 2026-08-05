@@ -161,7 +161,26 @@ default CI에 넣지 않는다. `evidence:ec12-locked` 실행 조건:
 - 무피해 90초 이상일 때만 실제 입력으로 위치 보정
 - 장시간 실행 가능 (Phase C 실측 629초)
 
-`DEEP_DIVE_EC12_HUNT_SECONDS`로 관측 시간을 늘릴 수 있다(기본 90).
+`DEEP_DIVE_EC12_HUNT_SECONDS`로 관측 시간을 조절한다(**기본 1200초**).
+`DEEP_DIVE_EC12_IDLE_NUDGE_SECONDS`(기본 90)는 무피해가 이 시간을 넘을 때만
+실제 입력으로 위치를 보정하고 곧바로 모든 입력을 해제한다.
+
+### 판정은 한 벌뿐이다 — 16개 조건 전체 verdict
+
+candidate는 `judgeEc12LockedPath()`의 **전체 verdict**로만 결정한다.
+조건 개수는 `EC12_CONDITIONS` 술어 목록 길이(`EC12_CONDITION_COUNT`)에서
+생성되므로 문서와 코드가 어긋나지 않는다. **16개 조건** 중 하나라도 못 채우면
+PASS가 아니며, 특정 항목(예: 잠금 null) 하나만 보고 candidate를 정하지 않는다.
+
+미관측은 성공으로 위장하지 않는다 — `confirmClickTrusted`·`lockBeforeLethal`·
+`lockAfterDebrief`가 `undefined`면 명확한 불충족으로 변환된다.
+
+### 치명 clamp는 절대 선체로만 판정한다
+
+`hullRemaining`은 0~1 **비율**이라 `amount`(절대값)와 직접 비교하면 성립하지
+않는다(12 vs 0.10). 각 `hullDamaged`에 `currentHullAfter`·`currentHullBefore`·
+`maxHull`·`lastDamageSource`·`isDestroyed`를 함께 기록하고, 절대값으로만
+clamp를 판정한다.
 
 ## 금지 사항 준수
 

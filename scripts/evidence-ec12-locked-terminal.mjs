@@ -29,11 +29,21 @@ import {
   writeEnvelope, printReport, projectRoot, sleep,
 } from './lib/evidence-harness.mjs';
 
+// 판정식은 **한 벌만** 둔다 — 러너 안에 복제하지 않고 순수 모듈을 그대로 쓴다.
+// Node 22 type stripping으로 .ts를 직접 import한다(하네스도 같은 방식).
+const { judgeEc12LockedPath, classifyHullDamage, EC12_CONDITION_COUNT } =
+  await import('../src/tools/evidenceSchema.ts');
+
 const OUT = process.env.DEEP_DIVE_EVIDENCE_OUT
   ? path.resolve(process.env.DEEP_DIVE_EVIDENCE_OUT)
   : path.join(projectRoot, 'scratchpad', 'm1-m2-final-evidence', 'phase-b-ec12-defeat.json');
-/** 실제 피격을 기다리는 최대 게임 시간(초) — 벽시계가 아니라 관측 루프 횟수로 제어 */
-const HUNT_SECONDS = Number(process.env.DEEP_DIVE_EC12_HUNT_SECONDS ?? 90);
+/**
+ * 실제 피격을 기다리는 최대 관측 시간(초). Phase C 실측이 629초였으므로
+ * 기본값을 20분으로 둔다 — default CI에서는 실행하지 않는 opt-in 러너다.
+ */
+const HUNT_SECONDS = Number(process.env.DEEP_DIVE_EC12_HUNT_SECONDS ?? 1200);
+/** 무피해가 이 시간을 넘을 때만 실제 입력으로 위치를 보정한다 */
+const IDLE_NUDGE_SECONDS = Number(process.env.DEEP_DIVE_EC12_IDLE_NUDGE_SECONDS ?? 90);
 
 const startedAt = new Date().toISOString();
 const items = [];
@@ -69,8 +79,18 @@ async function attachObservers() {
         return v && typeof v.x === 'number' ? { x: v.x, y: v.y ?? null, z: v.z } : null;
       } catch { return null; }
     };
+    globalThis.__ec12.lockAtLethalDamage = undefined;
     dbg.bus.on('hullDamaged', (p) => {
       bump('hullDamaged');
+      // **절대 선체 snapshot** — hullRemaining은 0~1 비율이라 amount와 직접
+      // 비교할 수 없다. 읽기 전용으로 현재/최대 절대값을 함께 남긴다.
+      const hullSrc = dbg.playerHull;
+      const readNum = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+      const currentHullAfter = readNum(hullSrc?.currentHull ?? hullSrc?.current);
+      const maxHull = readNum(hullSrc?.maxHull ?? hullSrc?.max);
+      const amount = p?.amount ?? null;
+      const currentHullBefore =
+        currentHullAfter !== null && amount !== null ? currentHullAfter + amount : null;
       const player = readPose(dbg.pose);
       const bossView = (() => { try { return dbg.runtimeClosure?.bossView ?? null; } catch { return null; } })();
       const bossPos = bossView && typeof bossView.x === 'number' ? { x: bossView.x, z: bossView.z } : null;
@@ -86,7 +106,19 @@ async function attachObservers() {
         bossPhase: bossView?.phase ?? null,
         pointerLockElement: document.pointerLockElement?.id ?? null,
         metaState: dbg.meta?.state ?? dbg.meta?.metaState ?? null,
+        currentHullAfter,
+        currentHullBefore,
+        maxHull,
+        lastDamageSource: p?.cause ?? null,
+        lastDamageAmount: amount,
+        isDestroyed: currentHullAfter === 0 || p?.hullRemaining === 0,
       });
+      // 치명 이벤트 시점의 잠금 — hullDamaged가 playerDestroyed보다 먼저
+      // 발행되므로 여기서 잡아야 DEBRIEF 이후 잠금과 섞이지 않는다.
+      if ((currentHullAfter === 0 || p?.hullRemaining === 0)
+          && globalThis.__ec12.lockAtLethalDamage === undefined) {
+        globalThis.__ec12.lockAtLethalDamage = document.pointerLockElement?.id ?? null;
+      }
     });
 
     // pointerlockchange는 **구독만** 한다 — 잠금을 걸거나 풀지 않는다.
@@ -95,21 +127,6 @@ async function attachObservers() {
     });
     return true;
   });
-}
-
-/**
- * 피해량 분류 — 직접적인 공격 종류 이벤트가 없으므로 **추론**임을 이름에
- * 박아 둔다. 치명타에서 적용량이 남은 선체와 같으면 `applyDamage()`의 clamp
- * (appliedDamage = min(rawDamage, currentHull)) 결과이므로 raw 공격 종류를
- * 확정하지 않는다 — 12를 폭뢰 near로 분류하면 사실이 아닌 결론이 된다.
- */
-export function classifyDamage(amount, hullRemaining, hullBefore) {
-  if (hullRemaining === 0 && hullBefore != null && amount === hullBefore) {
-    return 'LETHAL_ENEMY_WEAPON_DAMAGE_CLAMPED_TO_REMAINING_HULL';
-  }
-  if (amount === 18) return 'INFERRED_PROJECTILE_FROM_DAMAGE_18';
-  if (amount === 30) return 'INFERRED_RAM_FROM_DAMAGE_30';
-  return `INFERRED_UNKNOWN_FROM_DAMAGE_${amount}`;
 }
 
 /** 읽기 전용 관측 — 어떤 필드에도 쓰지 않는다 */
@@ -146,6 +163,7 @@ const probe = () =>
       order: [...ev.order],
       lockChanges: [...ev.lockChanges],
       hullEvents: [...(ev.hullEvents ?? [])],
+      lockAtLethalDamage: ev.lockAtLethalDamage,
     };
   });
 
@@ -180,20 +198,34 @@ try {
   let lockAtDebrief = 'NOT_OBSERVED';
   const ticks = Math.max(1, Math.round(HUNT_SECONDS / 2));
 
-  await page.keyboard.down('KeyW');
-  for (let i = 0; i < ticks; i++) {
-    // 실제 마우스 이동(잠금 중 상대 이동)과 키 입력만 사용한다.
-    await page.mouse.move(20 * ((i % 4) - 1.5), 8 * ((i % 3) - 1));
+  // ── 정지 전략 (Phase C 성공 경로) ───────────────────────────
+  //   보스 생성 후에는 **회피하지 않고 정지**한다. 지속 KeyW·지속 마우스
+  //   이동은 공격 범위를 벗어나게 만들어 Phase B가 피격에 실패한 원인이었다.
+  //   Esc를 쓰지 않는다.
+  let lastDamageAt = Date.now();
+  let nudges = 0;
+  for (let i = 0; i < Math.max(1, Math.round(HUNT_SECONDS / 2)); i++) {
     await sleep(2000);
     last = await probe();
     if (last.metaState === 'DEBRIEF') {
-      // DEBRIEF 관측 **시점**의 잠금 상태를 즉시 읽는다.
       lockAtDebrief = last.lock;
       reachedDebrief = true;
       break;
     }
+    const damaged = (last.counts.hullDamaged ?? 0) > 0;
+    if (damaged && last.hullEvents.length > 0) lastDamageAt = Date.now();
+
+    // 무피해가 길어질 때만 실제 입력으로 위치를 보정하고 곧바로 전부 해제한다.
+    if ((Date.now() - lastDamageAt) / 1000 > IDLE_NUDGE_SECONDS) {
+      nudges += 1;
+      await page.keyboard.down('KeyW');
+      await page.mouse.move(30, 0);
+      await sleep(1500);
+      await page.keyboard.up('KeyW').catch(() => {});
+      await page.mouse.move(0, 0);
+      lastDamageAt = Date.now();
+    }
   }
-  await page.keyboard.up('KeyW').catch(() => {});
 
   const hullEnd = last.hull;
   const destroyed = (last.counts.playerDestroyed ?? last.counts.destroyed ?? 0) > 0;
@@ -219,10 +251,8 @@ try {
   }
 
   // ── 실제 피해·파괴 (§3-2 상세 기록) ─────────────────────────
-  const classified = hullEvents.map((e, i) => ({
-    ...e,
-    classification: classifyDamage(e.amount, e.hullRemaining, i === 0 ? null : hullEvents[i - 1].hullRemaining),
-  }));
+  // 절대 선체 기반 분류 — 순수 모듈 한 벌만 쓴다.
+  const damageDetail = hullEvents.map((e) => ({ ...e, classification: classifyHullDamage(e) }));
   if (!reachedDebrief) {
     add('EC12B-3', '실제 적 공격에 의한 파괴 → DEBRIEF 자동 진입',
       bossReady ? 'blocked' : 'blocked',
@@ -233,17 +263,17 @@ try {
       `hull ${JSON.stringify(hullStart)} → ${JSON.stringify(hullEnd)} · ` +
       `player=${JSON.stringify(last.player)} · bossSpawned=${String(last.bossSpawned)} · ` +
       `playerDestroyed=${last.counts.playerDestroyed ?? 0} · sortieFailed=${last.counts.sortieFailed ?? 0} · ` +
-      `분류=${JSON.stringify(classified.map((c) => c.classification))} · 이벤트=[${last.order.join(' → ')}]`,
-      { observed: { hullEvents: classified, counts: last.counts, player: last.player } });
+      `분류=${JSON.stringify(damageDetail.map((c) => c.classification))} · 이벤트=[${last.order.join(' → ')}]`,
+      { observed: { hullEvents: damageDetail, counts: last.counts, player: last.player } });
   } else {
     const destroyedOnce = (last.counts.playerDestroyed ?? 0) === 1;
     const failedOnce = (last.counts.sortieFailed ?? 0) === 1;
     add('EC12B-3', '실제 적 공격에 의한 파괴 → DEBRIEF 자동 진입',
       destroyedOnce && failedOnce && hullEvents.length > 0 ? 'pass' : 'fail',
-      `hullDamaged ${hullEvents.length}회 ${JSON.stringify(classified.map((c) => c.amount))} · ` +
+      `hullDamaged ${hullEvents.length}회 ${JSON.stringify(damageDetail.map((c) => c.amount))} · ` +
       `playerDestroyed=${last.counts.playerDestroyed ?? 0} · sortieFailed=${last.counts.sortieFailed ?? 0} · ` +
-      `분류=${JSON.stringify(classified.map((c) => c.classification))} · 이벤트=[${last.order.join(' → ')}]`,
-      { observed: { hullEvents: classified, counts: last.counts } });
+      `분류=${JSON.stringify(damageDetail.map((c) => c.classification))} · 이벤트=[${last.order.join(' → ')}]`,
+      { observed: { hullEvents: damageDetail, counts: last.counts } });
   }
 
   // ── **핵심** DEBRIEF 관측 시점의 pointerLockElement ─────────
@@ -283,26 +313,55 @@ try {
       'DEBRIEF 미도달로 판정하지 않는다');
   }
 
-  // ── 실제 확인 버튼 클릭 → BASE ──────────────────────────────
+  // ── 실제 확인 버튼 클릭 → BASE (trusted 실측) ───────────────
+  let clickObs = { trusted: undefined, target: 'NOT_OBSERVED', clicked: false };
+  let endSnap = last;
   if (reachedDebrief) {
+    // 클릭 **전에** 읽기 전용 리스너를 설치해 실제 이벤트를 관측한다.
+    await page.evaluate(() => {
+      const rec = { events: [] };
+      globalThis.__clickObs = rec;
+      for (const type of ['mousedown', 'mouseup', 'click']) {
+        document.addEventListener(type, (e) => {
+          rec.events.push({ type, tag: e.target?.tagName ?? null, isTrusted: e.isTrusted });
+        }, true);
+      }
+    });
+
     const confirm = page.locator('[data-ui-sortie-failure] button, [data-ui-sortie-return] button')
       .filter({ hasText: '확인' }).first();
-    const clicked = await confirm.click({ timeout: 8000 }).then(() => true).catch(() => false);
+    const box = await confirm.boundingBox().catch(() => null);
+    if (box) {
+      // 실제 입력만 사용한다 — DOM click()·dispatchEvent를 쓰지 않는다.
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.up();
+      clickObs.clicked = true;
+    }
     await sleep(1800);
-    const end = await probe();
-    add('EC12B-6', '실제 마우스로 확인 버튼 클릭 → BASE',
-      clicked && end.metaState === 'BASE' ? 'pass' : 'fail',
-      `클릭=${clicked} · metaState=${end.metaState} (dispatchEvent 위장·confirm command 직접 호출 없음)`,
-      { observed: { clicked, metaState: end.metaState }, expected: { metaState: 'BASE' } });
 
-    const settle = end.counts.sortieEnded ?? 0;
-    const save = end.counts.saveRequested ?? 0;
-    const debriefs = end.order.filter((o) => o === 'meta:DEBRIEF').length;
+    const raw = await page.evaluate(() => (globalThis.__clickObs?.events ?? []));
+    const clickEv = [...raw].reverse().find((e) => e.type === 'click');
+    clickObs.trusted = clickEv ? clickEv.isTrusted === true : undefined;
+    clickObs.target = clickEv ? String(clickEv.tag) : 'NOT_OBSERVED';
+    endSnap = await probe();
+
+    add('EC12B-6', '실제 마우스로 확인 버튼 클릭 → BASE',
+      clickObs.clicked && clickObs.trusted === true && clickObs.target === 'BUTTON'
+        && endSnap.metaState === 'BASE' ? 'pass' : 'fail',
+      `click target=${clickObs.target} · isTrusted=${String(clickObs.trusted)} · ` +
+      `metaState=${endSnap.metaState} · 관측 이벤트=${JSON.stringify(raw.slice(-3))} ` +
+      '(DOM click()·dispatchEvent·confirm command 직접 호출 0)',
+      { observed: { ...clickObs, metaState: endSnap.metaState }, expected: { target: 'BUTTON', isTrusted: true, metaState: 'BASE' } });
+
+    const settle = endSnap.counts.sortieEnded ?? 0;
+    const save = endSnap.counts.saveRequested ?? 0;
+    const debriefs = endSnap.order.filter((o) => o === 'meta:DEBRIEF').length;
     add('EC12B-7', 'settlement 1회 · saveRequested 1회 · 중복 전이 0',
       settle === 1 && save === 1 && debriefs === 1 ? 'pass' : 'fail',
       `sortieEnded=${settle} · saveRequested=${save} · DEBRIEF 전이=${debriefs} · ` +
-      `pointerlockchange=${end.lockChanges.length}회 · 전이=[${end.order.join(' → ')}]`,
-      { observed: { settle, save, debriefs, lockChanges: end.lockChanges } });
+      `pointerlockchange=${endSnap.lockChanges.length}회 · 전이=[${endSnap.order.join(' → ')}]`,
+      { observed: { settle, save, debriefs, lockChanges: endSnap.lockChanges } });
   } else {
     add('EC12B-6', '실제 마우스로 확인 버튼 클릭 → BASE', 'blocked', 'DEBRIEF 미도달로 판정하지 않는다');
     add('EC12B-7', 'settlement 1회 · saveRequested 1회 · 중복 전이 0', 'blocked',
@@ -316,12 +375,67 @@ try {
       : `오류 ${errs}건: ${[...session.consoleErrors, ...session.pageErrors, ...session.pointerLockErrors].slice(0, 4).join(' | ')}`,
     { observed: { errorCount: errs } });
 
-  const result = await writeEnvelope({ session, runner: 'evidence-ec12-locked-terminal', items, startedAt, outFile: OUT });
+  // ── 최종 verdict — **전체 조건**만 사용한다 ──────────────────
+  //   EC12B-4(잠금 null) 하나만 보고 candidate를 정하면, 피해 0·정산 중복·
+  //   trusted click 미확인 상태에서도 yes가 나온다. 판정식은 순수 모듈
+  //   judgeEc12LockedPath() 한 벌뿐이고 여기서 복제하지 않는다.
+  const fixtureLoadedNow = await (await import('./lib/evidence-harness.mjs')).readFixtureLoaded(page);
+  const errCount =
+    session.consoleErrors.length + session.pageErrors.length + session.pointerLockErrors.length;
+  const overlayNow = reachedDebrief
+    ? await page.evaluate(() => {
+        const el = document.querySelector('.resume-overlay');
+        return Boolean(el && !el.classList.contains('hud-hidden')
+          && getComputedStyle(el).display !== 'none');
+      })
+    : true; // 미관측을 '숨김'으로 위장하지 않는다 — 불충족으로 둔다.
+
+  const observation = {
+    urlQuery: session.urlQuery,
+    fixtureLoaded: fixtureLoadedNow,
+    lockAfterCanvasClick: lockId,
+    hullDamagedCount: endSnap.counts.hullDamaged ?? 0,
+    playerDestroyed: endSnap.counts.playerDestroyed ?? 0,
+    sortieFailed: endSnap.counts.sortieFailed ?? 0,
+    // 미관측은 undefined 그대로 넘긴다 — null(정상)로 자동 변환하지 않는다.
+    lockBeforeLethal: endSnap.lockAtLethalDamage,
+    lockAfterDebrief: reachedDebrief ? lockAtDebrief : undefined,
+    resumeOverlayVisible: overlayNow,
+    aiming: endSnap.aiming === true,
+    confirmClickTrusted: clickObs.trusted,
+    confirmClickTarget: clickObs.target,
+    reachedBase: endSnap.metaState === 'BASE',
+    settlementCount: endSnap.counts.sortieEnded ?? 0,
+    saveRequestedCount: endSnap.counts.saveRequested ?? 0,
+    errorCount: errCount,
+  };
+  const verdict = judgeEc12LockedPath(observation);
+  add('EC12B-VERDICT', `EC12 locked terminal transition 종합 판정 (${EC12_CONDITION_COUNT}개 조건)`,
+    verdict.status, verdict.detail, { observed: { ...observation, unmet: verdict.unmet } });
+
+  // 치명 피해 분류는 **절대 선체**로만 한다 (hullRemaining 비율 아님).
+  const classified = (endSnap.hullEvents ?? []).map((e) => ({
+    ...e, classification: classifyHullDamage(e),
+  }));
+  if (classified.length > 0) {
+    add('EC12B-DAMAGE', 'hullDamaged 절대 선체 기록 · 치명 clamp 분류', 'pass',
+      `${classified.length}건: ${JSON.stringify(classified.map((c) => `${c.amount}→${c.classification}`))} · ` +
+      `정지 전략 보정 ${nudges}회`,
+      { observed: { hullEvents: classified } });
+  }
+
+  const result = await writeEnvelope({
+    session, runner: 'evidence-ec12-locked-terminal', items, startedAt, outFile: OUT,
+  });
   printReport(result, OUT);
-  const verified = result.envelope.items.find((i) => i.id === 'EC12B-4')?.status === 'pass';
+
+  const verified = verdict.status === 'pass';
   console.log(
-    `\nEC12_POINTER_LOCKED_PATH_VERIFIED 후보: ${verified ? 'yes (candidate)' : 'no'}\n` +
-    '  ※ 정본 플래그는 이 역할이 직접 바꾸지 않는다 — candidate로만 보고한다.',
+    `\nEC12_POINTER_LOCKED_PATH_VERIFIED 후보: ` +
+    (verified
+      ? `yes — verdict.status=pass (${EC12_CONDITION_COUNT}개 조건 전부 충족)`
+      : `no — verdict.status=${verdict.status}, unmet=${verdict.unmet.join(' · ') || '없음'}`) +
+    '\n  ※ 정본 플래그는 이 역할이 직접 바꾸지 않는다 — candidate로만 보고한다.',
   );
   process.exitCode = 0;
 } finally {

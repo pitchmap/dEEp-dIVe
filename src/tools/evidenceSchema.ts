@@ -201,13 +201,13 @@ export interface Ec12LockedObservation {
   readonly playerDestroyed: number;
   readonly sortieFailed: number;
   /** 치명 피해 직전의 잠금 대상 */
-  readonly lockBeforeLethal: string | null;
+  readonly lockBeforeLethal: string | null | undefined;
   /** DEBRIEF 이후의 잠금 대상 */
-  readonly lockAfterDebrief: string | null;
+  readonly lockAfterDebrief: string | null | undefined;
   readonly resumeOverlayVisible: boolean;
   readonly aiming: boolean;
   /** 실제 신뢰 입력으로 BUTTON을 눌렀는가 */
-  readonly confirmClickTrusted: boolean;
+  readonly confirmClickTrusted: boolean | undefined;
   readonly confirmClickTarget: string;
   readonly reachedBase: boolean;
   readonly settlementCount: number;
@@ -226,24 +226,54 @@ export interface Ec12Verdict {
  * `blocked`·`harness`·`manual`·`notRun`·`fail`은 충족 상태가 아니다.
  * 조건을 하나라도 못 채우면 PASS를 내지 않는다.
  */
+/**
+ * EC12 조건 술어 목록 — **개수를 하드코딩하지 않기 위해** 배열로 둔다.
+ * 문서·콘솔·테스트는 전부 `EC12_CONDITIONS.length`를 읽는다.
+ */
+export const EC12_CONDITIONS: readonly {
+  readonly id: string;
+  readonly unmet: (o: Ec12LockedObservation) => string | null;
+}[] = [
+  { id: 'urlQuery', unmet: (o) => (o.urlQuery === '' ? null : `urlQuery 비어 있지 않음(${o.urlQuery})`) },
+  { id: 'fixture', unmet: (o) => (o.fixtureLoaded ? 'fixtureLoaded=true' : null) },
+  { id: 'canvasLock', unmet: (o) => (o.lockAfterCanvasClick === 'game-canvas' ? null : '실제 canvas 클릭 잠금 미획득') },
+  { id: 'damage', unmet: (o) => (o.hullDamagedCount > 0 ? null : '실제 production 적 피해 0건') },
+  { id: 'destroyed', unmet: (o) => (o.playerDestroyed === 1 ? null : `playerDestroyed=${o.playerDestroyed} (1이어야 함)`) },
+  { id: 'sortieFailed', unmet: (o) => (o.sortieFailed === 1 ? null : `sortieFailed=${o.sortieFailed} (1이어야 함)`) },
+  {
+    id: 'lockBeforeLethal',
+    // 미관측(undefined)을 정상으로 넘기지 않는다 — 명확한 불충족으로 바꾼다.
+    unmet: (o) =>
+      o.lockBeforeLethal === 'game-canvas'
+        ? null
+        : `치명 피해 직전 잠금이 canvas가 아님(${o.lockBeforeLethal === undefined ? '미관측' : String(o.lockBeforeLethal)})`,
+  },
+  {
+    id: 'lockAfterDebrief',
+    unmet: (o) =>
+      o.lockAfterDebrief === null
+        ? null
+        : `DEBRIEF 이후 잠금이 남음(${o.lockAfterDebrief === undefined ? '미관측' : String(o.lockAfterDebrief)})`,
+  },
+  { id: 'overlay', unmet: (o) => (o.resumeOverlayVisible ? 'resume overlay 표시됨' : null) },
+  { id: 'aiming', unmet: (o) => (o.aiming ? 'aiming 잔류' : null) },
+  { id: 'trustedClick', unmet: (o) => (o.confirmClickTrusted === true ? null : '확인 클릭이 trusted 입력으로 관측되지 않음') },
+  { id: 'clickTarget', unmet: (o) => (o.confirmClickTarget === 'BUTTON' ? null : `확인 클릭 대상이 BUTTON이 아님(${o.confirmClickTarget})`) },
+  { id: 'base', unmet: (o) => (o.reachedBase ? null : 'BASE 미복귀') },
+  { id: 'settlement', unmet: (o) => (o.settlementCount === 1 ? null : `settlement=${o.settlementCount} (1이어야 함)`) },
+  { id: 'save', unmet: (o) => (o.saveRequestedCount === 1 ? null : `saveRequested=${o.saveRequestedCount} (1이어야 함)`) },
+  { id: 'errors', unmet: (o) => (o.errorCount === 0 ? null : `오류 ${o.errorCount}건`) },
+];
+
+/** 조건 개수 — 문서·콘솔이 이 값을 읽어 코드와 어긋나지 않게 한다 */
+export const EC12_CONDITION_COUNT = EC12_CONDITIONS.length;
+
+/**
+ * `blocked`·`harness`·`manual`·`notRun`·`fail`은 충족 상태가 아니다.
+ * 조건을 하나라도 못 채우면 PASS를 내지 않는다.
+ */
 export function judgeEc12LockedPath(o: Ec12LockedObservation): Ec12Verdict {
-  const unmet: string[] = [];
-  if (o.urlQuery !== '') unmet.push(`urlQuery 비어 있지 않음(${o.urlQuery})`);
-  if (o.fixtureLoaded) unmet.push('fixtureLoaded=true');
-  if (o.lockAfterCanvasClick !== 'game-canvas') unmet.push('실제 canvas 클릭 잠금 미획득');
-  if (o.hullDamagedCount <= 0) unmet.push('실제 production 적 피해 0건');
-  if (o.playerDestroyed !== 1) unmet.push(`playerDestroyed=${o.playerDestroyed} (1이어야 함)`);
-  if (o.sortieFailed !== 1) unmet.push(`sortieFailed=${o.sortieFailed} (1이어야 함)`);
-  if (o.lockBeforeLethal !== 'game-canvas') unmet.push('치명 피해 직전 잠금이 canvas가 아님');
-  if (o.lockAfterDebrief !== null) unmet.push(`DEBRIEF 이후 잠금이 남음(${String(o.lockAfterDebrief)})`);
-  if (o.resumeOverlayVisible) unmet.push('resume overlay 표시됨');
-  if (o.aiming) unmet.push('aiming 잔류');
-  if (!o.confirmClickTrusted) unmet.push('확인 클릭이 trusted 입력이 아님');
-  if (o.confirmClickTarget !== 'BUTTON') unmet.push(`확인 클릭 대상이 BUTTON이 아님(${o.confirmClickTarget})`);
-  if (!o.reachedBase) unmet.push('BASE 미복귀');
-  if (o.settlementCount !== 1) unmet.push(`settlement=${o.settlementCount} (1이어야 함)`);
-  if (o.saveRequestedCount !== 1) unmet.push(`saveRequested=${o.saveRequestedCount} (1이어야 함)`);
-  if (o.errorCount !== 0) unmet.push(`오류 ${o.errorCount}건`);
+  const unmet = EC12_CONDITIONS.map((c) => c.unmet(o)).filter((u): u is string => u !== null);
 
   if (unmet.length > 0) {
     // 보스 미생성처럼 경로 자체에 도달하지 못한 경우는 러너 커버리지 문제다.
@@ -252,15 +282,48 @@ export function judgeEc12LockedPath(o: Ec12LockedObservation): Ec12Verdict {
       status: precondition ? 'blocked' : 'fail',
       unmet,
       detail: precondition
-        ? `BLOCKED_RUNNER_PRECONDITION_NOT_REACHED — 미충족 ${unmet.length}건: ${unmet.join(' · ')}`
-        : `미충족 ${unmet.length}건: ${unmet.join(' · ')}`,
+        ? `BLOCKED_RUNNER_PRECONDITION_NOT_REACHED — ${EC12_CONDITION_COUNT}개 조건 중 미충족 ${unmet.length}건: ${unmet.join(' · ')}`
+        : `${EC12_CONDITION_COUNT}개 조건 중 미충족 ${unmet.length}건: ${unmet.join(' · ')}`,
     };
   }
   return {
     status: 'pass',
     unmet: [],
     detail:
-      `EC12 locked terminal transition 14개 조건 전부 충족 — hullDamaged ${o.hullDamagedCount}회 · ` +
-      'lock game-canvas → null · trusted BUTTON click · BASE · settlement/save 각 1 · 오류 0',
+      `EC12 locked terminal transition ${EC12_CONDITION_COUNT}개 조건 전부 충족 — ` +
+      `hullDamaged ${o.hullDamagedCount}회 · lock game-canvas → null · trusted BUTTON click · ` +
+      'BASE · settlement/save 각 1 · 오류 0',
   };
+}
+
+/* ═══ 치명 피해 clamp 분류 ═══════════════════════════════════════ */
+
+/** hullDamaged 1건의 **절대** 선체 관측 (비율이 아니다) */
+export interface HullDamageSample {
+  readonly amount: number;
+  /** 피해 적용 **후**의 절대 선체 */
+  readonly currentHullAfter: number | null;
+  /** 피해 적용 **전**의 절대 선체 (after + amount로 복원 가능) */
+  readonly currentHullBefore: number | null;
+  readonly maxHull: number | null;
+  readonly lastDamageSource: string | null;
+}
+
+/**
+ * 피해량 분류. **절대 선체로만 판단한다** — `hullRemaining`은 0~1 비율이라
+ * `amount`(절대값)와 직접 비교하면 성립하지 않는다(12 vs 0.10).
+ *
+ * 치명타에서 적용량이 직전 절대 선체와 같으면 `applyDamage()`의 clamp
+ * (`appliedDamage = min(rawDamage, currentHull)`) 결과이므로 **raw 공격 종류를
+ * 확정하지 않는다** — amount 12를 폭뢰 near 12로 분류하지 않는다.
+ * 18·30도 직접 이벤트가 없어 추론이므로 `INFERRED_` 접두사를 붙인다.
+ */
+export function classifyHullDamage(s: HullDamageSample): string {
+  const before = s.currentHullBefore ?? (s.currentHullAfter !== null ? s.currentHullAfter + s.amount : null);
+  if (s.currentHullAfter === 0 && before !== null && s.amount === before) {
+    return 'LETHAL_ENEMY_WEAPON_DAMAGE_CLAMPED_TO_REMAINING_HULL';
+  }
+  if (s.amount === 18) return 'INFERRED_PROJECTILE_FROM_DAMAGE_18';
+  if (s.amount === 30) return 'INFERRED_RAM_FROM_DAMAGE_30';
+  return `INFERRED_UNKNOWN_FROM_DAMAGE_${s.amount}`;
 }

@@ -281,8 +281,10 @@ const runGuard = (cwd, args = []) =>
     for (const m of src.matchAll(/bus\.on\(\s*'([A-Za-z0-9]+)'/g)) {
       if (!declared.has(m[1])) bogus.push(`${file}:${m[1]}`);
     }
-    // 배열로 나열한 구독 목록도 검사한다.
-    for (const list of src.matchAll(/for \(const \w+ of \[([^\]]+)\]\)/g)) {
+    // 배열로 나열한 구독 목록도 검사한다 — 단 **루프 본문이 bus.on을 부를 때만**.
+    // DOM addEventListener('mousedown'…) 같은 배열까지 계약 대조하면 거짓 실패가 난다.
+    for (const list of src.matchAll(/for \(const \w+ of \[([^\]]+)\]\)\s*\{([\s\S]{0,400}?)\n\s*\}/g)) {
+      if (!/bus\.on\(/.test(list[2])) continue;
       for (const lit of list[1].matchAll(/'([A-Za-z0-9]+)'/g)) {
         if (!declared.has(lit[1])) bogus.push(`${file}:${lit[1]}`);
       }
@@ -300,6 +302,122 @@ const runGuard = (cwd, args = []) =>
     passed: !runners.some((f) =>
       readFileSync(new URL(`../../../scripts/${f}`, import.meta.url), 'utf8').includes('playerDamaged')),
     detail: 'playerDamaged는 production 이벤트 계약에 존재하지 않는다',
+  });
+}
+
+// ── Phase C 교정 회귀 테스트 (§10) ─────────────────────────────
+{
+  const { judgeEc12LockedPath, classifyHullDamage, EC12_CONDITION_COUNT } =
+    await import('../evidenceSchema.ts');
+  const { readFileSync } = await import('node:fs');
+  const runnerSrc = readFileSync(
+    new URL('../../../scripts/evidence-ec12-locked-terminal.mjs', import.meta.url), 'utf8');
+
+  const PASSING = {
+    urlQuery: '', fixtureLoaded: false, lockAfterCanvasClick: 'game-canvas',
+    hullDamagedCount: 7, playerDestroyed: 1, sortieFailed: 1,
+    lockBeforeLethal: 'game-canvas', lockAfterDebrief: null,
+    resumeOverlayVisible: false, aiming: false,
+    confirmClickTrusted: true, confirmClickTarget: 'BUTTON',
+    reachedBase: true, settlementCount: 1, saveRequestedCount: 1, errorCount: 0,
+  };
+
+  results.push({
+    name: '러너가 judgeEc12LockedPath를 실제로 호출함',
+    passed: /judgeEc12LockedPath\(observation\)/.test(runnerSrc),
+    detail: '판정식을 복제하지 않고 순수 모듈을 호출한다',
+  });
+  results.push({
+    name: 'EC12B-4 단독으로 candidate를 계산하는 코드 0건',
+    passed: !/EC12B-4'\)\?\.status/.test(runnerSrc) && /verdict\.status === 'pass'/.test(runnerSrc),
+    detail: 'candidate는 전체 verdict만 사용한다',
+  });
+  results.push({
+    name: '러너에 판정식 복제(자체 classifyDamage) 0건',
+    passed: !/function classifyDamage\(/.test(runnerSrc),
+    detail: '분류는 공유 classifyHullDamage 한 벌만 쓴다',
+  });
+
+  // B-4가 pass여도 다른 조건이 깨지면 candidate=false
+  const b4ok = { ...PASSING, lockAfterDebrief: null };
+  for (const [label, mut] of [
+    ['BASE 미복귀', { reachedBase: false }],
+    ['trusted click 미확인', { confirmClickTrusted: undefined }],
+    ['settlement=0', { settlementCount: 0 }],
+  ]) {
+    results.push({
+      name: `B-4 pass여도 ${label}이면 candidate=false`,
+      passed: judgeEc12LockedPath({ ...b4ok, ...mut }).status !== 'pass',
+      detail: 'lock null 하나로 PASS가 되지 않는다',
+    });
+  }
+
+  // lethal clamp — 비율을 절대값처럼 쓰지 않는다
+  results.push({
+    name: 'hullRemaining=0.10·amount=12를 절대 hullBefore로 비교하지 않음',
+    passed: classifyHullDamage({
+      amount: 12, currentHullAfter: 0, currentHullBefore: 12, maxHull: 120, lastDamageSource: 'direct',
+    }) === 'LETHAL_ENEMY_WEAPON_DAMAGE_CLAMPED_TO_REMAINING_HULL'
+      && classifyHullDamage({
+        amount: 12, currentHullAfter: null, currentHullBefore: 0.10, maxHull: null, lastDamageSource: null,
+      }) !== 'LETHAL_ENEMY_WEAPON_DAMAGE_CLAMPED_TO_REMAINING_HULL',
+    detail: '절대 선체(12)로만 clamp 판정 · 비율(0.10)은 성립하지 않는다',
+  });
+  results.push({
+    name: 'currentHullBefore=30·after=0·amount=30도 lethal clamp (raw ram 확정 금지)',
+    passed: classifyHullDamage({
+      amount: 30, currentHullAfter: 0, currentHullBefore: 30, maxHull: 120, lastDamageSource: 'direct',
+    }) === 'LETHAL_ENEMY_WEAPON_DAMAGE_CLAMPED_TO_REMAINING_HULL',
+    detail: 'clamp가 INFERRED_RAM보다 우선한다 — raw 공격 종류를 확정하지 않는다',
+  });
+  results.push({
+    name: '비치명 18·30은 INFERRED_ 추론 분류 유지',
+    passed: classifyHullDamage({ amount: 18, currentHullAfter: 42, currentHullBefore: 60, maxHull: 120, lastDamageSource: 'direct' })
+        === 'INFERRED_PROJECTILE_FROM_DAMAGE_18'
+      && classifyHullDamage({ amount: 30, currentHullAfter: 30, currentHullBefore: 60, maxHull: 120, lastDamageSource: 'direct' })
+        === 'INFERRED_RAM_FROM_DAMAGE_30',
+    detail: '공격 종류 이벤트가 없으므로 추론임을 이름에 박는다',
+  });
+
+  results.push({
+    name: '치명 hullDamaged 시 lockAtLethalDamage를 기록함',
+    passed: /lockAtLethalDamage/.test(runnerSrc)
+      && /lockBeforeLethal: endSnap\.lockAtLethalDamage/.test(runnerSrc),
+    detail: 'DEBRIEF 이후 잠금과 섞지 않고 치명 시점을 따로 잡는다',
+  });
+  results.push({
+    name: 'confirm click target·isTrusted 미관측이면 PASS 불가',
+    passed: judgeEc12LockedPath({ ...PASSING, confirmClickTrusted: undefined }).status !== 'pass'
+      && judgeEc12LockedPath({ ...PASSING, confirmClickTarget: 'NOT_OBSERVED' }).status !== 'pass',
+    detail: '미관측을 성공값으로 기본 설정하지 않는다',
+  });
+  results.push({
+    name: '미관측 lock을 null(정상)로 자동 처리하지 않음',
+    passed: judgeEc12LockedPath({ ...PASSING, lockBeforeLethal: undefined }).status !== 'pass'
+      && judgeEc12LockedPath({ ...PASSING, lockAfterDebrief: undefined }).status !== 'pass',
+    detail: 'undefined는 명확한 불충족으로 변환된다',
+  });
+  results.push({
+    name: `실제 조건 수(${EC12_CONDITION_COUNT})와 문서 조건 수 일치`,
+    passed: EC12_CONDITION_COUNT === 16
+      && readFileSync(new URL('../../../docs/M1_M2_EVIDENCE_RUNNERS.md', import.meta.url), 'utf8')
+        .includes(`${EC12_CONDITION_COUNT}개 조건`),
+    detail: `술어 목록 길이 ${EC12_CONDITION_COUNT}에서 생성 — 하드코딩 불일치 방지`,
+  });
+  results.push({
+    name: '기본 hunt 전략이 1200초·정지 기반임',
+    passed: /DEEP_DIVE_EC12_HUNT_SECONDS \?\? 1200/.test(runnerSrc)
+      && /IDLE_NUDGE_SECONDS/.test(runnerSrc)
+      && !/await page\.keyboard\.down\('KeyW'\);\n  for /.test(runnerSrc),
+    detail: '지속 KeyW·지속 마우스 이동 제거, 무피해 시에만 보정',
+  });
+  results.push({
+    name: '보스 미생성은 precondition blocked (EC12_FAILED 아님)',
+    passed: judgeEc12LockedPath({
+      ...PASSING, hullDamagedCount: 0, playerDestroyed: 0, sortieFailed: 0,
+      lockAfterDebrief: 'game-canvas', reachedBase: false, settlementCount: 0, saveRequestedCount: 0,
+    }).status === 'blocked',
+    detail: 'BLOCKED_RUNNER_PRECONDITION_NOT_REACHED',
   });
 }
 
