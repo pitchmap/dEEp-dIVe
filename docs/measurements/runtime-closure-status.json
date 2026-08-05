@@ -190,8 +190,8 @@
     {
       "id": "D1-detectionHudDisposition",
       "name": "DetectionHud 처분 — 실제 제거 / 승인된 M3 이관 / 결정 없는 방치 구분",
-      "status": "blocked",
-      "detail": "[incomplete] production에 DetectionHud가 7곳 존재하는데 리드 정본 결정 기록이 없습니다 (docs/DECISIONS.md에 DetectionHud 처분 항목 없음) — removed=false · deferred=false. 결정 없는 존치를 이관으로 인정하지 않는다"
+      "status": "pass",
+      "detail": "승인된 M3 이관 — 리드 결정 M-14(docs/DECISIONS.md) · 정보 비동등 사유 명시 · 후속 마일스톤 M3 · SonarScope provider·render 배선 확인 · production DetectionHud 7곳 존치와 상태 일치. 제거 통과로 올리지 않는다"
     },
     {
       "id": "C0-clueVerifierSelfTest",
@@ -225,9 +225,7 @@
     "M3_START_ALLOWED": false,
     "DETECTION_HUD_INFORMATION_PARITY": false,
     "DETECTION_HUD_REMOVED": false,
-    "DETECTION_HUD_REMOVAL_DEFERRED_TO_M3": false
+    "DETECTION_HUD_REMOVAL_DEFERRED_TO_M3": true
   },
-  "blockers": [
-    "DETECTION_HUD_DISPOSITION_UNDECIDED:리드 정본 결정 기록 필요"
-  ]
+  "blockers": []
 }
