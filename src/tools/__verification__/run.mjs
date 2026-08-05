@@ -155,6 +155,70 @@ const runGuard = (cwd, args = []) =>
   }
 }
 
+// ── evidence 결과 스키마 자체 테스트 ────────────────────────────
+// "실행하지 않은 항목을 빈 PASS로 만들지 않는다"를 코드가 강제하는지 확인한다.
+{
+  const {
+    validateEnvelope, isProductionEvidence, isSatisfied, summarize,
+  } = await import('../evidenceSchema.ts');
+
+  const base = {
+    runner: 'self-test', baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40),
+    fixtureLoaded: false, urlQuery: '', browserVersion: 'Chromium/1',
+    viewport: { width: 100, height: 100 },
+    startedAt: '2026-01-01T00:00:00.000Z', finishedAt: '2026-01-01T00:00:01.000Z',
+    consoleErrors: [], pageErrors: [], pointerLockErrors: [],
+    items: [{ id: 'X1', label: 'x', status: 'pass', detail: 'ok' }],
+  };
+  const rejects = (label, mutate) => {
+    let threw = false;
+    try { validateEnvelope(mutate(structuredClone(base))); } catch { threw = true; }
+    results.push({ name: `evidence 스키마: ${label}`, passed: threw, detail: threw ? '거부됨' : '통과돼 버림' });
+  };
+
+  results.push({
+    name: 'evidence 스키마: 정상 봉투 통과',
+    passed: (() => { try { validateEnvelope(structuredClone(base)); return true; } catch { return false; } })(),
+    detail: '맥락 필드 완비',
+  });
+  rejects('items 0건 거부', (e) => { e.items = []; return e; });
+  rejects('알 수 없는 status 거부', (e) => { e.items[0].status = 'ok'; return e; });
+  rejects('detail 누락 거부', (e) => { e.items[0].detail = ''; return e; });
+  rejects('id 중복 거부', (e) => { e.items.push({ ...e.items[0] }); return e; });
+  rejects('fixtureLoaded 미기재 거부', (e) => { delete e.fixtureLoaded; return e; });
+  rejects('baseSha 누락 거부', (e) => { e.baseSha = ''; return e; });
+
+  // notRun·blocked·harness는 절대 충족이 아니다 — 빈 PASS 방지의 핵심
+  const nonSatisfying = ['notRun', 'blocked', 'harness', 'manual', 'fail'];
+  results.push({
+    name: 'evidence 판정: notRun·blocked·harness·manual·fail 은 충족 아님',
+    passed: nonSatisfying.every((status) => !isSatisfied({ id: 'i', label: 'l', status, detail: 'd' })),
+    detail: `pass 외 ${nonSatisfying.length}종 전부 미충족`,
+  });
+
+  // fixture 장착·쿼리 진입은 production 증거가 아니다
+  const fx = { ...structuredClone(base), fixtureLoaded: true };
+  const qs = { ...structuredClone(base), urlQuery: '?fixture=1' };
+  results.push({
+    name: 'evidence 판정: fixture 장착·쿼리 진입은 production 증거 아님',
+    passed: !isProductionEvidence(fx).ok && !isProductionEvidence(qs).ok && isProductionEvidence(base).ok,
+    detail: 'fixtureLoaded=true 거부 · urlQuery 비어 있지 않으면 거부',
+  });
+
+  // notRun이 하나라도 있으면 allSatisfied가 서지 않는다
+  const withNotRun = structuredClone(base);
+  withNotRun.items.push({ id: 'X2', label: 'y', status: 'notRun', detail: '미실행' });
+  const withError = structuredClone(base);
+  withError.consoleErrors = ['boom'];
+  results.push({
+    name: 'evidence 요약: notRun 포함·오류 존재 시 allSatisfied=false',
+    passed: summarize(base).allSatisfied === true
+      && summarize(withNotRun).allSatisfied === false
+      && summarize(withError).allSatisfied === false,
+    detail: 'notRun 1건 또는 오류 1건이면 충족으로 올라가지 않는다',
+  });
+}
+
 let failures = 0;
 for (const { name, passed, detail } of results) {
   if (!passed) failures += 1;
