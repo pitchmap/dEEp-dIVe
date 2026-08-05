@@ -57,7 +57,8 @@ production 자동 해제 부재를 정상 처리하지도 않는다.
 도달하지 못한 것을 pass로 올리지 않고, 동시에 production 자동 해제 부재가
 해소됐다고도 적지 않는다.
 
-저장소 어디에도 `exitPointerLock` 호출이 없다는 정적 사실이 이 blocked의 배경이다.
+이 시점(base `a3c2ee3`)에는 저장소 어디에도 `exitPointerLock` 호출이 없었다.
+**이 문장은 Phase A 시점의 사실이며 최신 dev에는 더 이상 해당하지 않는다** — 아래 Phase B 참조.
 
 ## Phase B 실측 (dev `d825a688` · PR #23 수신)
 
@@ -84,10 +85,14 @@ PR #23은 `terminalMetaUnlock` 플래그로 해제 출처를 표시해, 종료 �
 
 ## 다음에 할 일
 
-그래픽스/UI `ControlsHud` PR 병합 후 최신 dev를 **일반 merge**로 수신하고
-EC12를 재실행한다. locked path가 **실제 pass**일 때만 검증기를 최종 활성화하고
-기존 suite에 연결한다(기존 assertion은 삭제·변경하지 않고 개수만 늘린다).
-그때까지 이 PR은 Draft로 두며 default CI에 production gate를 강제로 넣지 않는다.
+locked DEBRIEF에 실제로 도달할 경로를 확보해야 한다 — 실제 피격이 성립하는
+환경(비헤드리스 실기기 수동 검증)이거나, 중어뢰를 확보해 실제 보스 격파까지
+완주하는 경로다. 어느 쪽이든 **강제 피해·강제 격파를 쓰지 않는다.**
+
+locked path가 **실제 pass**일 때만 검증기를 최종 활성화하고 기존 suite에
+연결한다(기존 assertion은 삭제·변경하지 않고 개수만 늘린다). 그때까지 PR은
+Draft로 두며 default CI에 production gate를 강제로 넣지 않는다 — 장시간
+production evidence 러너는 opt-in npm 명령으로만 유지한다.
 
 ## 금지 사항 준수
 
