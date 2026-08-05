@@ -84,6 +84,19 @@ export class ControlsHud {
   private paused = false;
   private locked = false;
   private suppressCanvasMouseUntilMs = 0;
+  /**
+   * 이번 `pointerlockchange`가 **종료 메타 전환(DEBRIEF·BASE) 때문에 우리가
+   * 건 해제**인가.
+   *
+   * 이 구분이 없으면 `handlePointerLockChange`가 모든 해제를 '사용자 Esc'로
+   * 읽어 `setPaused(true)`를 부른다 — DEBRIEF 화면 위에 재개 오버레이가
+   * 덮여 확인 버튼을 가리고 루프까지 멈춘다. 그래서 `exitPointerLock()`
+   * 한 줄만 추가해서는 안 되고, 해제의 **출처**를 표시해야 한다.
+   *
+   * 실제로 `exitPointerLock()`을 부르는 경로에서만 세우고, 그 해제 이벤트를
+   * 소비하면서 즉시 내린다 — 이후의 사용자 Esc는 기존 경로 그대로다.
+   */
+  private terminalMetaUnlock = false;
 
   constructor(
     private readonly container: HTMLElement,
@@ -143,6 +156,10 @@ export class ControlsHud {
       this.aimButton.hidden = atBase;
       this.fireButton.hidden = atBase;
       this.returnButton.hidden = atBase;
+      // 해역을 벗어나는 상태에서는 커서를 돌려준다 — 결과 화면의 확인
+      // 버튼은 마우스로 눌러야 하는데 SORTIE에서 건 lock이 그대로 남아
+      // 있으면 사용자가 물리 Esc를 먼저 눌러야 클릭할 수 있다.
+      if (next === 'DEBRIEF' || atBase) this.releaseLockForTerminalMeta();
     });
     this.firePollTimer = setInterval(() => this.updateFireButtonState(), FIRE_BUTTON_POLL_MS);
 
@@ -375,6 +392,13 @@ export class ControlsHud {
       if (this.paused) this.setPaused(false);
     } else {
       inputTelemetry.recordPointerLockExit();
+      if (this.terminalMetaUnlock) {
+        // **종료 메타 전환이 만든 해제** — 사용자 Esc가 아니다.
+        // 커서만 돌려주고 끝낸다: 일시정지·재개 오버레이·잠금 재획득 없음.
+        // (조준 해제는 `releaseLockForTerminalMeta`가 이미 처리했다.)
+        this.terminalMetaUnlock = false;
+        return;
+      }
       // Esc 등으로 잠금 해제 → 조준 해제 후 일시정지 + 재진입 안내.
       // 루프가 멈추면 게임플레이 update가 돌지 않으므로 여기서 endAim을 보장한다.
       if (this.options.combat.aim.aiming) this.options.combat.aim.endAim();
@@ -390,6 +414,42 @@ export class ControlsHud {
 
   private requestLock(): void {
     this.canvas.requestPointerLock();
+  }
+
+  /**
+   * 종료 메타 상태(DEBRIEF·BASE) 진입 처리 — 커서를 사용자에게 돌려준다.
+   *
+   * ## 왜 필요한가 (production UX 문제)
+   *
+   * SORTIE에서 캔버스가 Pointer Lock을 쥐는데 DEBRIEF·BASE로 넘어가도
+   * production이 스스로 풀지 않는다. 그래서 실제 사용자는 결과 화면의 확인
+   * 버튼을 누르기 전에 **물리 Esc를 먼저 눌러야** 한다. 자동 해제가 없는
+   * 것이 문제이지, 자동화 하네스의 합성 Escape가 안 먹은 것이 문제가
+   * 아니다(그건 별개의 하네스 한계다).
+   *
+   * ## 순서가 중요하다
+   *
+   * `exitPointerLock()`이 만드는 `pointerlockchange`는 기존 코드에서 '사용자
+   * Esc'로 해석돼 일시정지 + 재개 오버레이를 띄운다. 그 오버레이가 결과
+   * 화면을 덮으면 확인 버튼을 가린다. 그래서 해제 **전에** 출처를 표시하고,
+   * 오버레이를 먼저 내린다.
+   *
+   * ## 멱등이다
+   *
+   * DEBRIEF → BASE가 연속으로 와도 부작용이 겹치지 않는다: 조준은 이미
+   * 해제됐고, 오버레이는 이미 내려갔고, lock은 이미 없어 조기 반환한다.
+   */
+  private releaseLockForTerminalMeta(): void {
+    // 1) 조준 잔류 제거 — 조준 중일 때만이므로 정확히 1회다.
+    if (this.options.combat.aim.aiming) this.options.combat.aim.endAim();
+    // 2) 재개 오버레이가 결과 화면을 덮지 않게 먼저 내린다.
+    if (this.paused) this.setPaused(false);
+    // 3) **우리 캔버스가 쥔 lock일 때만** 푼다. 없으면 no-op이고, 다른
+    //    element가 쥐고 있으면 남의 lock이므로 건드리지 않는다.
+    if (document.pointerLockElement !== this.canvas) return;
+    // 4) 해제 출처 표시는 반드시 exitPointerLock 호출 **전**에.
+    this.terminalMetaUnlock = true;
+    document.exitPointerLock();
   }
 
   private resume(): void {
