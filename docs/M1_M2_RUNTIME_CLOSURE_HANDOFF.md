@@ -168,6 +168,28 @@ verify:gameplay·meta·tooling·hud·sprint-a/b/c 전부 통과 + 신규 계약 
 18. 콘솔 오류 0
 19. 페이지 오류 0
 
+### 6-1. 미완료 EC 종료 경로 [확정 — INT-CORE-024 / DECISIONS M-15~M-17]
+
+EC1~EC8·EC14~EC16은 production evidence로 완료됐다. 남은 항목의 종료 경로:
+
+| 전제 | 내용 |
+|---|---|
+| **보스전 목표(공식)** | **A2 성장 후 클리어** — 승인된 `bossReadinessReference`(`hullIntegrity`·`torpedoDamage`·`reloadSpeed` **L2** + `heavyTorpedo`, **예상 출항 4~6회**)가 정본. **전투 수치 변경 0건** |
+| **EC 실측 전용 경로** | **`heavyTorpedo` 단독 · 전투 업그레이드 0** — EC9·10·13·17 evidence 수집용 **최소 사양**이며 공식 난이도 기준이 아니다. 확보 명칭 = **`production salvage·cargo 수입을 이용한 중어뢰 단독 확보 경로`**(`파밍 N회` 표현 금지): 성공 출항 **2회 = 490cr + 희귀부품 ≥1** ≥ 중어뢰 420cr + 희귀부품 1. 수입 누락·파괴 손실 시 **3회 이상**일 수 있다. `SectorFarmingRewards`와 무관(M3 이관) |
+| **탄약 상한** | 출항당 어뢰 **3발 고정**. `torpedoReloadSeconds` 20은 **발사 간 최소 간격**이지 탄약 보급이 아니다. 기본 어뢰로는 격파 **불가**(3×2.0 = 6 < 12), 중어뢰 3발 전탄이면 격파 |
+| **kill time 구성** | 66~70s(중어뢰)는 재보급 시간이 아니라 **① 약점 개방 주기 대기(32.9s/회전·phase 3 24.5s) + ② 발사 간 최소 간격 20s + ③ 조준·명중 시간**의 합이며 지배 항은 ①이다. 실측은 **약점 개방 3회에 각각 1발** |
+| **선행 차단** | **EC12 pointer-locked 경로** — `EC12_CORE_FLOW_VERIFIED=true`(무잠금 경로 확인 완료) / `EC12_POINTER_LOCKED_PATH_VERIFIED=false`. 해소 전에는 구매·업그레이드 사이클과 EC13·EC17 관측이 불가능하다 |
+| **파밍** | `SectorFarmingRewards` 배선은 **M1·M2 종료 조건 아님**(M-16, M3 이관). 성장 재화는 기존 salvage 자동 회수·화물 드롭 경로로 성립 |
+
+| EC | 종료 방법 |
+|---|---|
+| **9** | 중어뢰 단독(업그레이드 0) 3발: 1발 → ratio 0.583(**phase 2**) · 2발 → 0.167(**phase 3**) · 3발 격파. 강제 체력 변경·debug damage 금지. `torpedoDamage` L2를 얹으면 2발 격파로 phase 3를 놓칠 수 있어 **관측 회차는 중어뢰 단독 권장** |
+| **10** | telegraph 4종 — ram·projectile·weakPointOpen 순환 + **phaseShift는 임계 교차 시**(EC9 경로에서 2회). 경고 시간 기준 `telegraphSeconds` **1.8s**를 **게임 dt 기준**으로 기록(벽시계 아님) |
+| **11** | 그래픽스 사람 눈 검수 — 동일 회차 스크린샷 3장(약점 개방/폐쇄/low 품질), 정지 화면 구분 가능 + low에서 색 외 신호 유지. 그래픽스 판정 → 리드 최종 확인 |
+| **12** | **7항목 순서로 완료**: ① 정상 **pointer-lock 플레이** → ② 패배·귀환으로 DEBRIEF 진입 → ③ **lock 자동 해제** → ④ **실제 마우스 클릭** 확인 → ⑤ BASE 복귀 → ⑥ settlement/save **각 1회** → ⑦ console/page error 0. 무잠금 경로의 기존 PASS 증거는 유지하되 그것만으로 완료 처리하지 않는다 |
+| **13** | 중어뢰 3발째 격파 → `bossDefeated`·`lootDropped(boss)`·희귀부품 +1·`saveRequested('rarePart')`·정산 각 **1회**, reload 후 유지 |
+| **17** | 승리 → confirm → BASE → 2회차 출항 → 새 보스 instance 1개·hull 100%·이전 투사체·HUD·이벤트 잔존 0 |
+
 **M0 분리 기록**: 실기기 GPU 검증(노트북 2대)·기본 품질 결정·INT-RENDER-013
 최종 승인은 **병렬 위험 항목**으로 유지한다 — 마스터 플랜이 M1·M2 기능 구현의
 전제로 요구하지 않으므로 Runtime Closure를 차단하지 않는다. 단
