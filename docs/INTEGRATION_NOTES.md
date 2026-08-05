@@ -90,6 +90,95 @@
 
 ## 제안 목록
 
+### INT-CORE-024 — M1·M2 Closure Blocker 원인 분류 · 보스전 목표 A2 확정 · EC 종료 경로 (리드 결정 — 코드·params 무변경)
+
+| 필드 | 내용 |
+|---|---|
+| 요청자 | 개발 리드 (base = dev `a5bdb8f`. production evidence: EC1~EC8·EC14~EC16 완료 / EC9·10·11·12·13·17 미완) |
+
+**1. 탄약 규약 — 관측 해석 정정 (결정적 사실)**
+
+`src/systems/StraightRunTorpedoSystem.ts`의 `ammo`는 **생성자와 `resetForNewSortie`에서만 설정**되고 발사 시 감소하며 **출항 중 보충되지 않는다**. `torpedoReloadSeconds=20`은 **발사 간 최소 간격**이지 재보급이 아니다. 따라서 **출항당 어뢰 총 3발**(`torpedoCapacity=3`)이 하드 상한이다.
+
+**2. 보스 체력 예산** (`maxHull=12` · 약점 배율 2.0 · 폐쇄 0.25)
+
+| 장비 | 어뢰 피해 | 약점 1발 | 일반 선체 1발 | 필요 약점 명중 | 출항 3발로 격파 |
+|---|---:|---:|---:|---:|---|
+| 기본 어뢰 (`standardTorpedo`) | 1.0 | 2.0 | 0.25 | **6발** | ❌ **수학적 불가** (3×2.0=6.0 < 12) |
+| 중어뢰 (`heavyTorpedo`) | 2.5 | 5.0 | 0.625 | **3발** | ✅ 3발 전탄 약점 명중 시 |
+| 중어뢰 + `torpedoDamage` L2(+20%) | 3.0 | 6.0 | 0.75 | **2발** | ✅ 여유 1발 |
+
+**3. 시간 예산** (게임 dt 기준 — 벽시계 아님)
+
+- 패턴 회전 = ram(7+1.8+2.5) + projectile(7+1.8) + weakPointOpen(7+1.8+4) = **32.9s**, 약점 창 **4s**/회전. phase 3는 interval ×0.6 → **24.5s**
+- 발사 간격 20s < 창 간격 32.9s → **창마다 1발 발사 가능**(탄약 3발이 실질 상한)
+- **kill time**: 중어뢰 창 3회 ≈ **66~70s** / 중어뢰+L2 창 2회 ≈ **33~35s** / 기본 어뢰 **불가**(탄약 소진 후 피해 수단 0)
+- **생존**: 보스 기대 피해 = ram 30 + projectile 18 = 48/회전 ≈ **1.46 hull/s** → 무회피 120/48×32.9 ≈ **82s**, 회피 50% ≈ 164s, `hullIntegrity` L2(144) 무회피 ≈ **98s**
+- **성공 확률**: 기본 잠수함 **0%**(불가) / 중어뢰 단독 66s킬 vs 82s사망 → 전탄 약점 명중 필요(숙련 시 가능) / 승인 최소 사양 33s킬 vs 98s생존 → **안정적**
+
+**4. 원인 분류 판정** — 코드 결함 아님
+
+관측(보스 hullRatio 최저 **0.8333** = 12→10 = 약점 정확히 1발)은 위 예산과 정확히 일치한다. 기본 어뢰 3발 중 1발만 약점에 명중하면 그 뒤로는 피해 수단이 0이므로 3~5분 뒤 파괴는 **설계대로의 결과**다. 따라서 §2 후보 중 **④(재장전·탄약 규약에 대한 관측 해석 오류)** + **②의 잔여(성장 사이클이 production에서 닫히지 않음 — EC12)**로 분류한다. ①(밸런스 과도) 아님 · ③(전략으로 극복) 불가(탄약 상한은 전략과 무관).
+
+**5. 보스전 목표 = A2 (성장 후 클리어) 확정 · 전투 수치 변경 0건**
+
+`params/economy.json`의 **`bossReadinessReference` [승인]**이 이미 "핵심 3종(`hullIntegrity`·`torpedoDamage`·`reloadSpeed`) L2 + `heavyTorpedo`, `expectedSortieRange` [4,6]"를 정본으로 갖고 있다. 경제 정합 확인: 필요 재화 = 업그레이드 3종 L2(각 100+160 = 260 → **780**) + 중어뢰(**420 credits + 희귀 부품 1**) = **1200 credits + 1 rare part**. 출항 1회 최대 수입 = **245 credits**(salvage 125 + cargo 120) + 희귀 부품 1(`salvage-3` 확정 배치) → 1200/245 ≈ **4.9회** = 승인 범위 [4,6] 일치. A1으로 바꾸면 승인된 경제·보스 수치를 모두 재설계해야 하고 핵심 루프(탐색·파밍 → 재화 → 업그레이드 → 보스전)가 무의미해지므로 채택하지 않는다. **`params/boss.json`·`combat.json`·`equipment.json`·`upgrades.json` 수치 변경 0건을 승인한다.**
+
+**6. 파밍 production 결정 — M1·M2 Exit 범위에서 제외(이관)**
+
+| 사실 | 근거 |
+|---|---|
+| 성장 재화 경로는 **이미 production 배선 완료** | salvage 자동 회수(`EconomySystem` → `dropField.collectNear`, `pickupRadiusMeters` 6m) + 화물 격침 드롭 = 245/출항. `bossReadinessReference` 4~6회 산정의 입력이 바로 이 경로다 |
+| `SectorFarmingRewards`(M2 4단계)는 **F 홀드 회수 전용 상한 계층** | production 대상 0개. 실재하는 farming ID는 `salvage-1`·`salvage-2`·`salvage-3`뿐인데 **이미 자동 회수로 지급 중**이라 연결 시 **이중 지급**이 된다. `goldCache` interactable은 월드에 없고 신설은 신규 콘텐츠다 |
+| Exit Criteria 19항목에 **파밍 항목이 없다** | 인계표 §6 — 파밍은 M1·M2 종료 조건이 아니다 |
+
+⇒ **`FARMING_REWARD_DATA_WIRED=false`·`FARMING_CAP_PRODUCTION_VERIFIED=false`를 유지하되 M1·M2 blocker에서 제외**하고 M3/경제 확장으로 이관한다. 임의 target ID를 만들지 않으며, salvage를 F 홀드로 전환하는 방안(게임플레이 변경)도 M1·M2 범위 밖이다.
+
+**7. EC별 종료 경로**
+
+| EC | 종료 방법 (강제 체력 변경·debug damage 금지) |
+|---|---|
+| **EC9** phase 1→2→3 | **중어뢰 단독(업그레이드 0) 3발 경로**: 1발 12→7(ratio 0.583 ≤ 0.66 → **phase 2**) · 2발 7→2(0.167 ≤ 0.33 → **phase 3**) · 3발 격파. ⚠ `torpedoDamage` L2를 얹으면 2발에 격파돼 phase 3를 못 볼 수 있으므로 **관측 회차는 중어뢰 단독 권장** |
+| **EC10** telegraph 4종 | ram·projectile·weakPointOpen은 phase 무관 순환, **phaseShift는 임계 교차 시**(EC9 경로에서 2회 관측). 경고 시간 정량 기준 = `telegraphSeconds` **1.8s** — 각 예고 시작 → 피해 발생 간격을 **게임 dt 기준**으로 기록 |
+| **EC11** 시각 구분 | **그래픽스 사람 눈 검수**. 기준: 동일 회차에서 ① 약점 개방 ② 폐쇄 ③ low 품질 스크린샷 3장, 정지 화면에서 구분 가능 + low에서 색 외 신호(도형·밝기·모션) 유지. 승인자 = 그래픽스 담당 판정 → **리드 최종 확인** |
+| **EC12** DEBRIEF → BASE | **production UX 결함으로 판정**(하네스 문제 아님): 저장소 전체에 `exitPointerLock` 호출 **0건**, `requestPointerLock`은 `src/ui/ControlsHud.ts` 1곳. 출항 종료 모달이 떠도 포인터가 캔버스에 잠겨 **DOM 버튼 클릭이 도달하지 않는다**(사용자가 Esc를 눌러야 함). 최소 수정 = 출항 종료(DEBRIEF 진입) 시 pointer lock 해제 후 확인 버튼 클릭 → BASE 전환 · 정산·save 중복 0 |
+| **EC13** 승리 | 중어뢰 3발째 격파 → `bossDefeated` 1회 · `lootDropped(boss)` 1회 · 희귀 부품 +1 즉시 확정 · `saveRequested('rarePart')` 1회 · 정산 1회 · reload 후 유지 (보스 보상 = rareParts 1 / credits 0) |
+| **EC17** 승리 후 재출항 | 승리 → confirm → BASE → 2회차 출항 → 새 보스 instance **1개**·hull 100%·이전 투사체·HUD·이벤트 잔존 **0** |
+
+**8. 역할 배정**
+
+| 역할 | 이번 사이클 담당 | 파일 소유 |
+|---|---|---|
+| 개발 리드 | 정본 결정(이 PR) · pointer lock 해제 배선 승인 · 최종 integration acceptance | `docs/*` · `src/contracts/**`(변경 없음) |
+| 그래픽스 | **EC12 pointer lock 해제**(lock 요청자 = `ControlsHud` 소유) · EC11 사람 눈 검수 · phaseShift 시각 확인 | `src/ui/ControlsHud.ts` · `src/render/**` |
+| 빌드·툴 | EC9·10·13·17 evidence runner · DEBRIEF→BASE 자동검증 · 승리·재출항 증적 수집 | `scripts/**` · `src/tools/**` |
+| 게임플레이 | **구현 항목 없음**(전투 수치 변경 0) — 실측 지원만 | — |
+| 통합 관리자 | 병합 순서 · production smoke · EC9~EC17 최종 실측 · 플래그 후보 판정 | `src/core/Game.ts` |
+
+**9. 병합 순서** — ①이 선행, ②가 critical path
+
+1. **리드 결정 PR(이 PR)** — 선행 필수
+2. **그래픽스 pointer lock 해제** — EC12 차단 해소(이것 없이는 성장 사이클·EC13·EC17 전부 관측 불가)
+3. **빌드·툴 evidence runner** — ②와 **병렬 가능**
+4. 그래픽스 EC11 검수 — ② 병합 후 **병렬 가능**
+5. 통합 실측 회차: 파밍 2~3회 → 중어뢰 구매(420cr + 희귀부품 1) → 보스전 → **EC9·10·13·17 일괄 관측**
+6. Production Evidence Closure 재실행 → 최종 플래그 판정
+
+**10. 상태** — 이번 결정으로 올리는 플래그 없음
+
+```
+BOSS_CLEAR_POLICY=A2_GROWTH_THEN_CLEAR
+COMBAT_PARAM_CHANGE_APPROVED=none
+FARMING_SCOPE_DEFERRED_FROM_M1M2=true
+EC12_ROOT_CAUSE=production_pointer_lock_not_released
+
+M1_EXIT_GATE_PASSED=false · M2_PROGRESS_GATE_PASSED=false
+M1_M2_INTEGRATED_COMPLETE=false · M3_START_ALLOWED=false
+FARMING_REWARD_DATA_WIRED=false · FARMING_CAP_PRODUCTION_VERIFIED=false
+```
+
+| 개발 리드 결정 | 승인 — 전투 수치 무변경, 성장 경로로 종료. 구현은 이 PR 병합 후 착수 |
+
 ### INT-CORE-023 — DetectionHud 정보 비동등 확정 · 제거 M3 공식 이관 (리드 결정 — production UI 무변경)
 
 | 필드 | 내용 |

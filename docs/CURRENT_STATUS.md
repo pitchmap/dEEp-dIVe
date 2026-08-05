@@ -462,8 +462,15 @@ B 선행개발          = 가능 (선행개발 상태로만)
     - **M3 후속 조건**(방식 결정은 M3에서): ⓐ SonarScope 계약 확장 수용 / ⓑ 별도 탐지 UI + HUD 구조 재설계 / ⓒ 역할 분리 후 둘 다 유지
     - **범위**: 문서 전용 — production 코드(`src/**`)·`params/**` 변경 0건. HANDOFF §8 그래픽스 배정에서 제거 항목 제외(유지로 전환)
     - **플래그**: `DETECTION_HUD_INFORMATION_PARITY=false` · `DETECTION_HUD_REMOVED=false` · `DETECTION_HUD_REMOVAL_DEFERRED_TO_M3=true`. 최종 게이트(M1_EXIT_GATE_PASSED·M2_PROGRESS_GATE_PASSED·M1_M2_INTEGRATED_COMPLETE·M3_START_ALLOWED)와 파밍 blocker(FARMING_REWARD_DATA_WIRED·FARMING_CAP_PRODUCTION_VERIFIED) **전부 false 유지**
-- **마지막 업데이트:** DetectionHud 정보 비동등 확정 · 제거 M3 공식 이관 (INT-CORE-023 / M-14 — production UI 무변경). 이전: M1·M2 Runtime Closure 계약 확정 (INT-CORE-022, M-7~M-13)
-- **담당 브랜치:** `docs/detection-hud-m3-deferral` (base = dev `045b02f` — PR #18 병합 tip. 이전 리드 세션: `claude/deep-dive-core-lead-uyg77p`)
+  - **M1·M2 Closure Blocker 원인 분류·종료 경로 확정 (INT-CORE-024 / M-15~M-17 — base dev `a5bdb8f`):**
+    - **탄약 규약 정정**: 출항당 어뢰 **3발 고정**(`torpedoReloadSeconds` 20 = 발사 간격, 재보급 아님). 기본 어뢰로는 3발 전탄 약점 명중(6.0)해도 maxHull 12 미만이라 **격파 수학적 불가**. 관측 hullRatio 최저 0.8333(약점 1발)은 이 예산과 정확히 일치 → **코드 결함 아님**
+    - **보스전 목표 = A2(성장 후 클리어)**: 승인된 `bossReadinessReference`(핵심 3종 L2 + 중어뢰 · 출항 4~6회) 채택. 경제 정합 검산 1200cr+희귀1 ÷ 245cr/출항 ≈ 4.9회. **전투 수치 변경 0건 승인**(A1 미채택 — 핵심 루프 무의미화)
+    - **파밍**: `SectorFarmingRewards` 배선을 **M1·M2 종료 조건에서 제외**(M-16) — 성장 재화는 기존 salvage 자동 회수·화물 드롭으로 이미 배선, 실재 ID(`salvage-1/2/3`) 연결 시 이중 지급. 플래그 2종 false 유지·M3 이관
+    - **EC12 원인 = production pointer lock 미해제**(M-17, `exitPointerLock` 호출 0건) — 성장 사이클·EC13·EC17의 **선행 차단 요인**. 소유: 그래픽스(ControlsHud)
+    - **EC 종료 경로**(인계표 §6-1): EC9·10·13·17은 **중어뢰 단독 3발 회차 1번으로 일괄 관측**(1발 phase2 → 2발 phase3 → 3발 격파), EC11은 그래픽스 사람 눈 검수 3장
+    - **병합 순서**: 리드 결정(선행) → 그래픽스 pointer lock(critical path) → 빌드·툴 evidence runner(병렬) → EC11 검수(병렬) → 통합 실측 → 플래그 판정. 게임플레이 구현 항목 0
+- **마지막 업데이트:** M1·M2 Closure Blocker 결정 — A2 성장 후 클리어·전투 수치 무변경·파밍 이관·EC 종료 경로 (INT-CORE-024 / M-15~M-17). 이전: DetectionHud M3 이관 (INT-CORE-023 / M-14)
+- **담당 브랜치:** `docs/m1-m2-closure-blocker-resolution` (base = dev `a5bdb8f`. 이전: `docs/detection-hud-m3-deferral`)
 
 ## 게임플레이
 
