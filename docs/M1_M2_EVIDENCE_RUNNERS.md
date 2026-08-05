@@ -59,7 +59,30 @@ production 자동 해제 부재를 정상 처리하지도 않는다.
 
 저장소 어디에도 `exitPointerLock` 호출이 없다는 정적 사실이 이 blocked의 배경이다.
 
-## Phase B에서 할 일
+## Phase B 실측 (dev `d825a688` · PR #23 수신)
+
+`npm run evidence:ec12-locked` — `pass 4 · blocked 5 · 오류 0`
+
+| | Phase A base `a3c2ee3` | Phase B base `d825a688` |
+|---|---|---|
+| `exitPointerLock` production 호출 | **0건** | **존재** — `ControlsHud`에 종료 메타(DEBRIEF·BASE) 자동 해제 배선 |
+| EC12 locked terminal transition | `blocked` | **여전히 `blocked`** — 판정 경로 미도달 |
+
+PR #23은 `terminalMetaUnlock` 플래그로 해제 출처를 표시해, 종료 메타 해제가
+사용자 Esc로 오인돼 일시정지·재개 오버레이가 결과 화면을 덮는 것을 막는다.
+**코드는 들어왔지만 이 러너가 아직 실행 경로에 도달하지 못했다.**
+
+도달 실패 이유: `locked SORTIE → 귀환 클릭 → DEBRIEF`는 Pointer Lock 사양상
+성립하지 않으므로(Phase A EC12-3a), 잠금 상태 DEBRIEF는 **실제 파괴** 또는
+**실제 보스 격파**로만 진입한다. 헤드리스에서 100초 실제 플레이(W 키·마우스
+이동) 동안 피격이 발생하지 않았고, 강제 피해·강제 격파는 금지이므로
+`blocked`로 남겼다 — §8-3 진단(hull·위치·boss 상태·이벤트 순서)을 결과 JSON에
+싣는다. 저장소에 sortie 시간 제한이 없어 타이머 종료 경로도 없다.
+
+**`EC12_POINTER_LOCKED_PATH_VERIFIED` candidate 아님.** 정본 플래그는 이 역할이
+바꾸지 않는다.
+
+## 다음에 할 일
 
 그래픽스/UI `ControlsHud` PR 병합 후 최신 dev를 **일반 merge**로 수신하고
 EC12를 재실행한다. locked path가 **실제 pass**일 때만 검증기를 최종 활성화하고
