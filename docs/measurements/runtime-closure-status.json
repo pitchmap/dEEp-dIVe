@@ -188,10 +188,22 @@
       "detail": "production 호출 src/core/Game.ts:917"
     },
     {
+      "id": "D1-detectionHudDisposition",
+      "name": "DetectionHud 처분 — 실제 제거 / 승인된 M3 이관 / 결정 없는 방치 구분",
+      "status": "pass",
+      "detail": "승인된 M3 이관 — 리드 결정 M-14(docs/DECISIONS.md) · 정보 비동등 사유 명시 · 후속 마일스톤 M3 · SonarScope provider·render 배선 확인 · production DetectionHud 7곳 존치와 상태 일치. 제거 통과로 올리지 않는다"
+    },
+    {
       "id": "C0-clueVerifierSelfTest",
       "name": "clue mapping verifier 자체 테스트 (픽스처 — 정본 부재와 무관)",
       "status": "pass",
       "detail": "6종 전부 기대대로: ✔ 정상 매핑 / ✔ 같은 clue 다중 target (정책상 허용) / ✔ 미지 clueId 거부 / ✔ 필수 clueId 누락 거부 / ✔ 배치 정합 깨짐 거부 / ✔ non-clue 항목 거부"
+    },
+    {
+      "id": "D0-detectionHudSelfTest",
+      "name": "DetectionHud 판정 자체 테스트 (픽스처 — 리드 결정 부재와 무관)",
+      "status": "pass",
+      "detail": "11종 전부 기대대로: ✔ 승인된 M3 이관 → pass / ✔ 실제 제거 + removed=true → pass / ✔ 결정 없는 방치 → incomplete(blocked) / ✔ 이관 미선언 → incomplete(blocked) / ✔ removed=true 선언 + production 존재 → fail / ✔ 이관 선언 + 비동등 사유 없음 → fail / ✔ 이관 선언 + 후속 마일스톤 ≠ M3 → fail / ✔ 이관 선언 + W13 미배선 → fail / ✔ 이관 선언 + W14 미배선 → fail / ✔ 이관 선언인데 이미 제거됨 → fail / ✔ 위장 시도가 플래그를 true로 만들지 못함"
     }
   ],
   "flags": {
@@ -210,7 +222,10 @@
     "M1_EXIT_GATE_PASSED": false,
     "M2_PROGRESS_GATE_PASSED": false,
     "M1_M2_INTEGRATED_COMPLETE": false,
-    "M3_START_ALLOWED": false
+    "M3_START_ALLOWED": false,
+    "DETECTION_HUD_INFORMATION_PARITY": false,
+    "DETECTION_HUD_REMOVED": false,
+    "DETECTION_HUD_REMOVAL_DEFERRED_TO_M3": true
   },
   "blockers": []
 }

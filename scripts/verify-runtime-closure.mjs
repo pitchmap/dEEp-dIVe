@@ -69,10 +69,11 @@ const { validateSonarParams } = await import('../src/tools/sonarParams.ts');
 const { validateEconomyParams } = await import('../src/tools/economyMath.ts');
 // 보스는 **리드 공식 로더를 재사용**한다 — 툴링이 재구현하지 않는다.
 const { validateBossParams } = await import('../src/config/bossParams.ts');
-const { runRuntimeClosureVerification, assertClueMapping } = await import(
+const { runRuntimeClosureVerification, assertClueMapping, judgeDetectionHudDisposition } = await import(
   '../src/tools/__verification__/verifyRuntimeClosure.ts'
 );
 const clueFixtures = await import('../src/tools/__verification__/clueMappingFixture.ts');
+const dhFixtures = await import('../src/tools/__verification__/detectionHudFixture.ts');
 
 const interaction = validateInteractionParams(readJson('params/interaction.json'));
 const sonar = validateSonarParams(readJson('params/sonar.json'));
@@ -311,6 +312,106 @@ function scanSources(predicate, { includeVerification = false } = {}) {
 
 const isFixturePath = (rel) => /[Ff]ixture|[Dd]emo/.test(rel);
 
+/**
+ * 리드 정본 결정 기록 파싱 — `docs/DECISIONS.md`에서 DetectionHud 처분 항목을
+ * 읽는다. **툴링은 이 기록을 만들지 않고 읽기만 한다** (리드 소유).
+ *
+ * 기대 형식 — 결정 항목 본문에 아래 표식이 있어야 기계 판독된다:
+ *   `DETECTION_HUD_REMOVED=false`
+ *   `DETECTION_HUD_REMOVAL_DEFERRED_TO_M3=true`
+ *   `DETECTION_HUD_INFORMATION_PARITY=false`
+ *   `후속 마일스톤: M3`
+ *   `정보 비동등 사유: <본문>`
+ * 표식이 없으면 '결정 없음'으로 다루며, 산문만 보고 이관을 추정하지 않는다.
+ */
+function readDetectionHudDecision() {
+  const rel = 'docs/DECISIONS.md';
+  const full = path.join(projectRoot, rel);
+  if (!existsSync(full)) {
+    return { decision: null, reason: `${rel} 파일 없음` };
+  }
+  const text = readFileSync(full, 'utf8');
+  // DetectionHud를 언급하면서 표식을 가진 줄(표 행 포함)만 후보로 본다.
+  const candidates = text
+    .split('\n')
+    .filter((l) => /DetectionHud/i.test(l) && /DETECTION_HUD_REMOVAL_DEFERRED_TO_M3\s*=/.test(l));
+  if (candidates.length === 0) {
+    const mentioned = /DetectionHud/i.test(text);
+    return {
+      decision: null,
+      reason: mentioned
+        ? `${rel}에 DetectionHud 언급은 있으나 기계 판독 표식(DETECTION_HUD_REMOVAL_DEFERRED_TO_M3=…)이 없음 — 산문만으로 이관을 추정하지 않는다`
+        : `${rel}에 DetectionHud 처분 항목 없음`,
+    };
+  }
+  const line = candidates[0];
+  const bool = (key) => {
+    const m = new RegExp(`${key}\\s*=\\s*(true|false)`).exec(line);
+    return m ? m[1] === 'true' : null;
+  };
+  const idMatch = /\|\s*(M-\d+)\s*\|/.exec(line) ?? /\b(M-\d+)\b/.exec(line);
+
+  // 플래그 표식 자체를 지운 본문에서만 마일스톤·사유를 찾는다.
+  // (`..._DEFERRED_TO_M3=true`의 M3가 마일스톤 선언으로 오인되면 안 된다)
+  const prose = line.replace(/DETECTION_HUD_\w+\s*=\s*(?:true|false)/g, ' ');
+
+  // 후속 마일스톤 — 전용 표식이 있으면 그것을, 없으면 **선언된 플래그 키
+  // 자체**에서 읽는다(`..._DEFERRED_TO_M3=true`는 대상 마일스톤을 이름에
+  // 담고 있다). 산문에서 마일스톤을 찾지 않는다 — 결정 본문에는 "M1·M2에서
+  // 제거하지 않고"처럼 이관 대상이 아닌 마일스톤이 함께 등장해 오인된다.
+  // 플래그 키가 M3가 아니면(예: _TO_M4) 판정이 그대로 거부한다.
+  const milestoneExplicit = /후속 마일스톤\s*[:：]\s*(M\d+)/.exec(line);
+  const milestoneFromFlag = /DETECTION_HUD_REMOVAL_DEFERRED_TO_(M\d+)\s*=\s*true/.exec(line);
+  const milestone = milestoneExplicit ?? milestoneFromFlag;
+
+  // 정보 비동등 사유 — 전용 표식이 있으면 그것을, 없으면 '대체 불가·비동등·
+  // 표현 불가·정보 유실'을 실제로 서술한 문장을 사유로 인정한다. 아무 문장이나
+  // 받지 않고 위 어휘가 있어야 하며, 없으면 null로 남겨 판정이 fail이 된다.
+  const rationaleExplicit = /정보 비동등 사유\s*[:：]\s*([^|]+)/.exec(line);
+  const rationaleInProse =
+    /([^|]*(?:대체(?:하지 못|ㄹ 수 없| 불가)|비동등|표현(?:하지 못|ㄹ 수 없| 불가)|정보(?:가)? ?(?:유실|손실))[^|]*)/.exec(prose);
+  const rationale = rationaleExplicit ?? rationaleInProse;
+
+  return {
+    decision: {
+      sourcePath: rel,
+      decisionId: idMatch ? idMatch[1] : '(id 미기재)',
+      informationParityRationale: rationale ? rationale[1].trim().slice(0, 400) : null,
+      followUpMilestone: milestone ? milestone[1] : null,
+      declaredRemoved: bool('DETECTION_HUD_REMOVED'),
+      declaredDeferred: bool('DETECTION_HUD_REMOVAL_DEFERRED_TO_M3'),
+      declaredInformationParity: bool('DETECTION_HUD_INFORMATION_PARITY'),
+    },
+    reason: null,
+  };
+}
+
+/** production 경로의 DetectionHud 실재 관측 — fixture 경로는 제외한다 */
+function detectionHudObservation(wiring) {
+  const wiredOf = (id) =>
+    (wiring.find((w) => w.id === id)?.productionCallSites.length ?? 0) > 0;
+  const prod = (sites) => sites.filter((s) => !isFixturePath(s) && !s.includes('__verification__'));
+  const { decision, reason } = readDetectionHudDecision();
+  return {
+    productionImportSites: prod(
+      scanSources((l) => /import\s*\{[^}]*\bDetectionHud\b[^}]*\}\s*from/.test(l)),
+    ),
+    productionConstructSites: prod(scanSources((l) => /new\s+DetectionHud\s*\(/.test(l))),
+    productionLifecycleSites: prod(
+      scanSources((l) => /\bdetectionHud\s*\.\s*(attach\w*|update|dispose|setVisible)\s*\(/.test(l)),
+    ),
+    domAnchorDeclSites: scanSources((l) => /setAttribute\(\s*'data-ui-detection-hud'/.test(l)),
+    fixtureOnlySites: [
+      ...scanSources((l) => /new\s+DetectionHud\s*\(/.test(l)),
+      ...scanSources((l) => /import\s*\{[^}]*\bDetectionHud\b[^}]*\}\s*from/.test(l)),
+    ].filter(isFixturePath),
+    leadDecision: decision,
+    leadDecisionAbsenceReason: reason,
+    sonarProviderWired: wiredOf('sonarProvider'),
+    sonarRenderWired: wiredOf('sonarRender'),
+  };
+}
+
 function activePingKeyObservation() {
   const consumeAll = scanSources((l) => /consumeActivePingPressed\s*\(/.test(l));
   const requestAll = scanSources((l) => /requestActivePing\s*\(/.test(l));
@@ -416,6 +517,7 @@ try {
     saveMigration,
     activePingKey: activePingKeyObservation(),
     wiring,
+    detectionHud: detectionHudObservation(wiring),
   });
 } catch (error) {
   console.error('✖ Runtime Closure 검증 실행 자체가 실패했습니다:', error);
@@ -459,6 +561,48 @@ try {
     detail: failed.length === 0 ? `${selfTests.length}종 전부 기대대로: ${selfTests.join(' / ')}` : failed.join(' / '),
   });
   if (failed.length > 0) output.blockers.push('FAIL:C0-clueVerifierSelfTest');
+}
+
+// ── DetectionHud 판정 자체 테스트 (픽스처) ────────────────────
+// 리드 결정 기록이 없는 동안 D1은 blocked(방치)로 남는다. 그 blocked를
+// 믿으려면 판정 함수가 '승인된 이관'·'실제 제거'·'모순 상태'를 정말
+// 구분한다는 증거가 있어야 한다. 통과 2 + incomplete 2 + 모순 fail 6.
+{
+  const selfTests = [];
+  const expect = (label, fixture, wanted) => {
+    const got = judgeDetectionHudDisposition(fixture).status;
+    selfTests.push(got === wanted ? `✔ ${label}` : `✖ ${label} — ${wanted} 기대, ${got} 나옴`);
+  };
+  expect('승인된 M3 이관 → pass', dhFixtures.approvedDeferralFixture, 'pass');
+  expect('실제 제거 + removed=true → pass', dhFixtures.actuallyRemovedFixture, 'pass');
+  expect('결정 없는 방치 → incomplete(blocked)', dhFixtures.undecidedFixture, 'blocked');
+  expect('이관 미선언 → incomplete(blocked)', dhFixtures.decisionWithoutDeferralFixture, 'blocked');
+  expect('removed=true 선언 + production 존재 → fail', dhFixtures.falseRemovalClaimFixture, 'fail');
+  expect('이관 선언 + 비동등 사유 없음 → fail', dhFixtures.deferralWithoutRationaleFixture, 'fail');
+  expect('이관 선언 + 후속 마일스톤 ≠ M3 → fail', dhFixtures.deferralWrongMilestoneFixture, 'fail');
+  expect('이관 선언 + W13 미배선 → fail', dhFixtures.deferralWithoutSonarFixture, 'fail');
+  expect('이관 선언 + W14 미배선 → fail', dhFixtures.deferralWithoutSonarRenderFixture, 'fail');
+  expect('이관 선언인데 이미 제거됨 → fail', dhFixtures.deferralButAlreadyRemovedFixture, 'fail');
+
+  // 위장 케이스가 플래그까지 오염시키지 않는지 확인한다.
+  const spoof = judgeDetectionHudDisposition(dhFixtures.falseRemovalClaimFixture).flags;
+  selfTests.push(
+    spoof.DETECTION_HUD_REMOVED === false && spoof.DETECTION_HUD_REMOVAL_DEFERRED_TO_M3 === false
+      ? '✔ 위장 시도가 플래그를 true로 만들지 못함'
+      : '✖ 위장 시도가 플래그를 오염시킴',
+  );
+
+  const failed = selfTests.filter((t) => t.startsWith('✖'));
+  output.checks.push({
+    id: 'D0-detectionHudSelfTest',
+    name: 'DetectionHud 판정 자체 테스트 (픽스처 — 리드 결정 부재와 무관)',
+    status: failed.length === 0 ? 'pass' : 'fail',
+    detail:
+      failed.length === 0
+        ? `${selfTests.length}종 전부 기대대로: ${selfTests.join(' / ')}`
+        : failed.join(' / '),
+  });
+  if (failed.length > 0) output.blockers.push('FAIL:D0-detectionHudSelfTest');
 }
 
 const { checks, flags, blockers } = output;
