@@ -172,6 +172,50 @@ try {
   add('EC12B-0', '읽기 전용 관측 준비 (구독만, 발행 없음)', dbgOk ? 'pass' : 'blocked',
     dbgOk ? '__deepDiveDebug.bus 및 pointerlockchange 구독' : 'DEV 관측 핸들 없음');
 
+  // ── 프로필 선행조건: clues 3/3 **실측** ─────────────────────
+  //   storageState가 로드됐다는 사실만으로 clues 3/3을 가정하지 않는다.
+  const clues = await page.evaluate(() => {
+    try {
+      const p = globalThis.__deepDiveDebug?.bossProgress;
+      const rm = typeof p?.readModel === 'function' ? p.readModel() : p;
+      // 관측 API 형태가 달라 방어적으로 읽되, **숫자가 아니면 null**로 둔다 —
+      // 객체를 그대로 실어 "[object Object]/3" 같은 무의미한 진단을 남기지 않는다.
+      const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+      const count = (v) => (Array.isArray(v) ? v.length : num(v));
+      return {
+        collected: count(rm?.collected) ?? count(rm?.clues) ?? count(rm?.collectedClueIds),
+        required: num(rm?.required) ?? num(rm?.requiredClues),
+        // 실제 read model 키는 unlockedFlag다 — unlocked만 보면 3/3 프로필도
+        // unlocked=null로 읽혀 선행조건이 거짓 미달이 된다.
+        unlocked: typeof rm?.unlocked === 'boolean' ? rm.unlocked
+          : typeof rm?.unlockedFlag === 'boolean' ? rm.unlockedFlag : null,
+        shape: rm && typeof rm === 'object' ? Object.keys(rm).slice(0, 8) : typeof rm,
+      };
+    } catch { return { collected: null, required: null, unlocked: null }; }
+  });
+  const pf = session.profile ?? { storageStateLoaded: false, provenance: null };
+  const cluesComplete = clues.collected !== null && clues.required !== null
+    && clues.collected >= clues.required && clues.unlocked === true;
+  add('EC12B-PROFILE', '프로필 선행조건 — clues 3/3 · unlocked 실측',
+    cluesComplete ? 'pass' : 'blocked',
+    cluesComplete
+      ? `clues ${clues.collected}/${clues.required} · unlocked=${clues.unlocked} · ` +
+        (pf.storageStateLoaded
+          ? `production 프로필 재사용(provenance=${pf.provenance})`
+          : '빈 context인데 이미 3/3 (이전 실행 상태 승계 없음 — 확인 필요)')
+      : pf.storageStateLoaded
+        // 프로필을 요청했는데 앱 상태가 3/3이 아니다 — 서로 다른 실패다.
+        ? `PROFILE_STATE_DOES_NOT_MATCH_PROVENANCE — storageState를 로드했으나 ` +
+          `앱 실측이 clues ${clues.collected}/${clues.required} · unlocked=${clues.unlocked}. ` +
+          `provenance=${pf.provenance}와 실제 상태가 다르다 (origin 불일치·구버전 프로필 의심). ` +
+          '로드됐다는 이유만으로 3/3을 가정하지 않는다'
+        : `BLOCKED_RUNNER_PRECONDITION_NOT_REACHED — 빈 context라 clues ` +
+          `${clues.collected}/${clues.required} (read model 키: ${JSON.stringify(clues.shape)}). ` +
+          'worktree와 browser storage는 별개이며 ' +
+          '새 context는 기존 프로필을 승계하지 않는다. ' +
+          'DEEP_DIVE_EVIDENCE_STORAGE_STATE로 production 프로필을 지정하라',
+    { observed: { ...clues, storageStateLoaded: pf.storageStateLoaded } });
+
   // ── 실제 출항 ───────────────────────────────────────────────
   await page.locator('[data-ui-sortie-prep] button', { hasText: '출항' }).first()
     .click({ timeout: 8000 }).catch(() => {});

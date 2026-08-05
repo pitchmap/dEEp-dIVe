@@ -15,7 +15,8 @@
  */
 
 import { spawn, execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
@@ -27,6 +28,107 @@ const PORT = Number(process.env.DEEP_DIVE_EVIDENCE_PORT ?? 5211);
 const BASE_URL = process.env.DEEP_DIVE_DEV_URL ?? `http://localhost:${PORT}/`;
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** storageState 입력이 잘못됐을 때 **빈 context로 조용히 fallback하지 않는다** */
+export class HarnessStorageStateError extends Error {
+  constructor(code, message) {
+    super(`${code}: ${message}`);
+    this.code = code;
+  }
+}
+
+/**
+ * opt-in production 프로필(Playwright storageState) 해석.
+ *
+ * worktree와 browser storage는 별개다 — `browser.newContext()`는 매번 빈
+ * localStorage·IndexedDB·cookies로 시작하므로, 다른 worktree에 실제 clues 3/3
+ * 프로필이 있어도 자동으로 승계되지 않는다. 그래서 **공식 `storageState`
+ * 입력**으로만 기존 production 플레이 결과를 재사용한다.
+ *
+ * 이것은 상태를 새로 주입하거나 조작하는 것이 아니다 — `page.evaluate()`로
+ * localStorage를 쓰거나 save API를 부르거나 clue 값을 만들지 않는다.
+ *
+ * env 미설정이면 `{ storageStateLoaded: false }`를 돌려주고 기존과 동일하게
+ * 빈 context로 실행한다(default CI 동작 불변).
+ */
+export function resolveEvidenceStorageState(baseUrl, env = process.env) {
+  const raw = env.DEEP_DIVE_EVIDENCE_STORAGE_STATE;
+  if (!raw || raw.trim() === '') {
+    return {
+      storageStateLoaded: false, path: null, sha256: null,
+      fileName: null, originCount: 0, provenance: null,
+    };
+  }
+  const file = path.resolve(raw);
+
+  if (!existsSync(file)) {
+    throw new HarnessStorageStateError('HARNESS_STORAGE_STATE_INVALID', `파일이 없습니다: ${path.basename(file)}`);
+  }
+  if (!statSync(file).isFile()) {
+    throw new HarnessStorageStateError('HARNESS_STORAGE_STATE_INVALID', `일반 파일이 아닙니다: ${path.basename(file)}`);
+  }
+
+  // 저장소 tracked 파일을 프로필로 쓰지 않는다 — production 프로필은
+  // scratchpad 전용이며 git에 들어가면 안 된다.
+  try {
+    execFileSync('git', ['ls-files', '--error-unmatch', file],
+      { cwd: projectRoot, stdio: 'ignore' });
+    throw new HarnessStorageStateError('HARNESS_STORAGE_STATE_INVALID',
+      'storageState가 저장소 tracked 파일입니다 — production 프로필은 scratchpad에 두고 git에 넣지 않는다');
+  } catch (error) {
+    if (error instanceof HarnessStorageStateError) throw error;
+    // ls-files 실패 = untracked. 정상 경로다.
+  }
+
+  const text = readFileSync(file, 'utf8');
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new HarnessStorageStateError('HARNESS_STORAGE_STATE_INVALID', '유효한 JSON이 아닙니다');
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new HarnessStorageStateError('HARNESS_STORAGE_STATE_INVALID', '최상위가 객체가 아닙니다');
+  }
+  if (!Array.isArray(parsed.cookies)) {
+    throw new HarnessStorageStateError('HARNESS_STORAGE_STATE_INVALID', 'cookies가 배열이 아닙니다');
+  }
+  if (!Array.isArray(parsed.origins)) {
+    throw new HarnessStorageStateError('HARNESS_STORAGE_STATE_INVALID', 'origins가 배열이 아닙니다');
+  }
+  for (const o of parsed.origins) {
+    if (typeof o?.origin !== 'string' || !Array.isArray(o?.localStorage)) {
+      throw new HarnessStorageStateError('HARNESS_STORAGE_STATE_INVALID',
+        '각 origin에 origin 문자열과 localStorage 배열이 있어야 합니다');
+    }
+  }
+
+  // origin이 다르면 localStorage가 적용되지 않는다 — 조용히 넘어가면
+  // clues 0/3 blocked가 나오고 원인을 오해하게 된다.
+  const runOrigin = new URL(baseUrl).origin;
+  if (!parsed.origins.some((o) => o.origin === runOrigin)) {
+    throw new HarnessStorageStateError('HARNESS_STORAGE_STATE_INVALID',
+      `실행 origin(${runOrigin})과 일치하는 상태가 없습니다 — ` +
+      `프로필 origin: ${parsed.origins.map((o) => o.origin).join(', ') || '없음'}. ` +
+      'origin 문자열을 고치지 말고 DEEP_DIVE_DEV_URL을 프로필 생성 URL과 맞추거나 동일 origin에서 다시 export하세요');
+  }
+
+  const provenance = env.DEEP_DIVE_EVIDENCE_PROFILE_PROVENANCE;
+  if (!provenance || provenance.trim() === '') {
+    throw new HarnessStorageStateError('HARNESS_STORAGE_STATE_PROVENANCE_MISSING',
+      'storageState를 쓰는 production evidence에는 DEEP_DIVE_EVIDENCE_PROFILE_PROVENANCE가 필요합니다');
+  }
+
+  return {
+    storageStateLoaded: true,
+    path: file,
+    sha256: createHash('sha256').update(text).digest('hex'),
+    // 전체 경로·raw 내용은 결과·로그에 싣지 않는다.
+    fileName: path.basename(file),
+    originCount: parsed.origins.length,
+    provenance: provenance.trim(),
+  };
+}
 
 export function gitSha(rev) {
   try {
@@ -68,6 +170,9 @@ export async function openSession({ viewport = { width: 1600, height: 900 } } = 
   if (!existsSync(CHROMIUM)) {
     throw new Error(`Chromium 실행 파일이 없습니다: ${CHROMIUM} (env DEEP_DIVE_CHROMIUM)`);
   }
+  // env가 잘못됐으면 여기서 즉시 던진다 (dev 서버·브라우저 기동 전).
+  const profile = resolveEvidenceStorageState(BASE_URL);
+
   await ensureDevServer();
 
   const { chromium } = await import('playwright-core');
@@ -75,7 +180,11 @@ export async function openSession({ viewport = { width: 1600, height: 900 } } = 
     executablePath: CHROMIUM,
     args: ['--no-sandbox', '--use-gl=swiftshader'],
   });
-  const ctx = await browser.newContext({ viewport });
+  // 프로필은 브라우저 기동 **전에** 검증한다 — 잘못된 입력으로 빈 context를
+  // 돌려 clues 0/3 blocked를 만들지 않는다.
+  const contextOptions = { viewport };
+  if (profile.storageStateLoaded) contextOptions.storageState = profile.path;
+  const ctx = await browser.newContext(contextOptions);
 
   // 초기 about:blank를 쓰지 않는다 — 항상 새 page를 열고 blank는 닫는다.
   const preexisting = ctx.pages();
@@ -121,6 +230,14 @@ export async function openSession({ viewport = { width: 1600, height: 900 } } = 
     browser,
     ctx,
     page,
+    // raw cookies·localStorage 값은 싣지 않는다 — 안전한 메타데이터만.
+    profile: {
+      storageStateLoaded: profile.storageStateLoaded,
+      storageStateSha256: profile.sha256,
+      storageStateFileName: profile.fileName,
+      storageStateOriginCount: profile.originCount,
+      provenance: profile.provenance,
+    },
     urlQuery,
     browserVersion,
     viewport,
@@ -212,6 +329,10 @@ export async function writeEnvelope({ session, runner, items, startedAt, outFile
     consoleErrors: session.consoleErrors,
     pageErrors: session.pageErrors,
     pointerLockErrors: session.pointerLockErrors,
+    profile: session.profile ?? {
+      storageStateLoaded: false, storageStateSha256: null,
+      storageStateFileName: null, storageStateOriginCount: 0, provenance: null,
+    },
     items,
   };
 
@@ -240,6 +361,14 @@ export function printReport({ envelope, summary }, outFile) {
   console.log(
     `base=${envelope.baseSha.slice(0, 7)} head=${envelope.headSha.slice(0, 7)} ` +
       `fixtureLoaded=${envelope.fixtureLoaded} urlQuery=${JSON.stringify(envelope.urlQuery)}`,
+  );
+  const pf = envelope.profile;
+  console.log(
+    `profile: storageStateLoaded=${pf.storageStateLoaded}` +
+      (pf.storageStateLoaded
+        ? ` file=${pf.storageStateFileName} sha256=${pf.storageStateSha256?.slice(0, 12)}… ` +
+          `origins=${pf.storageStateOriginCount} provenance=${pf.provenance}`
+        : ' (빈 context — 기존 프로필을 승계하지 않는다)'),
   );
   for (const item of envelope.items) {
     console.log(`${STATUS_MARK[item.status]} [${item.status}] ${item.id} ${item.label}`);

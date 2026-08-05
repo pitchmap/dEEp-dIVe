@@ -51,8 +51,32 @@ export interface EvidenceEnvelope {
   readonly consoleErrors: readonly string[];
   readonly pageErrors: readonly string[];
   readonly pointerLockErrors: readonly string[];
+  /**
+   * opt-in production 프로필(Playwright storageState) 메타데이터.
+   * **raw cookies·localStorage 값과 전체 경로는 싣지 않는다** — 재현에 필요한
+   * 최소 식별 정보(해시·파일명·origin 수·출처)만 남긴다.
+   * 기존 결과와의 호환을 위해 optional이며, 없으면 빈 context로 본다.
+   */
+  readonly profile?: EvidenceProfile;
   readonly items: readonly EvidenceItem[];
 }
+
+export interface EvidenceProfile {
+  readonly storageStateLoaded: boolean;
+  readonly storageStateSha256: string | null;
+  readonly storageStateFileName: string | null;
+  readonly storageStateOriginCount: number;
+  readonly provenance: string | null;
+}
+
+/** 빈 context(프로필 미사용) 기본값 */
+export const EMPTY_EVIDENCE_PROFILE: EvidenceProfile = {
+  storageStateLoaded: false,
+  storageStateSha256: null,
+  storageStateFileName: null,
+  storageStateOriginCount: 0,
+  provenance: null,
+};
 
 export class EvidenceSchemaError extends Error {}
 
@@ -110,6 +134,39 @@ export function validateEnvelope(raw: unknown): EvidenceEnvelope {
   requireStringArray(o['pageErrors'], 'pageErrors');
   requireStringArray(o['pointerLockErrors'], 'pointerLockErrors');
 
+  // profile은 optional이지만, 있으면 형태를 강제하고 **raw 값이 섞이지
+  // 않았는지** 확인한다 — cookies·localStorage는 증적에 실리면 안 된다.
+  const profile = o['profile'];
+  if (profile !== undefined) {
+    if (typeof profile !== 'object' || profile === null) {
+      throw new EvidenceSchemaError('profile: 객체여야 합니다');
+    }
+    const p = profile as Record<string, unknown>;
+    if (typeof p['storageStateLoaded'] !== 'boolean') {
+      throw new EvidenceSchemaError('profile.storageStateLoaded: boolean이어야 합니다');
+    }
+    if (typeof p['storageStateOriginCount'] !== 'number') {
+      throw new EvidenceSchemaError('profile.storageStateOriginCount: 숫자여야 합니다');
+    }
+    for (const key of ['cookies', 'origins', 'localStorage', 'path']) {
+      if (key in p) {
+        throw new EvidenceSchemaError(`profile.${key}: raw storage 값·전체 경로는 증적에 싣지 않는다`);
+      }
+    }
+    if (p['storageStateLoaded'] === true) {
+      const sha = p['storageStateSha256'];
+      if (typeof sha !== 'string' || !/^[0-9a-f]{64}$/.test(sha)) {
+        throw new EvidenceSchemaError('profile.storageStateSha256: 프로필 사용 시 64자리 SHA-256이어야 합니다');
+      }
+      if (typeof p['provenance'] !== 'string' || p['provenance'].trim() === '') {
+        throw new EvidenceSchemaError('profile.provenance: 프로필 사용 시 출처가 필요합니다');
+      }
+      if (typeof p['storageStateFileName'] !== 'string') {
+        throw new EvidenceSchemaError('profile.storageStateFileName: 프로필 사용 시 basename이 필요합니다');
+      }
+    }
+  }
+
   const items = o['items'];
   if (!Array.isArray(items) || items.length === 0) {
     throw new EvidenceSchemaError('items: 최소 1건이어야 합니다 (빈 결과를 증거로 두지 않는다)');
@@ -141,6 +198,18 @@ export function isProductionEvidence(env: EvidenceEnvelope): { ok: boolean; reas
   }
   if (env.urlQuery !== '') {
     return { ok: false, reason: `진입 URL에 쿼리 파라미터가 있다(${env.urlQuery}) — production 경로가 아니다` };
+  }
+  // storageState 사용은 **fixture가 아니다** — 실제 production 플레이로 만든
+  // browser save를 재사용한 것이므로 fixtureLoaded와 별개로 다룬다.
+  const pf = env.profile;
+  if (pf?.storageStateLoaded) {
+    return {
+      ok: true,
+      reason:
+        `fixture 미장착 · 쿼리 없는 production 진입 · production 프로필 재사용` +
+        `(${pf.storageStateFileName} sha256=${pf.storageStateSha256?.slice(0, 12)}… ` +
+        `provenance=${pf.provenance}) — 프로필 로드만으로 clues 3/3을 가정하지 않는다`,
+    };
   }
   return { ok: true, reason: 'fixture 미장착 · 쿼리 없는 production 진입' };
 }

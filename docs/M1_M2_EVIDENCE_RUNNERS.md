@@ -182,6 +182,103 @@ PASS가 아니며, 특정 항목(예: 잠금 null) 하나만 보고 candidate를
 `maxHull`·`lastDamageSource`·`isDestroyed`를 함께 기록하고, 절대값으로만
 clamp를 판정한다.
 
+## Phase C Profile Handoff — production 프로필 재사용
+
+### worktree와 browser storage는 별개다
+
+`browser.newContext()`는 **매 실행 localStorage·IndexedDB·cookies가 없는 새
+컨텍스트**다. 다른 worktree에 실제 clues 3/3 프로필이 있어도 **자동으로
+승계되지 않는다.** 그래서 빌드·툴 worktree에서 나온 `clues 0/3` ·
+`BLOCKED_RUNNER_PRECONDITION_NOT_REACHED`는 당연한 결과이며, worktree 위치만
+바꿔도 해결되지 않는다.
+
+### opt-in 입력
+
+```bash
+DEEP_DIVE_EVIDENCE_STORAGE_STATE=/abs/path/production-clues-3of3.storage-state.json \
+DEEP_DIVE_EVIDENCE_PROFILE_PROVENANCE=production-f-hold-clues-3of3-unedited \
+DEEP_DIVE_EC12_HUNT_SECONDS=1200 \
+npm run evidence:ec12-locked
+```
+
+Playwright 공식 `storageState` 입력만 쓴다. **`page.evaluate()`로 localStorage를
+쓰거나, 앱 save API를 부르거나, 저장 JSON을 수정하거나, clue 값을 수작업으로
+만들지 않는다.** 기존 production 플레이 결과를 **재사용**하는 것이지 상태를
+주입·조작하는 것이 아니다.
+
+env가 없으면 기존과 동일하게 빈 context로 실행한다 — **default CI 동작 불변**.
+
+### 실행 전 중단 — 조용한 fallback 없음
+
+파일 부재·비일반 파일·JSON 오류·최상위 비객체·`cookies`/`origins` 비배열·
+origin 형태 불량·저장소 tracked 파일이면 **`HARNESS_STORAGE_STATE_INVALID`** 로
+브라우저 기동 전에 중단한다. 빈 context로 조용히 fallback해서 `clues 0/3
+blocked`를 만들지 않는다.
+
+`provenance` 미설정이면 **`HARNESS_STORAGE_STATE_PROVENANCE_MISSING`**.
+storage state를 쓰는 production evidence에는 출처가 반드시 필요하다.
+
+### 동일 origin 요구
+
+storageState의 `origins`에 **실행 origin과 같은 값**이 있어야 한다. 포트가
+다르면 localStorage가 적용되지 않는다:
+
+```
+프로필 origin = http://localhost:5173
+실행 origin   = http://localhost:5211   ← 적용 안 됨
+```
+
+**origin 문자열을 임의로 수정하지 않는다.** 대신 ⓐ 프로필을 만든 원래 dev URL과
+같은 `DEEP_DIVE_DEV_URL`을 쓰거나 ⓑ 동일 origin에서 프로필을 다시 export한다.
+
+### 증적 메타데이터 — raw 값 비노출
+
+envelope에는 아래만 싣는다. **raw cookies·localStorage 값과 전체 경로는 넣지
+않으며**, 스키마가 그런 키가 섞이면 거부한다.
+
+```
+storageStateLoaded · storageStateSha256 · storageStateFileName
+storageStateOriginCount · provenance
+```
+
+### 프로필은 fixture가 아니다
+
+```
+storageStateLoaded=true
+fixtureLoaded=false
+```
+
+실제 production 플레이로 생성된 browser save를 불러온 것이므로 fixture가
+아니다. 단 production evidence로 인정하려면 **전부** 충족해야 한다 — URL 쿼리
+없음 · `fixtureLoaded=false` · provenance 존재 · SHA 기록 · **앱 진입 후 clues
+3/3 실측** · `unlocked=true` 실측 · save 수정·localStorage 작성 코드 0.
+
+**프로필이 로드됐다는 이유만으로 clues 3/3을 가정하지 않는다.** 러너는 진입
+직후 실측하고 두 실패를 구분한다:
+
+| 상황 | 판정 |
+|---|---|
+| 프로필 미요청 + clues 0/3 | `BLOCKED_RUNNER_PRECONDITION_NOT_REACHED` |
+| 프로필 요청 + 앱 실측 ≠ 3/3 | `PROFILE_STATE_DOES_NOT_MATCH_PROVENANCE` |
+
+### 프로필 export 절차 (scratchpad 전용)
+
+저장소에 export 기능을 넣지 않는다. 실행 중 Playwright context를 정상적으로 열
+수 있을 때:
+
+```js
+await context.storageState({
+  path: '/…/scratchpad/m1-m2-final-evidence/production-clues-3of3.storage-state.json',
+});
+```
+
+조건: 실제 production 플레이로 생성된 상태 · export 전 `clues=3/3`·
+`unlocked=true` 읽기 확인 · 파일 내용 수정 0 · `git add` 0 · SHA-256 기록 ·
+scratchpad 아래 저장 · 파일 내용·cookie 값을 PR 본문에 복사하지 않음.
+
+**앱 localStorage 값을 읽어 새 JSON을 수작업으로 조립하면 안 된다.**
+raw 프로필은 `.gitignore`의 `scratchpad/`로 git에서 제외된다.
+
 ## 금지 사항 준수
 
 내부 상태 주입 0 — 좌표·체력·재화·장비·업그레이드·boss hull·약점·spawn·save

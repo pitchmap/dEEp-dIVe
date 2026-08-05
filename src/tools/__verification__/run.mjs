@@ -421,6 +421,164 @@ const runGuard = (cwd, args = []) =>
   });
 }
 
+// ── Phase C Profile Handoff 테스트 (§13) ───────────────────────
+// 실제 production 프로필은 저장소 테스트 데이터로 넣지 않는다 —
+// 임시 디렉터리의 **가짜** Playwright storageState만 쓴다.
+{
+  const { mkdtempSync, writeFileSync: wf, mkdirSync: md, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const nodePath = (await import('node:path')).default;
+  const { createHash } = await import('node:crypto');
+  const { resolveEvidenceStorageState, HarnessStorageStateError } =
+    await import('../../../scripts/lib/evidence-harness.mjs');
+  const { validateEnvelope, isProductionEvidence, EMPTY_EVIDENCE_PROFILE } =
+    await import('../evidenceSchema.ts');
+
+  const dir = mkdtempSync(nodePath.join(tmpdir(), 'dd-storage-'));
+  const BASE = 'http://localhost:5211/';
+  const goodState = {
+    cookies: [],
+    origins: [{ origin: 'http://localhost:5211', localStorage: [{ name: 'deepDiveSave', value: '{"fake":1}' }] }],
+  };
+  const write = (name, body) => {
+    const f = nodePath.join(dir, name);
+    wf(f, typeof body === 'string' ? body : JSON.stringify(body), 'utf8');
+    return f;
+  };
+  const good = write('good.json', goodState);
+  const PROV = { DEEP_DIVE_EVIDENCE_PROFILE_PROVENANCE: 'production-f-hold-clues-3of3-unedited' };
+  const call = (env) => resolveEvidenceStorageState(BASE, env);
+  const throws = (label, env, code) => {
+    let got = null;
+    try { call(env); } catch (e) { got = e instanceof HarnessStorageStateError ? e.code : `OTHER:${e.message}`; }
+    results.push({
+      name: `storageState: ${label}`,
+      passed: got === code,
+      detail: got === code ? `${code}로 중단` : `기대 ${code}, 실제 ${got ?? '통과돼 버림'}`,
+    });
+  };
+
+  try {
+    // 1. env 없음 → 빈 context
+    const none = call({});
+    results.push({
+      name: 'storageState: env 없음 → 빈 context 옵션',
+      passed: none.storageStateLoaded === false && none.path === null && none.sha256 === null,
+      detail: 'default CI 동작 불변',
+    });
+    // 15. default CI가 프로필 파일을 요구하지 않음
+    results.push({
+      name: 'storageState: default CI에서 프로필 파일을 요구하지 않음',
+      passed: (() => { try { call({}); return true; } catch { return false; } })(),
+      detail: 'env 미설정에서 예외 없음',
+    });
+    // 2. 유효 → 경로 연결 + 9. SHA-256
+    const ok = call({ DEEP_DIVE_EVIDENCE_STORAGE_STATE: good, ...PROV });
+    const expectSha = createHash('sha256').update(JSON.stringify(goodState)).digest('hex');
+    results.push({
+      name: 'storageState: 유효 파일 → context 옵션 경로 연결',
+      passed: ok.storageStateLoaded === true && ok.path === good && ok.originCount === 1,
+      detail: `originCount=${ok.originCount}`,
+    });
+    results.push({
+      name: 'storageState: profile SHA-256 계산',
+      passed: ok.sha256 === expectSha && /^[0-9a-f]{64}$/.test(ok.sha256),
+      detail: `sha256=${ok.sha256.slice(0, 12)}…`,
+    });
+    // 3~8 오류들
+    throws('파일 없음 → 명확한 오류',
+      { DEEP_DIVE_EVIDENCE_STORAGE_STATE: nodePath.join(dir, 'nope.json'), ...PROV }, 'HARNESS_STORAGE_STATE_INVALID');
+    throws('JSON 오류 → 명확한 오류',
+      { DEEP_DIVE_EVIDENCE_STORAGE_STATE: write('bad.json', '{oops'), ...PROV }, 'HARNESS_STORAGE_STATE_INVALID');
+    throws('cookies 배열 아님 → 오류',
+      { DEEP_DIVE_EVIDENCE_STORAGE_STATE: write('c.json', { cookies: {}, origins: [] }), ...PROV }, 'HARNESS_STORAGE_STATE_INVALID');
+    throws('origins 배열 아님 → 오류',
+      { DEEP_DIVE_EVIDENCE_STORAGE_STATE: write('o.json', { cookies: [], origins: 'x' }), ...PROV }, 'HARNESS_STORAGE_STATE_INVALID');
+    throws('실행 origin 불일치 → 오류',
+      { DEEP_DIVE_EVIDENCE_STORAGE_STATE: write('m.json', {
+        cookies: [], origins: [{ origin: 'http://localhost:5173', localStorage: [] }],
+      }), ...PROV }, 'HARNESS_STORAGE_STATE_INVALID');
+    throws('provenance 누락 → 오류',
+      { DEEP_DIVE_EVIDENCE_STORAGE_STATE: good }, 'HARNESS_STORAGE_STATE_PROVENANCE_MISSING');
+    // 디렉터리는 일반 파일이 아니다
+    md(nodePath.join(dir, 'adir'), { recursive: true });
+    throws('일반 파일 아님 → 오류',
+      { DEEP_DIVE_EVIDENCE_STORAGE_STATE: nodePath.join(dir, 'adir'), ...PROV }, 'HARNESS_STORAGE_STATE_INVALID');
+
+    // 10~12. envelope metadata
+    const baseEnv = {
+      runner: 'p', baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40),
+      fixtureLoaded: false, urlQuery: '', browserVersion: 'C/1',
+      viewport: { width: 1, height: 1 },
+      startedAt: '2026-01-01T00:00:00.000Z', finishedAt: '2026-01-01T00:00:01.000Z',
+      consoleErrors: [], pageErrors: [], pointerLockErrors: [],
+      items: [{ id: 'X', label: 'x', status: 'pass', detail: 'd' }],
+    };
+    const withProfile = {
+      ...baseEnv,
+      profile: {
+        storageStateLoaded: true, storageStateSha256: expectSha,
+        storageStateFileName: 'good.json', storageStateOriginCount: 1,
+        provenance: PROV.DEEP_DIVE_EVIDENCE_PROFILE_PROVENANCE,
+      },
+    };
+    results.push({
+      name: 'storageState: 빈 context profile metadata 형태',
+      passed: (() => {
+        try { validateEnvelope({ ...baseEnv, profile: EMPTY_EVIDENCE_PROFILE }); return true; } catch { return false; }
+      })(),
+      detail: 'loaded=false·sha=null·originCount=0',
+    });
+    results.push({
+      name: 'storageState: profile 사용 metadata 형태',
+      passed: (() => { try { validateEnvelope(withProfile); return true; } catch { return false; } })(),
+      detail: 'sha256 64자리 · provenance 필수',
+    });
+    const rejectsProfile = (label, profile) => {
+      let threw = false;
+      try { validateEnvelope({ ...baseEnv, profile }); } catch { threw = true; }
+      results.push({ name: `storageState: ${label}`, passed: threw, detail: threw ? '거부됨' : '통과돼 버림' });
+    };
+    rejectsProfile('raw cookies가 envelope에 포함되면 거부',
+      { ...withProfile.profile, cookies: [{ name: 'x' }] });
+    rejectsProfile('raw localStorage가 envelope에 포함되면 거부',
+      { ...withProfile.profile, origins: [{ origin: 'x', localStorage: [] }] });
+    rejectsProfile('전체 경로가 envelope에 포함되면 거부',
+      { ...withProfile.profile, path: '/abs/secret/path.json' });
+    rejectsProfile('profile 사용인데 provenance 없음 → 거부',
+      { ...withProfile.profile, provenance: null });
+    rejectsProfile('profile 사용인데 sha 형식 불량 → 거부',
+      { ...withProfile.profile, storageStateSha256: 'short' });
+
+    // 14. storageState 사용이 fixture로 자동 분류되지 않음
+    results.push({
+      name: 'storageState 사용이 fixtureLoaded=true로 자동 분류되지 않음',
+      passed: isProductionEvidence(withProfile).ok === true
+        && withProfile.fixtureLoaded === false
+        && !isProductionEvidence({ ...withProfile, fixtureLoaded: true }).ok,
+      detail: 'production 플레이 결과 재사용은 fixture가 아니다',
+    });
+
+    // 13. storageStateLoaded=true지만 clues 미달 → PASS 불가
+    const runnerSrc = (await import('node:fs')).readFileSync(
+      new URL('../../../scripts/evidence-ec12-locked-terminal.mjs', import.meta.url), 'utf8');
+    results.push({
+      name: 'storageStateLoaded=true지만 clues 미달 → PROFILE_STATE_DOES_NOT_MATCH_PROVENANCE',
+      passed: /PROFILE_STATE_DOES_NOT_MATCH_PROVENANCE/.test(runnerSrc)
+        && /BLOCKED_RUNNER_PRECONDITION_NOT_REACHED/.test(runnerSrc)
+        && /cluesComplete \? 'pass' : 'blocked'/.test(runnerSrc),
+      detail: '로드됐다는 이유만으로 3/3을 가정하지 않고 두 실패를 구분한다',
+    });
+    results.push({
+      name: '러너가 localStorage를 직접 쓰지 않음 (page.evaluate 주입 0)',
+      passed: !/localStorage\.setItem|localStorage\[/.test(runnerSrc),
+      detail: 'storageState 공식 입력만 사용한다',
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 let failures = 0;
 for (const { name, passed, detail } of results) {
   if (!passed) failures += 1;
