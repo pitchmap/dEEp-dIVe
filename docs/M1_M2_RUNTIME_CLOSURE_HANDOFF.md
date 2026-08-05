@@ -159,7 +159,11 @@ verify:gameplay·meta·tooling·hud·sprint-a/b/c 전부 통과 + 신규 계약 
 13. 보스 승리 시 기존 승리·보상·저장 경로 정확히 1회 (rarePart+기록 동승)
 14. production 소나 provider 표시 (계기 미연결 아님 — wired 상태)
 15. exploration blip 4종(goldCache·salvage·clue·deepSite) 확인 (액티브 핑 노출 중에만)
-16. provider 연결·확인 후 DetectionHud 정리 (§7 순서 엄수)
+16. SonarScope provider 연결 확인 → DetectionHud와 **정보 동등성 검토** →
+    동등이면 제거·회귀 / **비동등이면 유실 정보와 후속 마일스톤을 명시하고
+    리드 승인으로 이관** (§7 절차). **이번 판정 = 비동등 → M3 공식 이관**
+    (DECISIONS M-14) — 이 항목은 **'이관 기록 완료'로 충족**되며, 제거되지
+    않은 상태를 제거 완료로 표기하지 않는다(`DETECTION_HUD_REMOVED=false`)
 17. reset·재출항 후 중복 spawn·보상·이벤트 0
 18. 콘솔 오류 0
 19. 페이지 오류 0
@@ -169,13 +173,64 @@ verify:gameplay·meta·tooling·hud·sprint-a/b/c 전부 통과 + 신규 계약 
 전제로 요구하지 않으므로 Runtime Closure를 차단하지 않는다. 단
 `M0_FORMALLY_CLOSED=false`가 남아 있는 한 데모 최종 판정(전체 완성 선언)은 불가.
 
-## 7. DetectionHud 제거 순서 (확정)
+## 7. DetectionHud 처리 절차 (개정 — 조건부 제거)
 
-1. 게임플레이 provider 구현 완료(§8 배정) → 2. 조립부 연결(§5 순서 12~14) →
-3. production 브라우저에서 소나 wired 표시 확인(Exit 14) → 4. DetectionHud와
-스코프 정보 중복 확인 → 5. **그래픽스가 DetectionHud 제거**(후속 그래픽스 PR —
-이번 스프린트 내) → 6. verify:hud 갱신 포함 회귀 검증.
-**provider 연결 전 제거 금지.** 그 전까지 이중 표시는 한시 허용.
+절차: 1. 게임플레이 provider 구현 → 2. 조립부 연결(§5 순서 12~14) →
+3. production 브라우저에서 소나 wired 표시 확인(Exit 14) → 4. **DetectionHud와
+SonarScope의 정보 동등성 검토** → 5-a. **동등이면** 그래픽스가 제거 →
+6. verify:hud 갱신 포함 회귀 검증 / 5-b. **비동등이면** 유실되는 정보와
+수용할 후속 마일스톤을 명시하고 **리드 승인으로 이관**한다.
+**provider 연결 전 제거 금지 · 정보 동등성 미확인 상태의 제거 금지.**
+
+### 7-1. 이번 판정 — **정보 비동등 → M3 공식 이관** [확정, DECISIONS M-14]
+
+1~4단계는 완료됐다(provider production 연결·wired 표시 확인·중복 검토).
+그러나 4단계에서 **SonarScope가 대체하지 못하는 정보 2건**이 확인됐다:
+
+| 유실 정보 | 정본 read model | 대체 불가 사유 |
+|---|---|---|
+| **연속 탐지 누적값 (0~1)** | `DetectionHudView.gauge` | `SonarScopeReadModel.ringState`는 safe/searching/detected **3단계 이산값**이라 진행률을 표현하지 못한다. `noiseFactor`는 **플레이어 자신의 소음 출력**이지 피탐지 누적이 아니므로 대체 불가 |
+| **함선별 추적 상태** | `TrackingStateSource.trackedShips` (entity별 patrol/alert/attack/lost) | `SonarBlip`에는 추적 상태 필드가 없다 — kind는 `ship`까지만 구분하므로 "어느 함선이 추격 중인가"를 표현하지 못한다 |
+
+따라서 **M1·M2에서는 DetectionHud를 제거하지 않는다.** 제거되지 않은 상태를
+제거 완료로 위장하지 않으며, 이중 표시는 M3 결정 시점까지 유지한다.
+
+```
+DETECTION_HUD_INFORMATION_PARITY=false
+DETECTION_HUD_REMOVED=false
+DETECTION_HUD_REMOVAL_DEFERRED_TO_M3=true
+```
+
+### 7-2. M3 후속 조건 (은신·탐지·적 AI 통합 단계)
+
+M3에서 다음 중 **하나를 결정**한다 — 이 단계에서는 어느 방식을 구현할지
+결정하지 않으며, 선행 구현도 하지 않는다:
+
+1. `SonarScopeReadModel` 계약을 확장해 연속 탐지 게이지와 추적 상태를 수용
+2. 별도 탐지 상태 UI를 유지하되 전체 HUD 구조를 재설계
+3. SonarScope와 DetectionHud의 역할을 명확히 분리해 **둘 다 유지**
+
+#### 7-2-1. 동반 필수 조치 — BossHealthHud 레이아웃 앵커 [1·2안 공통]
+
+**`src/ui/BossHealthHud.ts`는 DetectionHud의 DOM 요소를 레이아웃 앵커로
+쓴다.** DetectionHud를 제거·통합하면 보스 체력 HUD가 **예외 없이 조용히**
+위로 이동한다 — 오류·경고가 나지 않으므로 회귀를 놓치기 쉽다.
+
+| 항목 | 현재 production 구현 |
+|---|---|
+| 앵커 요소 | `[data-ui-detection-hud]` (속성 부여: `src/ui/DetectionHud.ts`) |
+| 현재 배치 | `syncLayout()`이 앵커의 **실제 하단(`getBoundingClientRect().bottom`) + 12px**를 `top`에 넣는다 (고정 좌표 미사용 — `ResizeObserver`로 높이 변화 추종) |
+| 앵커 부재·높이 0 시 | **상단 12px 고정 폴백**(`TOP_MARGIN_PX`) — 예외를 던지지 않는다 |
+| 위험 | **무증상 레이아웃 회귀** — 보스 체력 HUD가 상단 중앙에서 위로 밀려 올라가거나 다른 HUD와 겹칠 수 있고, 콘솔·페이지 오류 0으로 통과한다 |
+
+따라서 M3에서 DetectionHud를 제거·통합하는 방식(1·2안)을 택하면 **같은 작업
+단위에서** ① 보스 체력 HUD의 **상단 중앙 배치를 유지할 대체 앵커를 함께
+결정**하고(예: 통합 후 남는 탐지 UI 요소 또는 새 앵커 속성) ② **production
+레이아웃 회귀를 실측 검증**해야 한다(겹침 0·화면 밖 잘림 0 — PR #18의 HUD
+교차 검사와 같은 기준). 3안(둘 다 유지)을 택하면 앵커는 그대로 유효하다.
+
+> 참고: `src/ui/PerformanceOverlay.ts`는 `[data-ui-economy-hud]`를 앵커로
+> 쓰므로 이 의존과 무관하다 — DetectionHud 앵커 소비자는 BossHealthHud뿐이다.
 
 ## 8. 역할별 Runtime Closure 배정 + 파일 소유표
 
@@ -196,7 +251,8 @@ verify:gameplay·meta·tooling·hud·sprint-a/b/c 전부 통과 + 신규 계약 
 - `src/world/bossPlacement.ts`·`src/world/bossCluePlacements.ts` 신설 (승인 INT-CORE-022 — §3·§4 규격, 기획 승인 좌표·매핑. **다른 world 파일 수정 금지**)
 - 확장 SonarBlipKind 4종 표시 (kind 재추측 금지 — 받은 값으로만 분기. 색·아이콘은 그래픽스 소유)
 - 정식 BossCoreView·`bossHit` 소비 연결 준비 (notifyWeakpointHit/normalHit를 `bossHit` 구독으로 교체 — 검수 키 [6]/[7]는 fixture 전용으로 격리)
-- provider 연결 후 DetectionHud 제거 (§7 순서)
+- ~~provider 연결 후 DetectionHud 제거~~ → **M3 이관 (§7-1)**: 정보 비동등 확정으로
+  이 스프린트 배정에서 제외한다. **DetectionHud 제거·축소 금지**(유지)
 - production 브라우저 시각 검증 (Exit 10·11·14·15)
 
 ### 빌드·툴 (`src/tools/**`·params 수치 입력·검증 러너)
@@ -222,7 +278,7 @@ verify:gameplay·meta·tooling·hud·sprint-a/b/c 전부 통과 + 신규 계약 
 | `src/tools/**`·`src/meta/save/**`·`scripts/**` | 툴링 | |
 | `params/*.json` | 툴링(입력)+기획(수치 승인) | 스키마 계약은 리드 확정분 |
 | `src/core/Game.ts` | 통합 관리자 (§5 배선표 한정) | |
-| `src/ui/DetectionHud.ts` 제거 | 그래픽스 (§7 시점) | UI 디렉터리 관례상 제거 PR에 툴링 리뷰 |
+| `src/ui/DetectionHud.ts` | **유지 — 이번 스프린트 수정 대상 아님** | 제거는 M3로 이관(§7-1). 그때 소유는 그래픽스, 제거 PR에 툴링 리뷰 |
 | `docs/CURRENT_STATUS.md` | 각 역할 자기 구역 | |
 
 ## 9. 입력 키 최종 정책 (확정 — 미결 아님)
